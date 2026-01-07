@@ -45,10 +45,18 @@ class TradingStrategy:
         logger.info("Strategy PAUSED")
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
-        if candles is None or len(candles) < 100: return
+        # DEBUG: Check if data is arriving
+        candle_count = len(candles) if candles else 0
+        if candle_count < 20: 
+            logger.debug(f"Waiting for more data... Current candles: {candle_count}/20")
+            return
 
         self._update_range_from_history(candles)
         self.analyze_structure(symbol, candles)
+
+        # DEBUG: Periodic state log
+        if time.time() % 10 < 1: # Log every ~10 seconds
+            logger.info(f"Status: {symbol} | Trend: {self.trend} | Pos: {positions}/{self.max_positions} | Active: {self.active}")
 
         if self.active and positions < self.max_positions:
             self.check_entry_signals(symbol, bid, ask, candles)
@@ -122,49 +130,44 @@ class TradingStrategy:
 
     def check_entry_signals(self, symbol, bid, ask, candles):
         if not self.active: return
-        if time.time() - self.last_trade_time < self.trade_cooldown: return
+        
+        cooldown_remaining = self.trade_cooldown - (time.time() - self.last_trade_time)
+        if cooldown_remaining > 0:
+            return
 
         fvg_bull = None
         fvg_bear = None
         
-        # [Live, C1, C2, C3, ...] -> Arrays are usually reversed or index 0 is live
-        # Using index 1 (completed), 2, 3
         c1 = candles[3] 
         c2 = candles[2]
         c3 = candles[1]
         
-        # Bullish Gap
+        # Bullish Gap detection
         if c3['low'] > c1['high']:
-             fvg_bull = (c3['low'], c1['high']) # Zone is between these
-             # Draw Box
+             fvg_bull = (c3['low'], c1['high'])
              self.connector.send_draw_command(f"FVG_{symbol}_Bull_{c3['time']}", c3['high'], c1['low'], 3, 1, 32768)
         
-        # Bearish Gap
+        # Bearish Gap detection
         if c3['high'] < c1['low']:
              fvg_bear = (c3['high'], c1['low'])
-             # Draw Box
              self.connector.send_draw_command(f"FVG_{symbol}_Bear_{c3['time']}", c1['high'], c3['low'], 3, 1, 255)
 
-        # --- EXECUTION ---
-        # BUY: Uptrend + Price dipped into Bullish FVG
+        # --- DEBUG LOGGING FOR SIGNALS ---
         if self.trend == "UPTREND" and fvg_bull:
-            buy_zone_top = fvg_bull[0] 
-            # Aggressive Check: If price is near top of zone (within 5 pips)
-            if ask <= buy_zone_top + 0.0005: 
+            buy_zone_top = fvg_bull[0]
+            logger.info(f"🔍 BUY SIGNAL PENDING: Price {ask} | FVG Top {buy_zone_top:.5f}")
+            if ask <= buy_zone_top + 0.0010: # Increased buffer to 10 pips
                 sl = fvg_bull[1] - 0.05 
                 tp = ask + (ask - sl) * self.risk_reward_ratio
                 self.execute_trade("BUY", symbol, self.lot_size, "FVG_ENTRY", sl, tp)
-                return
 
-        # SELL: Downtrend + Price rallied into Bearish FVG
         elif self.trend == "DOWNTREND" and fvg_bear:
             sell_zone_btm = fvg_bear[0]
-            # Aggressive Check
-            if bid >= sell_zone_btm - 0.0005:
+            logger.info(f"🔍 SELL SIGNAL PENDING: Price {bid} | FVG Btm {sell_zone_btm:.5f}")
+            if bid >= sell_zone_btm - 0.0010:
                 sl = fvg_bear[1] + 0.05
                 tp = bid - (sl - bid) * self.risk_reward_ratio
                 self.execute_trade("SELL", symbol, self.lot_size, "FVG_ENTRY", sl, tp)
-                return
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
         logger.info(f"🚀 SIGNAL [{reason}]: {direction} {symbol} {volume} SL={sl:.2f} TP={tp:.2f}")
