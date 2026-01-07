@@ -6,6 +6,7 @@ from src.strategy import TradingStrategy
 from src.news import NewsEngine
 from src.ui import TradingBotUI
 
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("Main")
 
