@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import nltk
+import threading
 
 # Initialize Logging
 logging.basicConfig(
@@ -19,6 +20,13 @@ class NewsEngine:
         self.load_config(config_path)
         self.sia = self.init_analyzer()
         self.seen_news = set()
+        self.news_items = []  # FIX: Store recent news items
+        self.update_interval = self.config.get('update_interval_seconds', 60)
+        
+        # FIX: Start periodic fetching in background thread
+        self.thread = threading.Thread(target=self._periodic_fetch, daemon=True)
+        self.thread.start()
+        logger.info(f"News Engine started with {self.update_interval}s interval.")
 
     def load_config(self, path):
         with open(path, 'r') as f:
@@ -52,13 +60,21 @@ class NewsEngine:
                     if entry.title not in self.seen_news:
                         sentiment, score = self.analyze_sentiment(entry.title)
                         
-                        # Output format
-                        print(f"\n[{source['name']}] ({source['category']})")
-                        print(f"TITLE: {entry.title}")
-                        print(f"SENTIM: {sentiment} ({score:+.2f})")
-                        print(f"LINK : {entry.link}")
-                        print("-" * 50)
+                        # FIX: Collect as dict instead of print
+                        news_item = {
+                            'title': entry.title,
+                            'summary': entry.get('summary', entry.title),  # Fallback to title
+                            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'sentiment': sentiment,
+                            'score': f"{score:+.2f}",
+                            'source': source['name'],
+                            'link': entry.link
+                        }
+                        self.news_items.append(news_item)
+                        if len(self.news_items) > 50:  # Limit storage
+                            self.news_items = self.news_items[-50:]
                         
+                        logger.info(f"Added new: {entry.title} - {sentiment} ({score:+.2f}) from {source['name']}")
                         self.seen_news.add(entry.title)
                         found_new += 1
                         
@@ -70,11 +86,22 @@ class NewsEngine:
         else:
             logger.info(f"Processed {found_new} new headlines.")
 
+    # FIX: New method for UI to retrieve recent news
+    def get_recent_news(self, count=5):
+        return self.news_items[-count:]
+
+    # FIX: Background periodic fetch
+    def _periodic_fetch(self):
+        while True:
+            self.fetch_latest()
+            time.sleep(self.update_interval)
+
+    # Updated: Now just fetches once (thread handles periodic)
     def run(self):
-        logger.info("Starting News Engine (one-time fetch)...")
+        logger.info("Running initial News Engine fetch...")
         try:
             self.fetch_latest()
-            logger.info("News fetch complete.")
+            logger.info("Initial news fetch complete.")
         except KeyboardInterrupt:
             logger.info("Shutting down engine.")
 

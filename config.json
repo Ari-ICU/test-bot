@@ -1,43 +1,43 @@
 {
-    "sources": [
-        {
-            "name": "ForexFactory",
-            "url": "https://www.forexfactory.com/news/rss",
-            "category": "Forex"
-        },
-        {
-            "name": "Investing.com",
-            "url": "https://www.investing.com/rss/news_25.rss",
-            "category": "General"
-        },
-        {
-            "name": "CryptoNews",
-            "url": "https://cryptopotato.com/feed/",
-            "category": "Crypto"
-        }
-    ],
-    "sentiment": {
-        "enabled": true,
-        "min_score": 0.2
+  "sources": [
+    {
+      "name": "ForexFactory",
+      "url": "https://www.forexfactory.com/news/rss",
+      "category": "Forex"
     },
-    "update_interval_seconds": 60,
-    "mt5": {
-        "host": "127.0.0.1",
-        "port": 8001,
-        "enabled": true
+    {
+      "name": "Investing.com",
+      "url": "https://www.investing.com/rss/news_25.rss",
+      "category": "General"
     },
-    "auto_trading": {
-        "enabled": false,
-        "max_positions": 3,
-        "lot_size": 0.01,
-        "price_range": {
-            "min": 100,
-            "max": 200
-        }
-    },
-    "scalping": {
-        "rsi_period": 14,
-        "tp_amount": 0.50,
-        "max_spread": 20
+    {
+      "name": "CryptoNews",
+      "url": "https://cryptopotato.com/feed/",
+      "category": "Crypto"
     }
+  ],
+  "sentiment": {
+    "enabled": true,
+    "min_score": 0.2
+  },
+  "update_interval_seconds": 60,
+  "mt5": {
+    "host": "127.0.0.1",
+    "port": 8001,
+    "enabled": true
+  },
+  "auto_trading": {
+    "enabled": false,
+    "max_positions": 100,
+    "lot_size": 0.01,
+    "price_range": {
+      "min": 100,
+      "max": 200
+    }
+  },
+  "scalping": {
+    "rsi_period": 14,
+    "tp_amount": 0.50,
+    "max_spread": 20
+  }
 }
