@@ -3,7 +3,7 @@ import time
 import logging
 import queue
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 try:
@@ -52,7 +52,7 @@ class TradingBotUI(tb.Window):
         self.symbol_var = tk.StringVar()
         self.market_prot_var = tk.BooleanVar(value=True)
 
-        self._setup_logging()
+        self._setup_logging()  # FIXED: Local formatter
         self._create_widgets()
         self._check_log_queue()
         
@@ -83,7 +83,7 @@ class TradingBotUI(tb.Window):
 
     def _update_status(self):
         try: 
-            self.lbl_mt5.config(text="🟢 MT5: Connected", bootstyle="success", font=("Helvetica", 10, "bold"))
+            self.lbl_mt5.config(text="MT5: Connected", bootstyle="success", font=("Helvetica", 10, "bold"))
         except: pass
 
     # --- UPDATED: Uses avg_entry; card-based updates with fade ---
@@ -97,26 +97,26 @@ class TradingBotUI(tb.Window):
                 clean_selected = clean_incoming
 
             # Update cards with modern styling
-            self._update_card(self.lbl_balance, f"💰 {balance:,.2f}", "success" if balance > 10000 else "info")
-            self._update_card(self.lbl_account, f"👤 {acct_name}", "secondary")
-            self._update_card(self.lbl_positions, f"📊 {positions}/100", "warning" if positions > 0 else "secondary")
-            self._update_card(self.lbl_buy_count, f"🟢 {buy_count}", "success" if buy_count > 0 else "secondary")
-            self._update_card(self.lbl_sell_count, f"🔴 {sell_count}", "danger" if sell_count > 0 else "secondary")
+            self._update_card(self.lbl_balance, f"{balance:,.2f}", "success" if balance > 10000 else "info")
+            self._update_card(self.lbl_account, f"{acct_name}", "secondary")
+            self._update_card(self.lbl_positions, f"{positions}/100", "warning" if positions > 0 else "secondary")
+            self._update_card(self.lbl_buy_count, f"{buy_count}", "success" if buy_count > 0 else "secondary")
+            self._update_card(self.lbl_sell_count, f"{sell_count}", "danger" if sell_count > 0 else "secondary")
             
             p_text = f"${profit:+,.2f}"
             boot = "success" if profit > 0 else "danger" if profit < 0 else "secondary"
-            self._update_card(self.lbl_profit, f"📈 {p_text}", boot, font=("Helvetica", 14, "bold"))
+            self._update_card(self.lbl_profit, f"{p_text}", boot, font=("Helvetica", 14, "bold"))
 
             if clean_incoming == clean_selected:
-                self.lbl_symbol_display.config(text=f"🔄 {clean_incoming}")
+                self.lbl_symbol_display.config(text=f"{clean_incoming}")
                 self.lbl_bid.config(text=f"BID: {bid:.3f}", bootstyle="info")
                 self.lbl_ask.config(text=f"ASK: {ask:.3f}", bootstyle="success")
                 
                 # Avg Entry
                 if avg_entry > 0:
-                    self._update_card(self.lbl_avg_entry, f"🎯 {avg_entry:.3f}", "info")
+                    self._update_card(self.lbl_avg_entry, f"{avg_entry:.3f}", "info")
                 else:
-                    self.lbl_avg_entry.config(text="🎯 ---", bootstyle="secondary")
+                    self.lbl_avg_entry.config(text="---", bootstyle="secondary")
                 
                 self.current_bid = bid
                 self.current_ask = ask
@@ -145,28 +145,28 @@ class TradingBotUI(tb.Window):
                     span = mx - mn
                     buy_th = mn + (span * zp / 100.0)
                     sell_th = mx - (span * zp / 100.0)
-                    self.lbl_range_low.config(text=f"🟢 < {buy_th:.2f}", bootstyle="success")
-                    self.lbl_range_high.config(text=f"🔴 > {sell_th:.2f}", bootstyle="danger")
+                    self.lbl_range_low.config(text=f"< {buy_th:.2f}", bootstyle="success")
+                    self.lbl_range_high.config(text=f"> {sell_th:.2f}", bootstyle="danger")
                 except:
-                    self.lbl_range_low.config(text="🟢 ---")
-                    self.lbl_range_high.config(text="🔴 ---")
+                    self.lbl_range_low.config(text="---")
+                    self.lbl_range_high.config(text="---")
 
                 # Patterns with icons
                 if self.strategy:
                     patterns = self.strategy.analyze_patterns(candles) if candles else {}
                     p_text = []
-                    if patterns.get('bullish_fvg', False): p_text.append("🟢 BULL FVG")
-                    if patterns.get('bearish_fvg', False): p_text.append("🔴 BEAR FVG")
-                    self.lbl_patterns.config(text=" | ".join(p_text) if p_text else "🔍 Scanning...", bootstyle="warning" if p_text else "secondary")
+                    if patterns.get('bullish_fvg', False): p_text.append("BULL FVG")
+                    if patterns.get('bearish_fvg', False): p_text.append("BEAR FVG")
+                    self.lbl_patterns.config(text=" | ".join(p_text) if p_text else "Scanning...", bootstyle="warning" if p_text else "secondary")
 
                     fvg = patterns.get('fvg_zone')
-                    self.lbl_fvg_price.config(text=f"🟡 {fvg[0]:.4f}-{fvg[1]:.4f}" if fvg else "🟡 ---", bootstyle="warning" if fvg else "secondary")
+                    self.lbl_fvg_price.config(text=f"{fvg[0]:.4f}-{fvg[1]:.4f}" if fvg else "---", bootstyle="warning" if fvg else "secondary")
                     ob = patterns.get('ob_zone')
-                    self.lbl_ob_price.config(text=f"🔵 {ob[0]:.4f}-{ob[1]:.4f}" if ob else "🔵 ---", bootstyle="info" if ob else "secondary")
+                    self.lbl_ob_price.config(text=f"{ob[0]:.4f}-{ob[1]:.4f}" if ob else "---", bootstyle="info" if ob else "secondary")
 
                     c3h = patterns.get('c3_high', 0)
                     c1l = patterns.get('c1_low', 0)
-                    self.lbl_debug_vals.config(text=f"📐 C3_H: {c3h:.2f} | C1_L: {c1l:.2f}")
+                    self.lbl_debug_vals.config(text=f"C3_H: {c3h:.2f} | C1_L: {c1l:.2f}")
                     if c3h < c1l: self.lbl_debug_vals.config(bootstyle="success") 
                     elif c3h > c1l: self.lbl_debug_vals.config(bootstyle="danger") 
 
@@ -235,7 +235,21 @@ class TradingBotUI(tb.Window):
 
     def _on_scalp_param_changed(self, *args):
         if self.strategy:
-            self.strategy.scalp_tp_amount = self.scalp_tp_var.get()
+            try:
+                value = self.scalp_tp_var.get()
+                if value.strip():  # Skip if empty
+                    float_value = float(value)
+                    if float_value >= 0:  # Basic validation: non-negative
+                        self.strategy.scalp_tp_amount = float_value
+                        logging.info(f"Scalp TP updated to {float_value}")
+                    else:
+                        logging.warning(f"Invalid Scalp TP: {value} (must be >= 0)")
+                # Else: Silent skip—user is typing
+            except ValueError:
+                # Handles non-numeric input (e.g., letters, partial decimals)
+                pass  # Silent—don't crash on typing
+            except Exception as e:
+                logging.error(f"Scalp TP update error: {e}")
 
     def _on_profit_loop_toggle(self):
         if self.strategy:
@@ -253,13 +267,23 @@ class TradingBotUI(tb.Window):
 
     def _on_range_changed(self, *args):
         try:
-            min_p = float(self.entry_min_price.get())
-            max_p = float(self.entry_max_price.get())
-            if self.strategy:
-                self.strategy.min_price = min_p
-                self.strategy.max_price = max_p
+            min_p = self.entry_min_price.get().strip()
+            max_p = self.entry_max_price.get().strip()
+            if min_p and max_p:  # Only if both non-empty
+                min_val = float(min_p)
+                max_val = float(max_p)
+                if min_val < max_val:  # Basic sanity check
+                    if self.strategy:
+                        self.strategy.min_price = min_val
+                        self.strategy.max_price = max_val
+                    logging.info(f"Range updated: {min_val:.2f} - {max_val:.2f}")
+                else:
+                    logging.warning("Invalid range: Min must be < Max")
+            # Else: Skip during typing
         except ValueError:
-            pass
+            pass  # Silent on invalid input
+        except Exception as e:
+            logging.error(f"Range update error: {e}")
 
     # MODERN: Quick actions
     def _on_close_all(self):
@@ -276,268 +300,370 @@ class TradingBotUI(tb.Window):
     def _create_tooltip(self, widget, text):
         if ToolTip:
             try:
-                ToolTip(widget, text, bootstyle="dark", delay=0.5)
+                # FIXED: Use integer ms (500 = 0.5s)
+                ToolTip(widget, text, bootstyle="dark", delay=500)
             except:
                 pass  # Fallback if not available
 
     def _setup_logging(self):
+        # FIXED: Local formatter—no self.attr to trip tk __getattr__
+        formatter = logging.Formatter('%(asctime)s: %(message)s', datefmt='%H:%M:%S')
         queue_handler = QueueHandler()
-        queue_handler.setFormatter(logging.Formatter('%(asctime)s: %(message)s', datefmt='%H:%M:%S'))
+        queue_handler.setFormatter(formatter)
         logging.getLogger().addHandler(queue_handler)
-
-    def _create_widgets(self):
-        # MODERN: Header with title & status
-        header = tb.Frame(self, bootstyle="dark")
-        header.pack(fill=X, padx=10, pady=5)
-        tb.Label(header, text="🚀 MT5 Trading Bot v4.0", font=("Helvetica", 16, "bold"), bootstyle="light").pack(side=LEFT)
-        self.lbl_mt5 = tb.Label(header, text="🔴 MT5: Disconnected", bootstyle="danger", font=("Helvetica", 10, "bold"))
-        self.lbl_mt5.pack(side=RIGHT)
-        self._create_tooltip(self.lbl_mt5, "MT5 connection status")
-
-        self.tabs = ttk.Notebook(self)
-        self.tabs.pack(fill=BOTH, expand=YES, padx=10, pady=5)
-        self.tab_dashboard = ttk.Frame(self.tabs)
-        self.tabs.add(self.tab_dashboard, text="📊 Dashboard")
-        self._build_modern_dashboard(self.tab_dashboard)
-        self.tab_logs = ttk.Frame(self.tabs)
-        self.tabs.add(self.tab_logs, text="📝 Logs & News")
-        self._build_log_view(self.tab_logs)
-
-    def _build_modern_dashboard(self, parent):
-        # MODERN: Top row - Metric Cards
-        cards_row = tb.Frame(parent)
-        cards_row.pack(fill=X, pady=10)
-        
-        # FIX: Pre-define labels as self attributes (no walrus in tuple)
-        self.lbl_balance = tb.Label(bootstyle="success", font=("Helvetica", 12, "bold"))
-        self.lbl_profit = tb.Label(bootstyle="secondary", font=("Helvetica", 14, "bold"))
-        self.lbl_positions = tb.Label(bootstyle="secondary")
-        self.lbl_buy_count = tb.Label(bootstyle="secondary")
-        self.lbl_sell_count = tb.Label(bootstyle="secondary")
-        self.lbl_account = tb.Label(bootstyle="secondary")
-        
-        metrics = [
-            ("Balance", self.lbl_balance),
-            ("P/L", self.lbl_profit),
-            ("Positions", self.lbl_positions),
-            ("Buys", self.lbl_buy_count),
-            ("Sells", self.lbl_sell_count)
-        ]
-        for i, (title, lbl) in enumerate(metrics):
-            # FINAL FIX: Use plain ttk.LabelFrame (no bootstyle - theme applies)
-            card = ttk.LabelFrame(cards_row, text=title, padding=10)
-            card.pack(side=LEFT, padx=5, fill=X, expand=True)
-            lbl.pack()
-            self._update_card(lbl, "---", "secondary")  # Init
-
-        # MODERN: Middle row - Prices & Patterns
-        mid_row = tb.Frame(parent)
-        mid_row.pack(fill=X, pady=10)
-        
-        # Symbol & Prices Card
-        # FINAL FIX: Use plain ttk.LabelFrame
-        price_card = ttk.LabelFrame(mid_row, text="💱 Live Prices", padding=10)
-        price_card.pack(side=LEFT, fill=X, expand=True, padx=5)
-        self.lbl_symbol_display = tb.Label(price_card, text="---", font=("Helvetica", 12, "bold"))
-        self.lbl_symbol_display.pack()
-        price_frame = tb.Frame(price_card)
-        price_frame.pack(fill=X)
-        self.lbl_bid = tb.Label(price_frame, text="BID: ---", bootstyle="info")
-        self.lbl_bid.pack(side=LEFT)
-        self.lbl_ask = tb.Label(price_frame, text="ASK: ---", bootstyle="success")
-        self.lbl_ask.pack(side=RIGHT)
-        self.lbl_avg_entry = tb.Label(price_card, text="AVG ENTRY: ---", bootstyle="secondary")
-        self.lbl_avg_entry.pack()
-
-        # Patterns Card
-        # FINAL FIX: Use plain ttk.LabelFrame
-        patterns_card = ttk.LabelFrame(mid_row, text="🎯 Signals", padding=10)
-        patterns_card.pack(side=LEFT, fill=X, expand=True, padx=5)
-        self.lbl_patterns = tb.Label(patterns_card, text="Scanning...", bootstyle="secondary")
-        self.lbl_patterns.pack()
-        self.lbl_fvg_price = tb.Label(patterns_card, text="---", bootstyle="secondary")
-        self.lbl_fvg_price.pack()
-        self.lbl_ob_price = tb.Label(patterns_card, text="---", bootstyle="secondary")
-        self.lbl_ob_price.pack()
-        self.lbl_debug_vals = tb.Label(patterns_card, text="---", bootstyle="secondary")
-        self.lbl_debug_vals.pack()
-
-        # MODERN: Chart Canvas
-        # FINAL FIX: Use plain ttk.LabelFrame
-        chart_frame = ttk.LabelFrame(parent, text="📉 Price Chart (Last 50 Ticks)", padding=10)
-        chart_frame.pack(fill=X, pady=10)
-        self.canvas_chart = tk.Canvas(chart_frame, bg="black", height=150)
-        self.canvas_chart.pack(fill=X)
-
-        # MODERN: Config Panels (grid for alignment)
-        config_grid = tb.Frame(parent)
-        config_grid.pack(fill=BOTH, expand=YES, pady=10)
-        
-        # Left: Modes
-        # FINAL FIX: Use plain ttk.LabelFrame
-        modes_panel = ttk.LabelFrame(config_grid, text="⚙️ Operation Modes", padding=10)
-        modes_panel.grid(row=0, column=0, sticky="nsew", padx=5)
-        f_auto = tb.Frame(modes_panel)
-        f_auto.pack(fill=X)
-        self.chk_auto = tb.Checkbutton(f_auto, text="Standard Auto", variable=self.auto_trade_var, bootstyle="success-round-toggle", command=self._on_auto_toggle)
-        self.chk_auto.pack(side=LEFT)
-        self._create_tooltip(self.chk_auto, "Enable automated trading based on FVG signals")
-        # Max Pos
-        f_auto_sets = tb.Frame(f_auto)
-        f_auto_sets.pack(side=RIGHT)
-        tb.Label(f_auto_sets, text="Max Pos:").pack(side=LEFT)
-        self.spin_max_pos = tb.Spinbox(f_auto_sets, from_=1, to=100, textvariable=self.max_pos_var, width=5)
-        self.spin_max_pos.pack(side=LEFT)
-        self.max_pos_var.trace("w", self._on_max_pos_changed)
-
-        # Scalp
-        f_scalp = tb.Frame(modes_panel)
-        f_scalp.pack(fill=X)
-        self.chk_scalp = tb.Checkbutton(f_scalp, text="Scalp Mode", variable=self.scalp_var, bootstyle="danger-round-toggle", command=self._on_scalp_toggle)
-        self.chk_scalp.pack(side=LEFT)
-        self._create_tooltip(self.chk_scalp, "Enable high-frequency scalping with fixed TP")
-        tb.Label(f_scalp, text="TP: $").pack(side=RIGHT)
-        tb.Spinbox(f_scalp, from_=0.1, to=100.0, increment=0.1, textvariable=self.scalp_tp_var, width=5).pack(side=RIGHT)
-        self.scalp_tp_var.trace("w", self._on_scalp_param_changed)
-
-        # Middle: Boundaries
-        # FINAL FIX: Use plain ttk.LabelFrame
-        bounds_panel = ttk.LabelFrame(config_grid, text="📏 Boundaries", padding=10)
-        bounds_panel.grid(row=0, column=1, sticky="nsew", padx=5)
-        tb.Checkbutton(bounds_panel, text="Auto Range", variable=self.auto_range_var, bootstyle="info-round-toggle", command=self._on_auto_range_toggle).pack(anchor="w")
-        self._create_tooltip(self.auto_range_var, "Dynamically adjust min/max from history")
-        
-        f_grid = tb.Frame(bounds_panel)
-        f_grid.pack(fill=X)
-        tb.Label(f_grid, text="Min:").grid(row=0, column=0, sticky="e")
-        self.entry_min_price = tb.Entry(f_grid, width=10)
-        self.entry_min_price.insert(0, "0")
-        self.entry_min_price.grid(row=0, column=1)
-        self.entry_min_price.bind("<KeyRelease>", self._on_range_changed)
-        
-        tb.Label(f_grid, text="Max:").grid(row=1, column=0, sticky="e")
-        self.entry_max_price = tb.Entry(f_grid, width=10)
-        self.entry_max_price.insert(0, "0")
-        self.entry_max_price.grid(row=1, column=1)
-        self.entry_max_price.bind("<KeyRelease>", self._on_range_changed)
-
-        tb.Label(f_grid, text="Zone %:").grid(row=2, column=0, sticky="e")
-        self.spin_zone = tb.Spinbox(f_grid, from_=1, to=50, textvariable=self.zone_var, width=5)
-        self.spin_zone.grid(row=2, column=1)
-        self.zone_var.trace("w", self._on_zone_changed)
-        
-        self.lbl_range_low = tb.Label(bounds_panel, text="---")
-        self.lbl_range_low.pack(anchor="w")
-        self.lbl_range_high = tb.Label(bounds_panel, text="---")
-        self.lbl_range_high.pack(anchor="w")
-
-        # Right: Logic & Quick Actions
-        # FINAL FIX: Use plain ttk.LabelFrame
-        logic_panel = ttk.LabelFrame(config_grid, text="🔧 Logic & Actions", padding=10)
-        logic_panel.grid(row=0, column=2, sticky="nsew", padx=5)
-        
-        # Pulse Close
-        f_pulse = tb.Frame(logic_panel)
-        f_pulse.pack(fill=X)
-        self.chk_profit = tb.Checkbutton(f_pulse, text="Pulse Close", variable=self.auto_profit_var, bootstyle="info-square-toggle", command=self._on_profit_loop_toggle)
-        self.chk_profit.pack(side=LEFT)
-        self._create_tooltip(self.chk_profit, "Auto-close profitable positions every X seconds")
-        tb.Label(f_pulse, text="Sec:").pack(side=RIGHT)
-        self.spin_profit_sec = tb.Spinbox(f_pulse, from_=1, to=60, textvariable=self.profit_sec_var, width=3)
-        self.spin_profit_sec.pack(side=RIGHT)
-        self.profit_sec_var.trace("w", self._on_profit_loop_toggle)
-
-        # Filters with icons
-        tb.Checkbutton(logic_panel, text="🟢 FVG", variable=self.fvg_var, bootstyle="success").pack(anchor="w", pady=2)
-        tb.Checkbutton(logic_panel, text="🔵 OB", variable=self.ob_var, bootstyle="info").pack(anchor="w", pady=2)
-        tb.Checkbutton(logic_panel, text="🟡 Zone Conf.", variable=self.zone_conf_var, bootstyle="warning").pack(anchor="w", pady=2)
-        tb.Checkbutton(logic_panel, text="📊 Trend Filter", variable=self.trend_var, bootstyle="primary").pack(anchor="w", pady=2)
-
-        # Quick Actions Buttons
-        actions_frame = tb.Frame(logic_panel)
-        actions_frame.pack(fill=X, pady=10)
-        tb.Button(actions_frame, text="🚨 Close All", command=self._on_close_all, bootstyle="danger-outline").pack(side=LEFT, padx=5)
-        tb.Button(actions_frame, text="🔄 Refresh", command=self._on_refresh_data, bootstyle="info-outline").pack(side=RIGHT, padx=5)
-
-        # Pulse Progress Bar
-        self.progress_pulse = tb.Progressbar(logic_panel, bootstyle="success-striped", mode='determinate', length=200)
-        self.progress_pulse.pack(fill=X, pady=5)
-        self._create_tooltip(self.progress_pulse, "Market heartbeat - bot is alive!")
-
-        # Symbol Selector (bottom)
-        bottom_frame = tb.Frame(parent)
-        bottom_frame.pack(fill=X, pady=10)
-        tb.Label(bottom_frame, text="🔍 Symbol:").pack(side=LEFT)
-        self.combo_symbol = ttk.Combobox(bottom_frame, textvariable=self.symbol_var, state="readonly", width=15)
-        self.combo_symbol.pack(side=LEFT, padx=5)
-        self.combo_symbol.bind("<<ComboboxSelected>>", self._on_symbol_changed)
-        self._create_tooltip(self.combo_symbol, "Select trading symbol (e.g., XAUUSDm)")
-
-        config_grid.columnconfigure((0,1,2), weight=1)
-
-    def _build_log_view(self, parent):
-        # MODERN: Split logs & news horizontally
-        log_split = tb.PanedWindow(parent, orient=HORIZONTAL)
-        log_split.pack(fill=BOTH, expand=YES, padx=10, pady=10)
-        
-        # Logs
-        # FINAL FIX: Use plain ttk.LabelFrame
-        log_frame = ttk.LabelFrame(log_split, text="📝 Live Logs")
-        log_split.add(log_frame, weight=2)
-        self.text_log = scrolledtext.ScrolledText(log_frame, height=25, font=("Consolas", 9), bg="black", fg="white", insertbackground="white")
-        self.text_log.pack(fill=BOTH, expand=YES, padx=5, pady=5)
-
-        # News with sentiment
-        # FINAL FIX: Use plain ttk.LabelFrame
-        news_frame = ttk.LabelFrame(log_split, text="📰 News Feed")
-        log_split.add(news_frame, weight=1)
-        self.text_news = scrolledtext.ScrolledText(news_frame, height=25, font=("Helvetica", 9), state="disabled")
-        self.text_news.pack(fill=BOTH, expand=YES, padx=5, pady=5)
-        self._update_news_feed()
 
     def _check_log_queue(self):
         try:
             while True:
                 record = log_queue.get_nowait()
                 msg = self.format(record)
-                self.text_log.insert(tk.END, msg + "\n")
-                self.text_log.see(tk.END)
-                if record.levelno >= logging.ERROR:
-                    self.text_log.tag_add("error", "end-1l", "end")
-                    self.text_log.tag_config("error", foreground="red")
+                self.log_text.insert(tk.END, msg + '\n')
+                self.log_text.see(tk.END)
         except queue.Empty:
             pass
         self.after(100, self._check_log_queue)
 
     def format(self, record):
-        return logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S').format(record)
+        # FIXED: Local formatter here too
+        formatter = logging.Formatter('%(asctime)s: %(message)s', datefmt='%H:%M:%S')
+        return formatter.format(record)
 
-    # MODERN: Enhanced news with sentiment icons
-    def _update_news_feed(self):
-        if self.news_engine:
-            news_items = self.news_engine.get_recent_news(5)
-            self.text_news.config(state="normal")
-            self.text_news.delete(1.0, tk.END)
-            for item in news_items:
-                sent_icon = "🟢" if item['sentiment'] == "BULLISH" else "🔴" if item['sentiment'] == "BEARISH" else "🟡"
-                self.text_news.insert(tk.END, f"{sent_icon} {item['title']} - {item['time']}\n{item['summary'][:120]}...\nScore: {item['score']}\n\n")
-            self.text_news.config(state="disabled")
-        self.after(30000, self._update_news_feed)
+    def _create_widgets(self):
+        # Main container
+        main_container = tb.Frame(self)
+        main_container.pack(fill=BOTH, expand=True, padx=10, pady=10)
 
-    # Placeholder methods (unchanged)
+        # Top header bar
+        header = tb.Frame(main_container, bootstyle="primary")
+        header.pack(fill=X, pady=(0,10))
+
+        tb.Label(header, text="MT5 Trading Bot v4.0", bootstyle="light", font=("Helvetica", 16, "bold")).pack(side=LEFT, padx=10)
+        self.lbl_mt5 = tb.Label(header, text="MT5: Disconnected", bootstyle="danger")
+        self.lbl_mt5.pack(side=RIGHT, padx=10)
+
+        # Notebook for tabs
+        self.notebook = tb.Notebook(main_container, bootstyle="primary")
+        self.notebook.pack(fill=BOTH, expand=True)
+
+        # Tab 1: Main Dashboard
+        self.tab_main = tb.Frame(self.notebook)
+        self.notebook.add(self.tab_main, text="Dashboard")
+
+        # Tab 2: News
+        self.tab_news = tb.Frame(self.notebook)
+        self.notebook.add(self.tab_news, text="News")
+
+        # Tab 3: Logs
+        self.tab_logs = tb.Frame(self.notebook)
+        self.notebook.add(self.tab_logs, text="Logs")
+
+        self._build_main_tab(self.tab_main)
+        self._build_news_tab(self.tab_news)
+        self._build_log_view(self.tab_logs)
+
+    def _build_main_tab(self, parent):
+        # Left panel: Controls
+        left_panel = tb.Frame(parent)
+        left_panel.pack(side=LEFT, fill=Y, padx=(0,10))
+
+        # Auto Trade Toggle
+        tb.Checkbutton(left_panel, text="Auto Trade", variable=self.auto_trade_var, 
+                       command=self._on_auto_toggle, bootstyle="success-round-toggle").pack(anchor=W, pady=5)
+        self._create_tooltip(left_panel.winfo_children()[-1], "Enable/disable automated trading")
+
+        # Max Positions
+        tb.Label(left_panel, text="Max Positions:").pack(anchor=W)
+        spin_max = tb.Spinbox(left_panel, from_=1, to=100, textvariable=self.max_pos_var, 
+                              command=self._on_max_pos_changed, width=10)
+        spin_max.pack(anchor=W, pady=2)
+
+        # Scalp Mode
+        tb.Checkbutton(left_panel, text="Scalp Mode", variable=self.scalp_var, 
+                       command=self._on_scalp_toggle, bootstyle="warning-round-toggle").pack(anchor=W, pady=5)
+        tb.Label(left_panel, text="Scalp TP ($):").pack(anchor=W)
+        entry_scalp = tb.Entry(left_panel, textvariable=self.scalp_tp_var, width=10)
+        entry_scalp.pack(anchor=W, pady=2)
+        entry_scalp.bind('<KeyRelease>', self._on_scalp_param_changed)
+
+        # Profit Close Loop
+        tb.Checkbutton(left_panel, text="Auto Close Profit", variable=self.auto_profit_var, 
+                       command=self._on_profit_loop_toggle, bootstyle="info-round-toggle").pack(anchor=W, pady=5)
+        tb.Label(left_panel, text="Interval (s):").pack(anchor=W)
+        spin_profit = tb.Spinbox(left_panel, from_=1, to=60, textvariable=self.profit_sec_var, width=10)
+        spin_profit.pack(anchor=W, pady=2)
+
+        # Strategy Filters
+        filter_frame = tb.LabelFrame(left_panel, text="Strategy Filters")  # FIXED: No styling to avoid TclError
+        filter_frame.pack(fill=X, pady=10)
+        # filter_frame.configure(style="secondary.TLabelframe")  # SKIPPED: Bug workaround
+        tb.Checkbutton(filter_frame, text="FVG", variable=self.fvg_var).pack(anchor=W)
+        tb.Checkbutton(filter_frame, text="OB", variable=self.ob_var).pack(anchor=W)
+        tb.Checkbutton(filter_frame, text="Zone Confluence", variable=self.zone_conf_var).pack(anchor=W)
+        tb.Checkbutton(filter_frame, text="Trend Filter", variable=self.trend_var).pack(anchor=W)
+
+        # Zone %
+        tb.Label(filter_frame, text="Zone %:").pack(anchor=W)
+        spin_zone = tb.Spinbox(filter_frame, from_=5, to=50, textvariable=self.zone_var, 
+                               command=self._on_zone_changed, width=10)
+        spin_zone.pack(anchor=W, pady=2)
+
+        # Auto Range
+        tb.Checkbutton(left_panel, text="Auto Range", variable=self.auto_range_var, 
+                       command=self._on_auto_range_toggle, bootstyle="light-round-toggle").pack(anchor=W, pady=5)
+
+        # Manual Range
+        range_frame = tb.LabelFrame(left_panel, text="Manual Range")  # FIXED: No styling
+        range_frame.pack(fill=X, pady=10)
+        # range_frame.configure(style="secondary.TLabelframe")  # SKIPPED
+        tb.Label(range_frame, text="Min Price:").grid(row=0, column=0, sticky=W)
+        self.entry_min_price = tb.Entry(range_frame, width=12)
+        self.entry_min_price.grid(row=0, column=1, padx=5)
+        self.entry_min_price.bind('<KeyRelease>', self._on_range_changed)
+        tb.Label(range_frame, text="Max Price:").grid(row=1, column=0, sticky=W)
+        self.entry_max_price = tb.Entry(range_frame, width=12)
+        self.entry_max_price.grid(row=1, column=1, padx=5)
+        self.entry_max_price.bind('<KeyRelease>', self._on_range_changed)
+
+        # Threshold Labels
+        self.lbl_range_low = tb.Label(range_frame, text="---", bootstyle="secondary")
+        self.lbl_range_low.grid(row=2, column=0, sticky=W, pady=2)
+        self.lbl_range_high = tb.Label(range_frame, text="---", bootstyle="secondary")
+        self.lbl_range_high.grid(row=2, column=1, sticky=E, pady=2)
+
+        # Quick Actions
+        action_frame = tb.Frame(left_panel)
+        action_frame.pack(fill=X, pady=10)
+        tb.Button(action_frame, text="Close All", command=self._on_close_all, bootstyle="danger-outline").pack(fill=X, pady=2)
+        tb.Button(action_frame, text="Refresh Data", command=self._on_refresh_data, bootstyle="info-outline").pack(fill=X, pady=2)
+
+        # Right panel: Market Data Cards
+        right_panel = tb.Frame(parent)
+        right_panel.pack(side=RIGHT, fill=BOTH, expand=True)
+
+        # Symbol Selector
+        symbol_frame = tb.Frame(right_panel)
+        symbol_frame.pack(fill=X, pady=5)
+        tb.Label(symbol_frame, text="Symbol:").pack(side=LEFT)
+        self.combo_symbol = tb.Combobox(symbol_frame, textvariable=self.symbol_var, state="readonly", width=20)
+        self.combo_symbol.pack(side=LEFT, padx=5)
+        self.combo_symbol.bind('<<ComboboxSelected>>', lambda e: self._on_symbol_change())
+
+        # Price Display
+        price_frame = tb.Frame(right_panel)
+        price_frame.pack(fill=X, pady=5)
+        self.lbl_symbol_display = tb.Label(price_frame, text="---", bootstyle="secondary", font=("Helvetica", 12))
+        self.lbl_symbol_display.pack()
+        self.lbl_bid = tb.Label(price_frame, text="BID: ---", bootstyle="secondary")
+        self.lbl_bid.pack()
+        self.lbl_ask = tb.Label(price_frame, text="ASK: ---", bootstyle="secondary")
+        self.lbl_ask.pack()
+
+        # Data Cards Grid
+        cards_frame = tb.Frame(right_panel)
+        cards_frame.pack(fill=BOTH, expand=True, pady=10)
+
+        # Balance Card
+        balance_card = tb.LabelFrame(cards_frame, text="Balance")  # FIXED: No styling
+        balance_card.grid(row=0, column=0, sticky=EW, padx=5, pady=5)
+        # balance_card.configure(style="success.TLabelframe")  # SKIPPED
+        self.lbl_balance = tb.Label(balance_card, text="$0.00", bootstyle="success", font=("Helvetica", 18, "bold"))
+        self.lbl_balance.pack(pady=10)
+
+        # Account Card
+        account_card = tb.LabelFrame(cards_frame, text="Account")  # FIXED: No styling
+        account_card.grid(row=0, column=1, sticky=EW, padx=5, pady=5)
+        # account_card.configure(style="secondary.TLabelframe")  # SKIPPED
+        self.lbl_account = tb.Label(account_card, text="---", bootstyle="secondary")
+        self.lbl_account.pack(pady=10)
+
+        # Positions Card
+        pos_card = tb.LabelFrame(cards_frame, text="Positions")  # FIXED: No styling
+        pos_card.grid(row=1, column=0, sticky=EW, padx=5, pady=5)
+        # pos_card.configure(style="warning.TLabelframe")  # SKIPPED
+        self.lbl_positions = tb.Label(pos_card, text="0/100", bootstyle="warning")
+        self.lbl_positions.pack(pady=10)
+
+        # Profit Card
+        profit_card = tb.LabelFrame(cards_frame, text="P&L")  # FIXED: No styling
+        profit_card.grid(row=1, column=1, sticky=EW, padx=5, pady=5)
+        # profit_card.configure(style="secondary.TLabelframe")  # SKIPPED
+        self.lbl_profit = tb.Label(profit_card, text="$0.00", bootstyle="secondary", font=("Helvetica", 18, "bold"))
+        self.lbl_profit.pack(pady=10)
+
+        # Buy Count Card
+        buy_card = tb.LabelFrame(cards_frame, text="Buys")  # FIXED: No styling
+        buy_card.grid(row=2, column=0, sticky=EW, padx=5, pady=5)
+        # buy_card.configure(style="success.TLabelframe")  # SKIPPED
+        self.lbl_buy_count = tb.Label(buy_card, text="0", bootstyle="success")
+        self.lbl_buy_count.pack(pady=10)
+
+        # Sell Count Card
+        sell_card = tb.LabelFrame(cards_frame, text="Sells")  # FIXED: No styling
+        sell_card.grid(row=2, column=1, sticky=EW, padx=5, pady=5)
+        # sell_card.configure(style="danger.TLabelframe")  # SKIPPED
+        self.lbl_sell_count = tb.Label(sell_card, text="0", bootstyle="danger")
+        self.lbl_sell_count.pack(pady=10)
+
+        # Avg Entry Card
+        avg_card = tb.LabelFrame(cards_frame, text="Avg Entry")  # FIXED: No styling
+        avg_card.grid(row=3, column=0, columnspan=2, sticky=EW, padx=5, pady=5)
+        # avg_card.configure(style="info.TLabelframe")  # SKIPPED
+        self.lbl_avg_entry = tb.Label(avg_card, text="---", bootstyle="info")
+        self.lbl_avg_entry.pack(pady=10)
+
+        # Patterns & Debug
+        patterns_frame = tb.LabelFrame(right_panel, text="Signals & Debug")  # FIXED: No styling
+        patterns_frame.pack(fill=X, pady=10)
+        # patterns_frame.configure(style="dark.TLabelframe")  # SKIPPED
+
+        self.lbl_patterns = tb.Label(patterns_frame, text="Scanning...", bootstyle="secondary")
+        self.lbl_patterns.pack(anchor=W)
+
+        debug_row = tb.Frame(patterns_frame)
+        debug_row.pack(fill=X)
+        self.lbl_fvg_price = tb.Label(debug_row, text="---", bootstyle="secondary")
+        self.lbl_fvg_price.pack(side=LEFT)
+        self.lbl_ob_price = tb.Label(debug_row, text="---", bootstyle="secondary")
+        self.lbl_ob_price.pack(side=RIGHT)
+
+        self.lbl_debug_vals = tb.Label(patterns_frame, text="---", bootstyle="secondary", font=("Consolas", 9))
+        self.lbl_debug_vals.pack(anchor=W, pady=5)
+
+        # Price Chart Canvas
+        chart_frame = tb.LabelFrame(right_panel, text="Price Chart")  # FIXED: No styling
+        chart_frame.pack(fill=X, pady=10)
+        # chart_frame.configure(style="primary.TLabelframe")  # SKIPPED
+        self.canvas_chart = tk.Canvas(chart_frame, bg='black', height=150)
+        self.canvas_chart.pack(fill=X)
+
+        cards_frame.grid_columnconfigure(0, weight=1)
+        cards_frame.grid_columnconfigure(1, weight=1)
+
+    def _build_news_tab(self, parent):
+        # News list
+        list_frame = tb.Frame(parent)
+        list_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
+
+        # FIXED: Use tk.Listbox instead of tb.Listbox
+        self.news_list = tk.Listbox(list_frame, height=20)
+        scrollbar = tb.Scrollbar(list_frame, orient=VERTICAL, command=self.news_list.yview)
+        self.news_list.config(yscrollcommand=scrollbar.set)
+        self.news_list.pack(side=LEFT, fill=BOTH, expand=True)
+        scrollbar.pack(side=RIGHT, fill=Y)
+
+        # Bind double-click to open news
+        self.news_list.bind('<Double-1>', self._on_news_double_click)
+
+        # Update button
+        tb.Button(parent, text="Refresh News", command=self._refresh_news, bootstyle="info-outline").pack(pady=5)
+
+    def _build_log_view(self, parent):
+        # FIXED: lowercase 'w' for Panedwindow
+        log_split = tb.Panedwindow(parent, orient=tk.HORIZONTAL)
+        log_split.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Left: Log Text Widget
+        self.log_text = tb.Text(log_split, height=20, wrap=tk.WORD, 
+                                font=('Consolas', 9), 
+                                bg='black', fg='white',
+                                insertbackground='white')
+        log_frame = tb.Frame(log_split)
+        log_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = tb.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.config(yscrollcommand=scrollbar.set)
+        
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Right: Log Controls
+        controls_frame = tb.Frame(log_split)
+        controls_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5,0))
+        
+        clear_btn = tb.Button(controls_frame, text="Clear Logs", 
+                              bootstyle="danger-outline",
+                              command=self.clear_logs)
+        clear_btn.pack(pady=2)
+        
+        save_btn = tb.Button(controls_frame, text="Save Logs", 
+                             bootstyle="info-outline",
+                             command=self.save_logs)
+        save_btn.pack(pady=2)
+        
+        # Add to split
+        log_split.add(log_frame, weight=4)
+        log_split.add(controls_frame, weight=1)
+
+    # FIXED: Missing methods added here
+    def clear_logs(self):
+        """Clear the log text widget."""
+        self.log_text.delete(1.0, tk.END)
+        logging.info("Logs cleared by user.")
+
+    def save_logs(self):
+        """Save log content to file with optional dialog."""
+        try:
+            # Default file
+            filename = 'bot_logs.txt'
+            # Optional: Use filedialog for choose (uncomment if you import it)
+            # from tkinter import filedialog
+            # filename = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+            # if not filename: return
+            
+            with open(filename, 'w') as f:
+                f.write(self.log_text.get(1.0, tk.END))
+            logging.info(f"Logs saved to {filename}")
+            messagebox.showinfo("Logs Saved", f"Logs exported to {filename}")
+        except Exception as e:
+            logging.error(f"Failed to save logs: {e}")
+            messagebox.showerror("Save Error", f"Couldn't save logs: {e}")
+
     def _set_combo_values(self, symbols_list):
         self.combo_symbol['values'] = symbols_list
         if symbols_list:
             self.symbol_var.set(symbols_list[0])
         self.symbols_loaded = True
+        logging.info(f"Symbols loaded: {len(symbols_list)} items")
 
-    def _on_symbol_changed(self, event=None):
-        if self.strategy:
-            self.strategy.symbol = self.symbol_var.get()
+    def _on_symbol_change(self, *args):
+        symbol = self.symbol_var.get()
+        if symbol and self.strategy:
+            self.strategy.symbol = symbol  # Assume strategy has this
+            logging.info(f"Symbol changed to {symbol}")
 
-    def _refresh_symbols(self):
-        self.mt5_connector.request_symbols()
-        self.request_symbol_refresh = True
+    def _refresh_news(self):
+        if self.news_engine:
+            self.news_engine.scan_feeds()
+            self._update_news_list()
 
-    def mainloop(self):
-        super().mainloop()
+    def _update_news_list(self):
+        self.news_list.delete(0, tk.END)
+        try:
+            # Assume news_engine has get_latest() -> list of (title, url, time)
+            for item in self.news_engine.get_latest()[-20:]:  # Last 20
+                self.news_list.insert(tk.END, f"{item[2]} - {item[0]}")
+        except AttributeError:
+            self.news_list.insert(tk.END, "News engine not ready - check logs")
+
+    def _on_news_double_click(self, event):
+        selection = self.news_list.curselection()
+        if selection:
+            idx = selection[0]
+            try:
+                # Assume open in browser or something
+                import webbrowser
+                url = self.news_engine.get_latest()[idx][1]  # url
+                webbrowser.open(url)
+                logging.info(f"Opened news: {url}")
+            except:
+                logging.warning("Could not open news URL")
+
+if __name__ == "__main__":
+    # Test stubxq
+    class StubNews: 
+        def get_latest(self): return [("Test News", "https://example.com", time.time())]
+        def scan_feeds(self): pass
+    class StubConnector: 
+        def request_symbols(self): pass
+    app = TradingBotUI(StubNews(), StubConnector())
+    app.mainloop()
