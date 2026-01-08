@@ -1,5 +1,7 @@
 import logging
 import time
+import pandas as pd
+import numpy as np
 
 logger = logging.getLogger("Strategy")
 
@@ -9,32 +11,36 @@ class TradingStrategy:
         self.news_engine = news_engine
         self.active = True
         
-        # --- Strict Safety Settings ---
-        self.max_positions = 1  
+        # --- STRATEGY CONFIGURATION (MACD & RSI) ---
+        self.risk_reward_ratio = 2.0     # Target 2x Profit for every 1x Risk
+        self.max_positions = 1           # Strict limit
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
-        self.use_auto_risk = True
         
-        # --- Profit Settings ---
-        self.min_profit_target = 0.50    
-        self.trailing_activation = 0.80  
-        self.trailing_offset = 0.20      
+        # Indicator Settings (From Video)
+        self.rsi_period = 14
+        self.rsi_buy_threshold = 40      # Video uses 40 for Buy
+        self.rsi_sell_threshold = 60     # Video uses 60 for Sell
         
-        # --- Strategy Parameters ---
-        self.crt_lookback = 2      
-        self.crt_signal_idx = 1    
+        self.macd_fast = 12
+        self.macd_slow = 26
+        self.macd_signal = 9
+        
+        # --- Execution Safety ---
+        self.trade_cooldown = 15.0       # Wait 15s after a trade
+        self.last_trade_time = 0         
+        self.last_log_time = 0           
         
         # --- State ---
         self.trend = "NEUTRAL"
         self.swing_highs = []  
         self.swing_lows = []
-        
         self.current_profit = 0.0 
         self.peak_profit = 0.0        
         self.last_profit_close_time = 0
         self.profit_close_interval = 1 
 
     def start(self):
-        logger.info("Strategy ACTIVE | Strict Entry Mode | System Risk Management")
+        logger.info("Strategy ACTIVE | MACD & RSI Strategy | RR 1:2")
 
     def stop(self):
         self.active = False
@@ -46,7 +52,7 @@ class TradingStrategy:
         logging.info(f"Strategy state set to: {state}")
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
-        if not candles or len(candles) < 20: return
+        if not candles or len(candles) < 50: return
         self.current_profit = profit 
 
         # --- Track Peak Profit ---
@@ -55,217 +61,148 @@ class TradingStrategy:
         else:
             self.peak_profit = 0.0
 
-        # 1. PRIORITY: Check Signals (Only if active & no max positions)
+        # --- 1. PRIORITY: Check Signals ---
         if self.active and positions < self.max_positions:
-            self.check_crt_signals(symbol, bid, ask, candles)
+            if (time.time() - self.last_trade_time) > self.trade_cooldown:
+                self.check_signals_macd_rsi(symbol, bid, ask, candles)
 
-        # 2. Analyze Trend Structure
+        # 2. Analyze Structure (For Stop Loss)
         self.analyze_structure(symbol, candles)
 
-        # 3. Manage Profit
+        # 3. Manage Profit (Trailing Stop)
         if positions > 0:
             self.check_and_close_profit(symbol)
 
-        # 4. Status Log (Periodic)
+        # 4. Status Log
         if time.time() % 10 < 1: 
-            logger.info(f"Status: {symbol} | Trend: {self.trend} | PnL: {profit:.2f} | Peak: {self.peak_profit:.2f}")
+            logger.info(f"Status: {symbol} | PnL: {profit:.2f} | Peak: {self.peak_profit:.2f}")
 
-    # --- STRICT SYSTEM CALCULATED RISK ---
+    def calculate_indicators(self, candles):
+        """Calculates RSI (14) and MACD (12, 26, 9)"""
+        try:
+            # Sort Oldest -> Newest for Pandas calculation
+            df = pd.DataFrame(candles)
+            df = df.iloc[::-1].reset_index(drop=True) 
+            
+            # --- RSI CALCULATION ---
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
+
+            # --- MACD CALCULATION ---
+            # Fast EMA (12)
+            short_ema = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
+            # Slow EMA (26)
+            long_ema = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
+            # MACD Line
+            df['macd'] = short_ema - long_ema
+            # Signal Line (9)
+            df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
+
+            # Return the Last Closed Candle (Index -2)
+            last_closed = df.iloc[-2] 
+            return last_closed['rsi'], last_closed['macd'], last_closed['macd_signal']
+        except Exception as e:
+            logger.error(f"Indicator Error: {e}")
+            return 50, 0, 0
+
     def calculate_safe_risk(self, direction, entry_price):
-        """
-        Calculates logical SL based on Structure and TP for 1:1.5 Risk-Reward.
-        """
+        """Finds Swing High/Low for SL and calculates TP for 1:2 Risk-Reward."""
         sl = 0.0
         tp = 0.0
         is_gold = entry_price > 500
         min_dist = 2.00 if is_gold else 0.0020  
         
         if direction == "BUY":
-            # SL below recent Swing Low
+            # SL = Last Swing Low
             if self.swing_lows:
                 last_low = self.swing_lows[-1]['price']
                 if (entry_price - last_low) < min_dist: sl = entry_price - min_dist
                 else: sl = last_low
             else:
                 sl = entry_price - min_dist 
-
-            # TP = 1.5x Risk
-            risk = entry_price - sl
-            tp = entry_price + (risk * 1.5)
+            tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
 
         elif direction == "SELL":
-            # SL above recent Swing High
+            # SL = Last Swing High
             if self.swing_highs:
                 last_high = self.swing_highs[-1]['price']
                 if (last_high - entry_price) < min_dist: sl = entry_price + min_dist
                 else: sl = last_high
             else:
                 sl = entry_price + min_dist 
-
-            # TP = 1.5x Risk
-            risk = sl - entry_price
-            tp = entry_price - (risk * 1.5)
+            tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
 
         return float(sl), float(tp)
 
-    def validate_signal_quality(self, candle, type):
-        """
-        Ensures the candle is a valid Rejection Candle (Hammer/Shooting Star).
-        Returns True only if the wick is significant.
-        """
-        body = abs(candle['close'] - candle['open'])
-        upper_wick = candle['high'] - max(candle['open'], candle['close'])
-        lower_wick = min(candle['open'], candle['close']) - candle['low']
+    def check_signals_macd_rsi(self, symbol, bid, ask, candles):
+        # 1. Gather Data
+        rsi, macd, macd_signal = self.calculate_indicators(candles)
         
-        total_range = candle['high'] - candle['low']
-        if total_range == 0: return False
+        # === BUY SETUP ===
+        # Video Rule: RSI < 40 AND MACD > Signal Line
+        if rsi < self.rsi_buy_threshold and macd > macd_signal:
+            sl, tp = self.calculate_safe_risk("BUY", ask)
+            logger.info(f"✅ BUY SIGNAL (MACD/RSI) | RSI: {rsi:.1f} | MACD: {macd:.4f} > Sig: {macd_signal:.4f}")
+            self.execute_trade("BUY", symbol, self.lot_size, "MACD_RSI", sl, tp)
 
-        if type == "BUY":
-            # Require Lower Wick to be at least 2x the Body (Hammer)
-            # OR Lower Wick is > 50% of total range
-            if lower_wick > (body * 1.5) or lower_wick > (total_range * 0.5):
-                return True
-        elif type == "SELL":
-            # Require Upper Wick to be at least 2x the Body (Shooting Star)
-            # OR Upper Wick is > 50% of total range
-            if upper_wick > (body * 1.5) or upper_wick > (total_range * 0.5):
-                return True
+        # === SELL SETUP ===
+        # Video Rule: RSI > 60 AND MACD < Signal Line
+        elif rsi > self.rsi_sell_threshold and macd < macd_signal:
+            sl, tp = self.calculate_safe_risk("SELL", bid)
+            logger.info(f"✅ SELL SIGNAL (MACD/RSI) | RSI: {rsi:.1f} | MACD: {macd:.4f} < Sig: {macd_signal:.4f}")
+            self.execute_trade("SELL", symbol, self.lot_size, "MACD_RSI", sl, tp)
         
-        return False
+        else:
+            self._log_skip(f"No Signal | RSI: {rsi:.1f} | MACD Gap: {macd - macd_signal:.5f}")
 
-    def predict_momentum(self, candles):
-        try:
-            c1 = candles[1] 
-            c2 = candles[2]
-            ha_close = (c1['open'] + c1['high'] + c1['low'] + c1['close']) / 4
-            ha_open = (c2['open'] + c2['close']) / 2
-            
-            # Body Size Check
-            body_size = abs(c1['close'] - c1['open'])
-            avg_body = abs(c2['close'] - c2['open'])
-            is_strong = body_size > (avg_body * 0.5)
-
-            if ha_close > ha_open and is_strong: return "BULLISH"
-            elif ha_close < ha_open and is_strong: return "BEARISH"
-            return "NEUTRAL"
-        except:
-            return "NEUTRAL"
-
-    def check_crt_signals(self, symbol, bid, ask, candles):
-        c_range = candles[self.crt_lookback]    
-        c_signal = candles[self.crt_signal_idx] 
-        range_high = c_range['high']
-        range_low = c_range['low']
-
-        market_sentiment = self.news_engine.get_market_sentiment()
-        candle_prediction = self.predict_momentum(candles) 
-
-        # 1. BUY SIGNAL LOGIC
-        if c_signal['low'] < range_low and c_signal['close'] > range_low:
-            if self.trend == "UPTREND": 
-                if self.validate_signal_quality(c_signal, "BUY"):
-                    if market_sentiment == "BULLISH" or candle_prediction == "BULLISH":
-                        sl, tp = self.calculate_safe_risk("BUY", ask)
-                        logger.info(f"✅ STRICT BUY SIGNAL | Trend: {self.trend} | Risk: SL {sl:.2f} TP {tp:.2f}")
-                        self.execute_trade("BUY", symbol, self.lot_size, "STRICT_CRT", sl, tp)
-                        self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 65280) 
-                        return
-                    else:
-                        # LOG SPAM FIX: Only log every 10 seconds
-                        if time.time() % 10 < 1:
-                            logger.info("❌ Skipped BUY: No Confluence (News/Candle Neutral)")
-
-        # 2. SELL SIGNAL LOGIC
-        elif c_signal['high'] > range_high and c_signal['close'] < range_high:
-            if self.trend == "DOWNTREND":
-                if self.validate_signal_quality(c_signal, "SELL"):
-                    if market_sentiment == "BEARISH" or candle_prediction == "BEARISH":
-                        sl, tp = self.calculate_safe_risk("SELL", bid)
-                        logger.info(f"✅ STRICT SELL SIGNAL | Trend: {self.trend} | Risk: SL {sl:.2f} TP {tp:.2f}")
-                        self.execute_trade("SELL", symbol, self.lot_size, "STRICT_CRT", sl, tp)
-                        self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 255) 
-                        return
-                    else:
-                        # LOG SPAM FIX: Only log every 10 seconds
-                        if time.time() % 10 < 1:
-                            logger.info("❌ Skipped SELL: No Confluence (News/Candle Neutral)")
-
-        # 2. SELL SIGNAL LOGIC
-        # Signal: Wick broke above range_high but closed below it
-        elif c_signal['high'] > range_high and c_signal['close'] < range_high:
-            
-            # --- STRICT FILTER 1: Trend Alignment ---
-            if self.trend == "DOWNTREND":
-                
-                # --- STRICT FILTER 2: Candle Shape Quality ---
-                if self.validate_signal_quality(c_signal, "SELL"):
-                    
-                    # --- STRICT FILTER 3: Confluence ---
-                    if market_sentiment == "BEARISH" or candle_prediction in ["BEARISH", "NEUTRAL"]:
-                        
-                        # ALL CHECKS PASSED -> EXECUTE
-                        sl, tp = self.calculate_safe_risk("SELL", bid)
-                        logger.info(f"✅ STRICT SELL SIGNAL | Trend: {self.trend} | Risk: SL {sl:.2f} TP {tp:.2f}")
-                        self.execute_trade("SELL", symbol, self.lot_size, "STRICT_CRT", sl, tp)
-                        self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 255) # Red Box
-                        return
-                    else:
-                        logger.info("❌ Skipped SELL: No Confluence (News/Candle Neutral)")
+    def _log_skip(self, message):
+        """Throttles skip messages to appear only once every 15 seconds."""
+        if time.time() - self.last_log_time > 15:
+            logger.info(f"❌ {message}")
+            self.last_log_time = time.time()
 
     def analyze_structure(self, symbol, candles):
+        """Identifies Swing Highs/Lows for Risk Management."""
         swings = [] 
         lookback = min(len(candles) - 2, 50)
         for i in range(2, lookback): 
             c_curr = candles[i]
             c_prev = candles[i+1]
             c_next = candles[i-1]
-            # Simple Swing High/Low Detection
             if c_curr['high'] > c_prev['high'] and c_curr['high'] > c_next['high']:
-                swings.append({'type': 'H', 'price': c_curr['high'], 'index': i, 'time': c_curr['time']})
+                swings.append({'type': 'H', 'price': c_curr['high']})
             elif c_curr['low'] < c_prev['low'] and c_curr['low'] < c_next['low']:
-                swings.append({'type': 'L', 'price': c_curr['low'], 'index': i, 'time': c_curr['time']})
+                swings.append({'type': 'L', 'price': c_curr['low']})
 
-        swings.sort(key=lambda x: x['index'], reverse=True)
         self.swing_highs = [s for s in swings if s['type'] == 'H']
         self.swing_lows = [s for s in swings if s['type'] == 'L']
-        
-        # Trend Determination based on last 2 swings
-        if len(self.swing_highs) >= 2 and len(self.swing_lows) >= 2:
-            h1 = self.swing_highs[-1]['price']
-            h2 = self.swing_highs[-2]['price']
-            l1 = self.swing_lows[-1]['price']
-            l2 = self.swing_lows[-2]['price']
-            if h1 > h2 and l1 > l2: self.trend = "UPTREND"
-            elif h1 < h2 and l1 < l2: self.trend = "DOWNTREND"
-            else: self.trend = "NEUTRAL"
-        
-        # Visuals
-        if time.time() % 5 < 0.1:
-            for k in range(len(swings) - 1):
-                s1 = swings[k]
-                s2 = swings[k+1]
-                line_name = f"ZZ_{s1['time']}_{s2['time']}"
-                color = 32768 if s1['type'] == 'L' else 255 
-                self.connector.send_trend_command(line_name, s1['index'], s1['price'], s2['index'], s2['price'], color, 2)
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
+        self.last_trade_time = time.time()
         self.connector.send_command(direction, symbol, volume, sl, tp, 0)
         logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl:.4f} | TP: {tp:.4f}")
 
     def check_and_close_profit(self, symbol):
+        """Trailing Stop."""
         if time.time() - self.last_profit_close_time < self.profit_close_interval: return
         self.last_profit_close_time = time.time()
         
-        if self.peak_profit >= self.trailing_activation:
-            if self.current_profit <= (self.peak_profit - self.trailing_offset):
+        trailing_activation = 0.80  
+        trailing_offset = 0.20      
+        min_profit_target = 0.50
+
+        if self.peak_profit >= trailing_activation:
+            if self.current_profit <= (self.peak_profit - trailing_offset):
                 logger.info(f"🔒 TRAILING STOP HIT: Peak {self.peak_profit:.2f} -> Current {self.current_profit:.2f}")
                 self.connector.close_profit(symbol)
                 return
 
-        if self.current_profit >= self.min_profit_target and self.peak_profit < self.trailing_activation:
+        if self.current_profit >= min_profit_target and self.peak_profit < trailing_activation:
             logger.info(f"💰 TARGET HIT: {self.current_profit:.2f}")
             self.connector.close_profit(symbol)
 
     def analyze_patterns(self, candles):
         return {'fvg_zone': None, 'bullish_fvg': False, 'bearish_fvg': False}
-    def _update_range_from_history(self, candles): pass
