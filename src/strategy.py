@@ -7,7 +7,9 @@ class TradingStrategy:
     def __init__(self, connector, news_engine, config):
         self.connector = connector
         self.news_engine = news_engine
-        self.active = False
+        
+        # --- FIX 1: Start Active by Default ---
+        self.active = True 
         
         # --- Settings ---
         self.max_positions = config.get('auto_trading', {}).get('max_positions', 1)
@@ -31,7 +33,7 @@ class TradingStrategy:
         self.max_price = 0
 
     def start(self):
-        logger.info("Strategy Initialized | Waiting for UI Activation...")
+        logger.info("Strategy Started | Auto-Trading is ACTIVE")
 
     def stop(self):
         self.active = False
@@ -62,7 +64,10 @@ class TradingStrategy:
 
     def analyze_structure(self, symbol, candles):
         swings = [] 
-        for i in range(2, 50): 
+        # --- FIX 2: Dynamic Range Safety (Don't crash if < 50 candles) ---
+        lookback = min(len(candles) - 2, 50)
+        
+        for i in range(2, lookback): 
             c_curr = candles[i]
             c_prev = candles[i+1]
             c_next = candles[i-1]

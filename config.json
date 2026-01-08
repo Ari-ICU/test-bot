@@ -27,7 +27,7 @@
     "enabled": true
   },
   "auto_trading": {
-    "enabled": false,
+    "enabled": true,
     "max_positions": 100,
     "lot_size": 0.01,
     "price_range": {
