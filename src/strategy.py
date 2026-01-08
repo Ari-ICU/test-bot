@@ -161,33 +161,34 @@ class TradingStrategy:
         candle_prediction = self.predict_momentum(candles) 
 
         # 1. BUY SIGNAL LOGIC
-        # Signal: Wick broke below range_low but closed above it
         if c_signal['low'] < range_low and c_signal['close'] > range_low:
-            
-            # --- STRICT FILTER 1: Trend Alignment ---
             if self.trend == "UPTREND": 
-                
-                # --- STRICT FILTER 2: Candle Shape Quality ---
                 if self.validate_signal_quality(c_signal, "BUY"):
-                    
-                    # --- STRICT FILTER 3: Confluence ---
                     if market_sentiment == "BULLISH" or candle_prediction == "BULLISH":
-                        
-                        # ALL CHECKS PASSED -> EXECUTE
                         sl, tp = self.calculate_safe_risk("BUY", ask)
                         logger.info(f"✅ STRICT BUY SIGNAL | Trend: {self.trend} | Risk: SL {sl:.2f} TP {tp:.2f}")
                         self.execute_trade("BUY", symbol, self.lot_size, "STRICT_CRT", sl, tp)
-                        self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 65280) # Green Box
+                        self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 65280) 
                         return
                     else:
-                        logger.info("❌ Skipped BUY: No Confluence (News/Candle Neutral)")
-                else:
-                    # Debug log to ensure we know why it didn't trade
-                    # logger.info("❌ Skipped BUY: Weak Candle Shape") 
-                    pass
-            elif self.trend == "DOWNTREND":
-                 # logger.info("❌ Skipped BUY: Against Downtrend")
-                 pass
+                        # LOG SPAM FIX: Only log every 10 seconds
+                        if time.time() % 10 < 1:
+                            logger.info("❌ Skipped BUY: No Confluence (News/Candle Neutral)")
+
+        # 2. SELL SIGNAL LOGIC
+        elif c_signal['high'] > range_high and c_signal['close'] < range_high:
+            if self.trend == "DOWNTREND":
+                if self.validate_signal_quality(c_signal, "SELL"):
+                    if market_sentiment == "BEARISH" or candle_prediction == "BEARISH":
+                        sl, tp = self.calculate_safe_risk("SELL", bid)
+                        logger.info(f"✅ STRICT SELL SIGNAL | Trend: {self.trend} | Risk: SL {sl:.2f} TP {tp:.2f}")
+                        self.execute_trade("SELL", symbol, self.lot_size, "STRICT_CRT", sl, tp)
+                        self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 255) 
+                        return
+                    else:
+                        # LOG SPAM FIX: Only log every 10 seconds
+                        if time.time() % 10 < 1:
+                            logger.info("❌ Skipped SELL: No Confluence (News/Candle Neutral)")
 
         # 2. SELL SIGNAL LOGIC
         # Signal: Wick broke above range_high but closed below it
@@ -200,7 +201,7 @@ class TradingStrategy:
                 if self.validate_signal_quality(c_signal, "SELL"):
                     
                     # --- STRICT FILTER 3: Confluence ---
-                    if market_sentiment == "BEARISH" or candle_prediction == "BEARISH":
+                    if market_sentiment == "BEARISH" or candle_prediction in ["BEARISH", "NEUTRAL"]:
                         
                         # ALL CHECKS PASSED -> EXECUTE
                         sl, tp = self.calculate_safe_risk("SELL", bid)
