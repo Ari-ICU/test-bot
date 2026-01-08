@@ -22,7 +22,7 @@ class QueueHandler(logging.Handler):
 class TradingBotUI(tb.Window):
     def __init__(self, news_engine, mt5_connector):
         super().__init__(themename="darkly")  
-        self.title("MT5 Trading Bot - Pro Dashboard v7.0")
+        self.title("MT5 Trading Bot - Pro Dashboard v7.4")
         self.geometry("1000x850") 
         self.resizable(True, True) 
         
@@ -40,9 +40,23 @@ class TradingBotUI(tb.Window):
         self.open_positions = []  
         self.profit_history = []  
         
-        # Variables
+        # Default Config Values
+        config_max_pos = 5
+        config_duration = 0
+        
+        if self.news_engine and hasattr(self.news_engine, 'config'):
+            auto_config = self.news_engine.config.get('auto_trading', {})
+            config_max_pos = auto_config.get('max_positions', 5)
+            config_duration = auto_config.get('max_trade_duration', 0)
+        
+        # Variables with Traces (Auto-Update)
         self.auto_trade_var = tk.BooleanVar(value=False)
-        self.max_pos_var = tk.IntVar(value=5)
+        self.max_pos_var = tk.IntVar(value=config_max_pos)
+        self.max_pos_var.trace_add("write", self._on_max_pos_changed) # <--- FIX: Updates on typing
+        
+        self.max_duration_var = tk.IntVar(value=config_duration)
+        self.max_duration_var.trace_add("write", self._on_duration_changed) # <--- FIX: Updates on typing
+
         self.scalp_var = tk.BooleanVar(value=False)
         self.scalp_tp_var = tk.DoubleVar(value=0.50)
         self.fvg_var = tk.BooleanVar(value=True)
@@ -84,20 +98,28 @@ class TradingBotUI(tb.Window):
 
     def _sync_ui_to_strategy(self):
         if self.strategy:
-            self.strategy.max_positions = self.max_pos_var.get()
+            try:
+                self.strategy.max_positions = self.max_pos_var.get()
+            except: pass
+            
             self.strategy.set_active(self.auto_trade_var.get())
-            self.strategy.scalp_mode = self.scalp_var.get()
-            logging.info("UI synced to strategy")
+            
+            if hasattr(self.strategy, 'scalp_mode'):
+                self.strategy.scalp_mode = self.scalp_var.get()
+            
+            try:
+                self.strategy.max_trade_duration = self.max_duration_var.get()
+            except: pass
+            
+            logging.info(f"UI synced to strategy")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         self.after(0, lambda: self._update_ui_data(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles))
         
         self.tick_count += 1
-        
         if profit != 0 and (not self.profit_history or self.profit_history[-1][1] != profit):
              self.profit_history.append((time.strftime("%H:%M:%S"), profit))
              if len(self.profit_history) > 50: self.profit_history.pop(0)
-             self.after(0, self._update_history_table)
         
         direction = "BUY" if buy_count > 0 else ("SELL" if sell_count > 0 else "---")
         size = buy_count + sell_count
@@ -105,8 +127,6 @@ class TradingBotUI(tb.Window):
             self.open_positions = [{'symbol': symbol, 'type': direction, 'size': f"{size:.2f} lots", 'pnl': profit}]
         else:
             self.open_positions = []
-            
-        self.after(0, self._update_positions_table)
 
     def _on_symbols_received(self, symbols_list):
         if not self.symbols_loaded:
@@ -140,35 +160,26 @@ class TradingBotUI(tb.Window):
 
             self._draw_profit_sparkline()
 
-            # --- UPDATE MARKET STRUCTURE INFO ---
             if self.strategy:
                 # 1. Trend
                 trend = self.strategy.trend
                 t_color = "success" if trend == "UPTREND" else "danger" if trend == "DOWNTREND" else "secondary"
                 self.lbl_trend.config(text=f"TREND: {trend}", bootstyle=t_color)
 
-                # 2. Range Zones (Swing High/Low)
+                # 2. Range Zones
                 high_price = "Waiting..."
                 low_price = "Waiting..."
-                
-                # Retrieve from strategy memory
-                if self.strategy.swing_highs:
-                    # [-1] is the most recent swing
-                    high_price = f"{self.strategy.swing_highs[-1]['price']:.5f}"
-                if self.strategy.swing_lows:
-                    low_price = f"{self.strategy.swing_lows[-1]['price']:.5f}"
-
+                if self.strategy.swing_highs: high_price = f"{self.strategy.swing_highs[-1]['price']:.5f}"
+                if self.strategy.swing_lows: low_price = f"{self.strategy.swing_lows[-1]['price']:.5f}"
                 self.lbl_sell_zone.config(text=f"R-High (Sell): {high_price}")
                 self.lbl_buy_zone.config(text=f"R-Low (Buy): {low_price}")
 
-                # 3. Active FVG Signal
-                pat = self.strategy.analyze_patterns(candles)
-                if pat['bullish_fvg']:
-                    self.lbl_signal.config(text=f"Scan: BUY FVG @ {pat['fvg_zone'][1]:.5f}", bootstyle="success")
-                elif pat['bearish_fvg']:
-                    self.lbl_signal.config(text=f"Scan: SELL FVG @ {pat['fvg_zone'][0]:.5f}", bootstyle="danger")
-                else:
-                    self.lbl_signal.config(text="Scan: No Pattern", bootstyle="secondary")
+                # 3. Active Signal
+                if hasattr(self.strategy, 'analyze_patterns'):
+                    pat = self.strategy.analyze_patterns(candles)
+                    if pat.get('bullish_fvg'): self.lbl_signal.config(text=f"Scan: BUY SIGNAL (FVG)", bootstyle="success")
+                    elif pat.get('bearish_fvg'): self.lbl_signal.config(text=f"Scan: SELL SIGNAL (FVG)", bootstyle="danger")
+                    else: self.lbl_signal.config(text="Scan: Monitoring...", bootstyle="secondary")
 
         except Exception as e:
             logging.error(f"UI Update Error: {e}")
@@ -182,13 +193,10 @@ class TradingBotUI(tb.Window):
             w = self.profit_canvas.winfo_width()
             h = self.profit_canvas.winfo_height()
             if w < 10: return 
-            
             pnl_values = [p[1] for p in self.profit_history]
             max_pnl = max([abs(x) for x in pnl_values] + [1])
             step = w / len(pnl_values)
-            
             self.profit_canvas.create_line(0, h/2, w, h/2, fill="#333333", dash=(2,2))
-            
             for i in range(1, len(pnl_values)):
                 val1 = pnl_values[i-1]
                 val2 = pnl_values[i]
@@ -198,22 +206,6 @@ class TradingBotUI(tb.Window):
                 x2 = i * step
                 color = 'lime' if val2 >= 0 else 'red'
                 self.profit_canvas.create_line(x1, y1, x2, y2, fill=color, width=2)
-
-    def _update_positions_table(self):
-        if hasattr(self, 'positions_tree'):
-            for item in self.positions_tree.get_children():
-                self.positions_tree.delete(item)
-            for pos in self.open_positions:
-                tag = 'profit' if pos['pnl'] >= 0 else 'loss'
-                self.positions_tree.insert('', 'end', values=(pos['symbol'], pos['type'], pos['size'], f"${pos['pnl']:+.2f}"), tags=(tag,))
-
-    def _update_history_table(self):
-        if hasattr(self, 'history_tree'):
-            for item in self.history_tree.get_children():
-                self.history_tree.delete(item)
-            for rec in reversed(self.profit_history[-20:]):
-                tag = 'profit' if rec[1] >= 0 else 'loss'
-                self.history_tree.insert('', 'end', values=(rec[0], f"${rec[1]:+.2f}"), tags=(tag,))
 
     def _animate_pulse(self):
         self.pulse_value = (self.pulse_value + 5) % 100
@@ -256,10 +248,21 @@ class TradingBotUI(tb.Window):
         self.show_notification("Auto Trade", f"Strategy {state}", "success" if self.auto_trade_var.get() else "info")
 
     def _on_max_pos_changed(self, *args):
-        if self.strategy: self.strategy.max_positions = self.max_pos_var.get()
-        
+        # Called automatically when typing in the box
+        if self.strategy: 
+            try:
+                self.strategy.max_positions = self.max_pos_var.get()
+            except: pass
+    
+    def _on_duration_changed(self, *args):
+        if self.strategy: 
+            try:
+                self.strategy.max_trade_duration = self.max_duration_var.get()
+            except: pass
+
     def _on_scalp_toggle(self):
-        if self.strategy: self.strategy.scalp_mode = self.scalp_var.get()
+        if self.strategy and hasattr(self.strategy, 'scalp_mode'): 
+            self.strategy.scalp_mode = self.scalp_var.get()
 
     def _on_refresh_data(self):
         self.mt5_connector.request_symbols()
@@ -325,7 +328,7 @@ class TradingBotUI(tb.Window):
         # Header
         header_frame = ttk.Frame(main_frame, relief="flat")
         header_frame.pack(fill=X, padx=10, pady=5)
-        ttk.Label(header_frame, text="🛡️ MT5 Pro Bot v7.0", font=("Segoe UI", 16, "bold"), bootstyle="inverse-dark").pack(side=LEFT)
+        ttk.Label(header_frame, text="🛡️ MT5 Pro Bot v7.4", font=("Segoe UI", 16, "bold"), bootstyle="inverse-dark").pack(side=LEFT)
         self.lbl_mt5 = ttk.Label(header_frame, text="MT5: Connecting...", bootstyle="warning", font=("Segoe UI", 10))
         self.lbl_mt5.pack(side=LEFT, padx=20)
         self.lbl_time = ttk.Label(header_frame, text="", font=("Segoe UI", 10))
@@ -340,10 +343,6 @@ class TradingBotUI(tb.Window):
         dashboard_tab = ttk.Frame(notebook)
         notebook.add(dashboard_tab, text="📈 Dashboard")
         self._build_dashboard_tab(dashboard_tab)
-
-        trades_tab = ttk.Frame(notebook)
-        notebook.add(trades_tab, text="💱 Trades")
-        self._build_trades_tab(trades_tab)
 
         settings_tab = ttk.Frame(notebook)
         notebook.add(settings_tab, text="⚙️ Settings")
@@ -431,7 +430,7 @@ class TradingBotUI(tb.Window):
         self.lbl_ask = ttk.Label(ask_col, text="0.000", bootstyle="success", font=("Segoe UI", 25, "bold"))
         self.lbl_ask.pack()
 
-        # --- NEW: Market Structure Zone ---
+        # Market Structure Zone
         zone_frame = ttk.Frame(ctl_box, relief="solid", borderwidth=1)
         zone_frame.pack(fill=X, pady=10, padx=5)
         
@@ -451,7 +450,6 @@ class TradingBotUI(tb.Window):
         
         self.lbl_signal = ttk.Label(zone_frame, text="Scan: Waiting...", font=("Segoe UI", 10))
         self.lbl_signal.pack(pady=5)
-        # ----------------------------------
 
         ttk.Separator(ctl_box, orient='horizontal').pack(fill=X, pady=10)
 
@@ -484,40 +482,6 @@ class TradingBotUI(tb.Window):
         auto_frame.pack(fill=X, pady=20)
         ttk.Checkbutton(auto_frame, text="Enable Auto Trade", variable=self.auto_trade_var, command=self._on_auto_toggle, bootstyle="round-toggle").pack()
 
-    def _build_trades_tab(self, parent):
-        parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=1)
-        parent.grid_rowconfigure(1, weight=1)
-        
-        # Active Positions
-        active_frame = ttk.LabelFrame(parent, text="Active Positions", padding=10)
-        active_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
-        
-        cols = ('Sym', 'Type', 'Size', 'PnL')
-        self.positions_tree = ttk.Treeview(active_frame, columns=cols, show='headings', height=8)
-        for col in cols:
-            self.positions_tree.heading(col, text=col)
-            self.positions_tree.column(col, width=100)
-        
-        self.positions_tree.tag_configure('profit', foreground='lime')
-        self.positions_tree.tag_configure('loss', foreground='red')
-        self.positions_tree.pack(fill=BOTH, expand=True)
-        
-        # History
-        history_frame = ttk.LabelFrame(parent, text="Session History (Last 20 Closed PnL)", padding=10)
-        history_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-        
-        h_cols = ('Time', 'Profit')
-        self.history_tree = ttk.Treeview(history_frame, columns=h_cols, show='headings', height=8)
-        self.history_tree.heading('Time', text='Time')
-        self.history_tree.heading('Profit', text='Profit')
-        self.history_tree.column('Time', width=150)
-        self.history_tree.column('Profit', width=150)
-        
-        self.history_tree.tag_configure('profit', foreground='lime')
-        self.history_tree.tag_configure('loss', foreground='red')
-        self.history_tree.pack(fill=BOTH, expand=True)
-
     def _create_stat_card(self, parent, title, value, bootstyle):
         f = ttk.LabelFrame(parent, text=title, padding=10, bootstyle=bootstyle)
         l = ttk.Label(f, text=value, font=("Segoe UI", 20, "bold"), bootstyle=bootstyle)
@@ -525,14 +489,21 @@ class TradingBotUI(tb.Window):
         return f
 
     def _build_settings_tab(self, parent):
-        ttk.Label(parent, text="Bot Settings (Requires Restart for some)", font=("Segoe UI", 12)).pack(pady=10)
+        ttk.Label(parent, text="Bot Settings (Updates Instantly)", font=("Segoe UI", 12)).pack(pady=10)
         
         sf = ttk.Frame(parent, padding=20)
         sf.pack(fill=BOTH)
         
+        # Max Positions
         ttk.Label(sf, text="Max Auto Positions:").grid(row=0, column=0, sticky=W, pady=5)
         ttk.Spinbox(sf, from_=1, to=20, textvariable=self.max_pos_var, width=10, command=self._on_max_pos_changed).grid(row=0, column=1, sticky=W)
         
-        ttk.Checkbutton(sf, text="Scalp Mode", variable=self.scalp_var, command=self._on_scalp_toggle).grid(row=1, column=0, sticky=W, pady=5)
-        ttk.Checkbutton(sf, text="Show FVG Zones", variable=self.fvg_var).grid(row=2, column=0, sticky=W, pady=5)
-        ttk.Checkbutton(sf, text="Show Order Blocks", variable=self.ob_var).grid(row=3, column=0, sticky=W, pady=5)
+        # NEW: Max Duration
+        ttk.Label(sf, text="Auto Close (Sec):").grid(row=1, column=0, sticky=W, pady=5)
+        ttk.Spinbox(sf, from_=0, to=3600, textvariable=self.max_duration_var, width=10, command=self._on_duration_changed).grid(row=1, column=1, sticky=W)
+        ttk.Label(sf, text="(0 = Disabled)", font=("Segoe UI", 8)).grid(row=1, column=2, sticky=W, padx=5)
+        
+        # Checkboxes
+        ttk.Checkbutton(sf, text="Scalp Mode", variable=self.scalp_var, command=self._on_scalp_toggle).grid(row=2, column=0, sticky=W, pady=5)
+        ttk.Checkbutton(sf, text="Show FVG Zones", variable=self.fvg_var).grid(row=3, column=0, sticky=W, pady=5)
+        ttk.Checkbutton(sf, text="Show Order Blocks", variable=self.ob_var).grid(row=4, column=0, sticky=W, pady=5)
