@@ -103,39 +103,11 @@ class TradingStrategy:
             return "NEUTRAL"
 
     def check_crt_signals(self, symbol, bid, ask, candles):
-        # --- A. EXECUTE PENDING SETUP (THE BACKTEST ENTRY) ---
-        if self.pending_setup:
-            setup = self.pending_setup
-            # Increased Timeout to 20 mins (1200s) to allow market to backtest
-            if time.time() - setup['timestamp'] > 1200: 
-                logger.info("⚠️ Signal Timed Out (No Backtest) - Cancelled")
-                self.pending_setup = None
-                return
-
-            # Check if Price Retraces to Entry Level
-            if setup['direction'] == "BUY":
-                # Entry: If Ask Price drops to Entry Level (within buffer)
-                if ask <= (setup['entry_level'] + setup['buffer']):
-                    logger.info(f"⚡ BUY EXECUTED ⚡ Market Backtested {ask:.2f} (Target: {setup['entry_level']:.2f})")
-                    self.execute_trade("BUY", symbol, self.lot_size, "CRT_ENTRY", 0.0, setup['tp'])
-                    self.pending_setup = None
-                    return
-                
-            elif setup['direction'] == "SELL":
-                # Entry: If Bid Price rises to Entry Level (within buffer)
-                if bid >= (setup['entry_level'] - setup['buffer']):
-                    logger.info(f"⚡ SELL EXECUTED ⚡ Market Backtested {bid:.2f} (Target: {setup['entry_level']:.2f})")
-                    self.execute_trade("SELL", symbol, self.lot_size, "CRT_ENTRY", 0.0, setup['tp'])
-                    self.pending_setup = None
-                    return
-
+        
         # --- B. FIND NEW SIGNALS ---
         c_range = candles[self.crt_lookback]    
         c_signal = candles[self.crt_signal_idx] 
         
-        # Avoid duplicate signals for the same candle
-        if self.pending_setup and self.pending_setup['candle_time'] == c_signal['time']: return 
-
         range_high = c_range['high']
         range_low = c_range['low']
 
@@ -143,10 +115,8 @@ class TradingStrategy:
         is_gold = candles[0]['close'] > 500
         if is_gold:
             tp_dist = 4.00
-            retest_buffer = 0.60  # Increased buffer for easier execution on backtest
         else:
             tp_dist = 0.0030
-            retest_buffer = 0.0006 # Increased buffer for easier execution
 
         # --- CONFLUENCE CHECKS ---
         market_sentiment = self.news_engine.get_market_sentiment()
@@ -155,37 +125,25 @@ class TradingStrategy:
         # 1. BUY SIGNAL LOGIC
         if c_signal['low'] < range_low and c_signal['close'] > range_low:
             if self.trend != "DOWNTREND":
-                # REQUIREMENT: News OR Secure Candle must be BULLISH
                 if market_sentiment == "BULLISH" or candle_prediction == "BULLISH":
                     
-                    logger.info(f"👀 BUY SIGNAL FOUND (Waiting for Backtest to {range_low:.2f})")
-                    self.pending_setup = { 
-                        'direction': "BUY", 
-                        'entry_level': range_low, 
-                        'buffer': retest_buffer, 
-                        'sl': 0.0, # NO SL
-                        'tp': ask + tp_dist, 
-                        'timestamp': time.time(), 
-                        'candle_time': c_signal['time'] 
-                    }
+                    # FIX: Execute Immediately instead of waiting
+                    logger.info(f"⚡ BUY SIGNAL FOUND (Entering Immediately at {ask:.2f})")
+                    self.execute_trade("BUY", symbol, self.lot_size, "CRT_INSTANT", 0.0, ask + tp_dist)
+                    
+                    # Draw the box for visual reference
                     self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
 
         # 2. SELL SIGNAL LOGIC
         elif c_signal['high'] > range_high and c_signal['close'] < range_high:
             if self.trend != "UPTREND":
-                # REQUIREMENT: News OR Secure Candle must be BEARISH
                 if market_sentiment == "BEARISH" or candle_prediction == "BEARISH":
                     
-                    logger.info(f"👀 SELL SIGNAL FOUND (Waiting for Backtest to {range_high:.2f})")
-                    self.pending_setup = { 
-                        'direction': "SELL", 
-                        'entry_level': range_high, 
-                        'buffer': retest_buffer, 
-                        'sl': 0.0, # NO SL
-                        'tp': bid - tp_dist, 
-                        'timestamp': time.time(), 
-                        'candle_time': c_signal['time'] 
-                    }
+                    # FIX: Execute Immediately instead of waiting
+                    logger.info(f"⚡ SELL SIGNAL FOUND (Entering Immediately at {bid:.2f})")
+                    self.execute_trade("SELL", symbol, self.lot_size, "CRT_INSTANT", 0.0, bid - tp_dist)
+
+                    # Draw the box for visual reference
                     self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
 
     def analyze_structure(self, symbol, candles):
