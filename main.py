@@ -34,11 +34,11 @@ def main():
         logger.error("Failed to start MT5 Connector")
         return
 
-    # FIX: Sync UI defaults to strategy before start
-    app._sync_ui_to_strategy()
-
-    # START STRATEGY
+    # START STRATEGY (Now it waits for UI signal)
     strategy.start()
+
+    # FORCE UI SYNC TO ENSURE IT'S OFF
+    app._sync_ui_to_strategy()
 
     try:
         app.mainloop()
