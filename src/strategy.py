@@ -12,21 +12,26 @@ class TradingStrategy:
         self.active = True
         
         # --- STRATEGY CONFIGURATION (MACD & RSI) ---
-        self.risk_reward_ratio = 2.0     # Target 2x Profit for every 1x Risk
-        self.max_positions = 1           # Strict limit
+        self.risk_reward_ratio = 2.0     
+        self.max_positions = 1           
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
         
-        # Indicator Settings (From Video)
+        # --- PROFIT SETTINGS (Moved here for UI Control) ---
+        self.min_profit_target = 0.50    # Minimum scalp target
+        self.trailing_activation = 0.80  # Start trailing after this profit
+        self.trailing_offset = 0.20      # Distance to trail behind peak
+        
+        # Indicator Settings
         self.rsi_period = 14
-        self.rsi_buy_threshold = 40      # Video uses 40 for Buy
-        self.rsi_sell_threshold = 60     # Video uses 60 for Sell
+        self.rsi_buy_threshold = 40      
+        self.rsi_sell_threshold = 60     
         
         self.macd_fast = 12
         self.macd_slow = 26
         self.macd_signal = 9
         
         # --- Execution Safety ---
-        self.trade_cooldown = 15.0       # Wait 15s after a trade
+        self.trade_cooldown = 15.0       
         self.last_trade_time = 0         
         self.last_log_time = 0           
         
@@ -40,7 +45,7 @@ class TradingStrategy:
         self.profit_close_interval = 1 
 
     def start(self):
-        logger.info("Strategy ACTIVE | MACD & RSI Strategy | RR 1:2")
+        logger.info(f"Strategy ACTIVE | Target: ${self.min_profit_target} | Trail: ${self.trailing_activation}")
 
     def stop(self):
         self.active = False
@@ -66,10 +71,10 @@ class TradingStrategy:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
                 self.check_signals_macd_rsi(symbol, bid, ask, candles)
 
-        # 2. Analyze Structure (For Stop Loss)
+        # 2. Analyze Structure
         self.analyze_structure(symbol, candles)
 
-        # 3. Manage Profit (Trailing Stop)
+        # 3. Manage Profit (Using Dynamic Settings)
         if positions > 0:
             self.check_and_close_profit(symbol)
 
@@ -78,30 +83,21 @@ class TradingStrategy:
             logger.info(f"Status: {symbol} | PnL: {profit:.2f} | Peak: {self.peak_profit:.2f}")
 
     def calculate_indicators(self, candles):
-        """Calculates RSI (14) and MACD (12, 26, 9)"""
         try:
-            # Sort Oldest -> Newest for Pandas calculation
             df = pd.DataFrame(candles)
             df = df.iloc[::-1].reset_index(drop=True) 
             
-            # --- RSI CALCULATION ---
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
             rs = gain / loss
             df['rsi'] = 100 - (100 / (1 + rs))
 
-            # --- MACD CALCULATION ---
-            # Fast EMA (12)
             short_ema = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
-            # Slow EMA (26)
             long_ema = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
-            # MACD Line
             df['macd'] = short_ema - long_ema
-            # Signal Line (9)
             df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
 
-            # Return the Last Closed Candle (Index -2)
             last_closed = df.iloc[-2] 
             return last_closed['rsi'], last_closed['macd'], last_closed['macd_signal']
         except Exception as e:
@@ -109,14 +105,12 @@ class TradingStrategy:
             return 50, 0, 0
 
     def calculate_safe_risk(self, direction, entry_price):
-        """Finds Swing High/Low for SL and calculates TP for 1:2 Risk-Reward."""
         sl = 0.0
         tp = 0.0
         is_gold = entry_price > 500
         min_dist = 2.00 if is_gold else 0.0020  
         
         if direction == "BUY":
-            # SL = Last Swing Low
             if self.swing_lows:
                 last_low = self.swing_lows[-1]['price']
                 if (entry_price - last_low) < min_dist: sl = entry_price - min_dist
@@ -126,7 +120,6 @@ class TradingStrategy:
             tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
 
         elif direction == "SELL":
-            # SL = Last Swing High
             if self.swing_highs:
                 last_high = self.swing_highs[-1]['price']
                 if (last_high - entry_price) < min_dist: sl = entry_price + min_dist
@@ -138,18 +131,13 @@ class TradingStrategy:
         return float(sl), float(tp)
 
     def check_signals_macd_rsi(self, symbol, bid, ask, candles):
-        # 1. Gather Data
         rsi, macd, macd_signal = self.calculate_indicators(candles)
         
-        # === BUY SETUP ===
-        # Video Rule: RSI < 40 AND MACD > Signal Line
         if rsi < self.rsi_buy_threshold and macd > macd_signal:
             sl, tp = self.calculate_safe_risk("BUY", ask)
             logger.info(f"✅ BUY SIGNAL (MACD/RSI) | RSI: {rsi:.1f} | MACD: {macd:.4f} > Sig: {macd_signal:.4f}")
             self.execute_trade("BUY", symbol, self.lot_size, "MACD_RSI", sl, tp)
 
-        # === SELL SETUP ===
-        # Video Rule: RSI > 60 AND MACD < Signal Line
         elif rsi > self.rsi_sell_threshold and macd < macd_signal:
             sl, tp = self.calculate_safe_risk("SELL", bid)
             logger.info(f"✅ SELL SIGNAL (MACD/RSI) | RSI: {rsi:.1f} | MACD: {macd:.4f} < Sig: {macd_signal:.4f}")
@@ -159,13 +147,11 @@ class TradingStrategy:
             self._log_skip(f"No Signal | RSI: {rsi:.1f} | MACD Gap: {macd - macd_signal:.5f}")
 
     def _log_skip(self, message):
-        """Throttles skip messages to appear only once every 15 seconds."""
         if time.time() - self.last_log_time > 15:
             logger.info(f"❌ {message}")
             self.last_log_time = time.time()
 
     def analyze_structure(self, symbol, candles):
-        """Identifies Swing Highs/Lows for Risk Management."""
         swings = [] 
         lookback = min(len(candles) - 2, 50)
         for i in range(2, lookback): 
@@ -186,21 +172,18 @@ class TradingStrategy:
         logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl:.4f} | TP: {tp:.4f}")
 
     def check_and_close_profit(self, symbol):
-        """Trailing Stop."""
+        """Trailing Stop using Dynamic Settings."""
         if time.time() - self.last_profit_close_time < self.profit_close_interval: return
         self.last_profit_close_time = time.time()
         
-        trailing_activation = 0.80  
-        trailing_offset = 0.20      
-        min_profit_target = 0.50
-
-        if self.peak_profit >= trailing_activation:
-            if self.current_profit <= (self.peak_profit - trailing_offset):
+        # --- FIXED: Use self variables instead of hardcoded numbers ---
+        if self.peak_profit >= self.trailing_activation:
+            if self.current_profit <= (self.peak_profit - self.trailing_offset):
                 logger.info(f"🔒 TRAILING STOP HIT: Peak {self.peak_profit:.2f} -> Current {self.current_profit:.2f}")
                 self.connector.close_profit(symbol)
                 return
 
-        if self.current_profit >= min_profit_target and self.peak_profit < trailing_activation:
+        if self.current_profit >= self.min_profit_target and self.peak_profit < self.trailing_activation:
             logger.info(f"💰 TARGET HIT: {self.current_profit:.2f}")
             self.connector.close_profit(symbol)
 

@@ -17,8 +17,10 @@ class QueueHandler(logging.Handler):
 class TradingBotUI(tb.Window):
     def __init__(self, news_engine, mt5_connector):
         super().__init__(themename="darkly")  
-        self.title("MT5 Bot - MACD & RSI Strategy Edition")
-        self.geometry("1100x950") 
+        self.title("MT5 Bot - Laptop Edition")
+        
+        # --- FIXED: Smaller Size for 13" Screens ---
+        self.geometry("950x650") 
         self.resizable(True, True) 
         
         self.news_engine = news_engine
@@ -39,6 +41,11 @@ class TradingBotUI(tb.Window):
         self.max_pos_var = tk.IntVar(value=1)
         self.lot_size_var = tk.DoubleVar(value=0.01)
         
+        # Profit Settings
+        self.min_profit_var = tk.DoubleVar(value=0.50)
+        self.trail_active_var = tk.DoubleVar(value=0.80)
+        self.trail_offset_var = tk.DoubleVar(value=0.20)
+
         # Strategy Specifics (MACD/RSI)
         self.rsi_period_var = tk.IntVar(value=14)
         self.rsi_buy_var = tk.IntVar(value=40)
@@ -78,7 +85,8 @@ class TradingBotUI(tb.Window):
         """Syncs UI changes to Strategy instantly"""
         for var in [self.max_pos_var, self.rsi_period_var, self.rsi_buy_var, 
                     self.rsi_sell_var, self.macd_fast_var, self.macd_slow_var, 
-                    self.macd_signal_var, self.rr_ratio_var, self.cooldown_var]:
+                    self.macd_signal_var, self.rr_ratio_var, self.cooldown_var,
+                    self.min_profit_var, self.trail_active_var, self.trail_offset_var]:
             var.trace_add("write", self._on_setting_changed)
 
     def _sync_ui_to_strategy(self):
@@ -89,6 +97,11 @@ class TradingBotUI(tb.Window):
                 self.strategy.max_positions = self.max_pos_var.get()
                 self.strategy.lot_size = self.lot_size_var.get()
                 
+                # Sync Profit Settings
+                self.strategy.min_profit_target = self.min_profit_var.get()
+                self.strategy.trailing_activation = self.trail_active_var.get()
+                self.strategy.trailing_offset = self.trail_offset_var.get()
+
                 # RSI Settings
                 self.strategy.rsi_period = self.rsi_period_var.get()
                 self.strategy.rsi_buy_threshold = self.rsi_buy_var.get()
@@ -103,9 +116,9 @@ class TradingBotUI(tb.Window):
                 self.strategy.risk_reward_ratio = self.rr_ratio_var.get()
                 self.strategy.trade_cooldown = self.cooldown_var.get()
                 
-                logging.info("Strategy updated with UI settings.")
+                logging.info("Strategy settings updated.")
             except Exception as e:
-                logging.error(f"Sync Error: {e}")
+                pass
 
     def _update_strategy_logic_text(self):
         """Updates the dashboard text explaining WHEN the bot will buy/sell."""
@@ -144,15 +157,12 @@ class TradingBotUI(tb.Window):
             self._update_card(self.lbl_profit, f"${profit:+,.2f}", "success" if profit >= 0 else "danger")
             self._update_card(self.lbl_positions, f"{positions}/{self.max_pos_var.get()}", "warning" if positions >= self.max_pos_var.get() else "secondary")
             
-            # --- LIVE STRATEGY FEEDBACK ---
             if self.strategy and len(candles) > 50:
                 rsi, macd, signal = self.strategy.calculate_indicators(candles)
                 
-                # Update RSI Label
                 rsi_color = "success" if rsi < self.rsi_buy_var.get() else "danger" if rsi > self.rsi_sell_var.get() else "secondary"
                 self.lbl_live_rsi.config(text=f"RSI (14): {rsi:.2f}", bootstyle=rsi_color)
                 
-                # Update MACD Label
                 macd_color = "success" if macd > signal else "danger"
                 self.lbl_live_macd.config(text=f"MACD: {macd:.5f} | Sig: {signal:.5f}", bootstyle=macd_color)
 
@@ -162,7 +172,13 @@ class TradingBotUI(tb.Window):
     def _update_card(self, label, text, bootstyle):
         label.config(text=text, bootstyle=bootstyle)
 
-    # --- ACTION HANDLERS ---
+    def _create_stat_card(self, parent, title, value, bootstyle):
+        """Helper method to create statistic cards on the dashboard."""
+        f = ttk.LabelFrame(parent, text=title, padding=10, bootstyle=bootstyle)
+        l = ttk.Label(f, text=value, font=("Segoe UI", 20, "bold"), bootstyle=bootstyle)
+        l.pack()
+        return f
+
     def _on_buy(self):
         s = self.symbol_var.get()
         if s: self.mt5_connector.send_command("BUY", s, self.lot_size_var.get(), self.manual_sl_var.get(), self.manual_tp_var.get(), 0)
@@ -216,21 +232,18 @@ class TradingBotUI(tb.Window):
         if hasattr(self, 'lbl_time'): self.lbl_time.config(text=now)
         self.after(1000, self._update_header_time)
 
-    # --- WIDGET CREATION ---
     def _create_widgets(self):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=BOTH, expand=True)
         
-        # Header
         header_frame = ttk.Frame(main_frame, relief="flat")
         header_frame.pack(fill=X, padx=10, pady=5)
-        ttk.Label(header_frame, text="🛡️ MACD+RSI Auto Bot", font=("Segoe UI", 16, "bold"), bootstyle="inverse-primary").pack(side=LEFT)
+        ttk.Label(header_frame, text="🛡️ MACD+RSI Auto Bot", font=("Segoe UI", 14, "bold"), bootstyle="inverse-primary").pack(side=LEFT)
         self.lbl_mt5 = ttk.Label(header_frame, text="MT5: Connecting...", bootstyle="warning")
         self.lbl_mt5.pack(side=LEFT, padx=20)
         self.lbl_time = ttk.Label(header_frame, text="")
         self.lbl_time.pack(side=RIGHT)
 
-        # Tabs
         notebook = ttk.Notebook(main_frame, padding=5)
         notebook.pack(fill=BOTH, expand=True, padx=5, pady=5)
 
@@ -239,17 +252,17 @@ class TradingBotUI(tb.Window):
         self._build_dashboard_tab(dashboard_tab)
 
         settings_tab = ttk.Frame(notebook)
-        notebook.add(settings_tab, text="⚙️ Strategy Settings")
+        notebook.add(settings_tab, text="⚙️ Settings")
         self._build_settings_tab(settings_tab)
 
         logs_tab = ttk.Frame(notebook)
         notebook.add(logs_tab, text="📝 Logs")
-        self.log_text = scrolledtext.ScrolledText(logs_tab, height=20, font=('Consolas', 9))
+        self.log_text = scrolledtext.ScrolledText(logs_tab, height=15, font=('Consolas', 9))
         self.log_text.pack(fill=BOTH, expand=True)
 
         news_tab = ttk.Frame(notebook)
         notebook.add(news_tab, text="📰 News")
-        self.news_text = scrolledtext.ScrolledText(news_tab, height=20, font=('Consolas', 9))
+        self.news_text = scrolledtext.ScrolledText(news_tab, height=15, font=('Consolas', 9))
         self.news_text.pack(fill=BOTH, expand=True)
 
     def _build_dashboard_tab(self, parent):
@@ -257,116 +270,122 @@ class TradingBotUI(tb.Window):
         parent.grid_columnconfigure(1, weight=1)
         parent.grid_rowconfigure(0, weight=1)
 
-        # Left Column: Financials
+        # Left Column
         left_frame = ttk.Frame(parent, padding=10)
         left_frame.grid(row=0, column=0, sticky="nsew")
         
-        self._create_stat_card(left_frame, "💰 Balance", "$0.00", "success").pack(fill=X, pady=10)
+        self._create_stat_card(left_frame, "💰 Balance", "$0.00", "success").pack(fill=X, pady=5)
         self.lbl_balance = left_frame.winfo_children()[-1].winfo_children()[0]
         
-        self._create_stat_card(left_frame, "📉 Profit", "$0.00", "info").pack(fill=X, pady=10)
+        self._create_stat_card(left_frame, "📉 Profit", "$0.00", "info").pack(fill=X, pady=5)
         self.lbl_profit = left_frame.winfo_children()[-1].winfo_children()[0]
         
-        self._create_stat_card(left_frame, "📊 Positions", "0/0", "warning").pack(fill=X, pady=10)
+        self._create_stat_card(left_frame, "📊 Positions", "0/0", "warning").pack(fill=X, pady=5)
         self.lbl_positions = left_frame.winfo_children()[-1].winfo_children()[0]
 
-        # Right Column: Controls & Indicators
+        # Right Column
         right_frame = ttk.Frame(parent, padding=10)
         right_frame.grid(row=0, column=1, sticky="nsew")
         
-        # --- Live Indicators Panel ---
-        ind_frame = ttk.LabelFrame(right_frame, text="Live Indicators", padding=15, bootstyle="info")
-        ind_frame.pack(fill=X, pady=(0, 10))
+        ind_frame = ttk.LabelFrame(right_frame, text="Live Indicators", padding=10, bootstyle="info")
+        ind_frame.pack(fill=X, pady=(0, 5))
         
-        self.lbl_live_rsi = ttk.Label(ind_frame, text="RSI (14): Waiting...", font=("Segoe UI", 14, "bold"), bootstyle="secondary")
-        self.lbl_live_rsi.pack(fill=X, pady=5)
+        self.lbl_live_rsi = ttk.Label(ind_frame, text="RSI (14): Waiting...", font=("Segoe UI", 12, "bold"), bootstyle="secondary")
+        self.lbl_live_rsi.pack(fill=X, pady=2)
         
-        self.lbl_live_macd = ttk.Label(ind_frame, text="MACD: Waiting...", font=("Segoe UI", 12), bootstyle="secondary")
-        self.lbl_live_macd.pack(fill=X, pady=5)
+        self.lbl_live_macd = ttk.Label(ind_frame, text="MACD: Waiting...", font=("Segoe UI", 10), bootstyle="secondary")
+        self.lbl_live_macd.pack(fill=X, pady=2)
 
-        # --- Active Strategy Logic Display (NEW) ---
-        logic_frame = ttk.LabelFrame(right_frame, text="Active Strategy Logic", padding=10)
-        logic_frame.pack(fill=X, pady=10)
+        logic_frame = ttk.LabelFrame(right_frame, text="Active Strategy Logic", padding=5)
+        logic_frame.pack(fill=X, pady=5)
         
-        self.lbl_buy_logic = ttk.Label(logic_frame, text="", font=("Segoe UI", 10, "bold"), foreground="#2ecc71") # Green
-        self.lbl_buy_logic.pack(anchor=W, pady=2)
+        self.lbl_buy_logic = ttk.Label(logic_frame, text="", font=("Segoe UI", 9, "bold"), foreground="#2ecc71") # Green
+        self.lbl_buy_logic.pack(anchor=W)
         
-        self.lbl_sell_logic = ttk.Label(logic_frame, text="", font=("Segoe UI", 10, "bold"), foreground="#e74c3c") # Red
-        self.lbl_sell_logic.pack(anchor=W, pady=2)
+        self.lbl_sell_logic = ttk.Label(logic_frame, text="", font=("Segoe UI", 9, "bold"), foreground="#e74c3c") # Red
+        self.lbl_sell_logic.pack(anchor=W)
 
-        # --- Manual Execution ---
-        ctl_box = ttk.LabelFrame(right_frame, text="Manual Execution", padding=15)
+        ctl_box = ttk.LabelFrame(right_frame, text="Execution", padding=10)
         ctl_box.pack(fill=X, pady=5)
         
-        # Symbol
-        ttk.Label(ctl_box, text="Symbol:", font=("Segoe UI", 10)).pack(anchor=W)
+        ttk.Label(ctl_box, text="Symbol:", font=("Segoe UI", 9)).pack(anchor=W)
         self.combo_symbol = ttk.Combobox(ctl_box, textvariable=self.symbol_var, state="readonly")
-        self.combo_symbol.pack(fill=X, pady=(0,10))
+        self.combo_symbol.pack(fill=X, pady=(0,5))
         
-        # Prices
         prices_frame = ttk.Frame(ctl_box)
-        prices_frame.pack(fill=X, pady=10)
-        self.lbl_bid = ttk.Label(prices_frame, text="0.000", bootstyle="info", font=("Segoe UI", 20))
+        prices_frame.pack(fill=X, pady=5)
+        self.lbl_bid = ttk.Label(prices_frame, text="0.000", bootstyle="info", font=("Segoe UI", 16))
         self.lbl_bid.pack(side=LEFT, padx=10)
-        self.lbl_ask = ttk.Label(prices_frame, text="0.000", bootstyle="success", font=("Segoe UI", 20))
+        self.lbl_ask = ttk.Label(prices_frame, text="0.000", bootstyle="success", font=("Segoe UI", 16))
         self.lbl_ask.pack(side=RIGHT, padx=10)
 
-        # Buttons
         btn_grid = ttk.Frame(ctl_box)
-        btn_grid.pack(fill=X, pady=15)
-        ttk.Button(btn_grid, text="BUY NOW", command=self._on_buy, bootstyle="success").pack(side=LEFT, fill=X, expand=True, padx=5)
-        ttk.Button(btn_grid, text="SELL NOW", command=self._on_sell, bootstyle="danger").pack(side=LEFT, fill=X, expand=True, padx=5)
+        btn_grid.pack(fill=X, pady=10)
+        ttk.Button(btn_grid, text="BUY", command=self._on_buy, bootstyle="success").pack(side=LEFT, fill=X, expand=True, padx=2)
+        ttk.Button(btn_grid, text="SELL", command=self._on_sell, bootstyle="danger").pack(side=LEFT, fill=X, expand=True, padx=2)
         
-        ttk.Button(ctl_box, text="CLOSE ALL POSITIONS", command=self._on_close_all, bootstyle="warning-outline").pack(fill=X, pady=10)
+        ttk.Button(ctl_box, text="CLOSE ALL", command=self._on_close_all, bootstyle="warning-outline").pack(fill=X, pady=5)
         
-        # Auto Strategy Toggle
-        auto_frame = ttk.LabelFrame(right_frame, text="Auto Strategy", padding=15)
-        auto_frame.pack(fill=X, pady=20)
-        ttk.Checkbutton(auto_frame, text="Enable Auto Trade (MACD+RSI)", variable=self.auto_trade_var, command=self._on_auto_toggle, bootstyle="round-toggle").pack()
-
-    def _create_stat_card(self, parent, title, value, bootstyle):
-        f = ttk.LabelFrame(parent, text=title, padding=10, bootstyle=bootstyle)
-        l = ttk.Label(f, text=value, font=("Segoe UI", 20, "bold"), bootstyle=bootstyle)
-        l.pack()
-        return f
+        auto_frame = ttk.LabelFrame(right_frame, text="Auto Strategy", padding=10)
+        auto_frame.pack(fill=X, pady=10)
+        ttk.Checkbutton(auto_frame, text="Enable Auto Trade", variable=self.auto_trade_var, command=self._on_auto_toggle, bootstyle="round-toggle").pack()
 
     def _build_settings_tab(self, parent):
-        scroll = ttk.Frame(parent)
-        scroll.pack(fill=BOTH, expand=True)
+        # Using a Canvas to allow scrolling if settings are too tall
+        canvas = tk.Canvas(parent, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
         
-        # -- General --
-        gen_frame = ttk.LabelFrame(scroll, text="General Settings", padding=15)
-        gen_frame.pack(fill=X, padx=10, pady=10)
+        # --- Settings Content ---
+        gen_frame = ttk.LabelFrame(scroll_frame, text="General Settings", padding=10)
+        gen_frame.pack(fill=X, padx=10, pady=5)
         
         self._add_setting(gen_frame, "Max Open Positions:", self.max_pos_var, 1, 10, 0)
         self._add_setting(gen_frame, "Lot Size:", self.lot_size_var, 0.01, 10.0, 1)
         self._add_setting(gen_frame, "Trade Cooldown (sec):", self.cooldown_var, 5.0, 300.0, 2)
 
-        # -- RSI Settings --
-        rsi_frame = ttk.LabelFrame(scroll, text="RSI Settings", padding=15, bootstyle="info")
-        rsi_frame.pack(fill=X, padx=10, pady=10)
+        # -- Profit & Trailing Settings --
+        prof_frame = ttk.LabelFrame(scroll_frame, text="Profit & Trailing Settings", padding=10, bootstyle="warning")
+        prof_frame.pack(fill=X, padx=10, pady=5)
+        
+        self._add_setting(prof_frame, "Min Profit Target ($):", self.min_profit_var, 0.50, 1000.0, 0)
+        self._add_setting(prof_frame, "Trailing Activation ($):", self.trail_active_var, 0.50, 1000.0, 1)
+        self._add_setting(prof_frame, "Trailing Offset ($):", self.trail_offset_var, 0.10, 500.0, 2)
+
+        rsi_frame = ttk.LabelFrame(scroll_frame, text="RSI Settings", padding=10, bootstyle="info")
+        rsi_frame.pack(fill=X, padx=10, pady=5)
         
         self._add_setting(rsi_frame, "RSI Period:", self.rsi_period_var, 2, 50, 0)
         self._add_setting(rsi_frame, "Oversold (Buy if <):", self.rsi_buy_var, 10, 50, 1)
         self._add_setting(rsi_frame, "Overbought (Sell if >):", self.rsi_sell_var, 50, 90, 2)
 
-        # -- MACD Settings --
-        macd_frame = ttk.LabelFrame(scroll, text="MACD Settings", padding=15, bootstyle="primary")
-        macd_frame.pack(fill=X, padx=10, pady=10)
+        macd_frame = ttk.LabelFrame(scroll_frame, text="MACD Settings", padding=10, bootstyle="primary")
+        macd_frame.pack(fill=X, padx=10, pady=5)
         
         self._add_setting(macd_frame, "Fast EMA:", self.macd_fast_var, 5, 50, 0)
         self._add_setting(macd_frame, "Slow EMA:", self.macd_slow_var, 10, 100, 1)
         self._add_setting(macd_frame, "Signal SMA:", self.macd_signal_var, 2, 50, 2)
 
-        # -- Risk Management --
-        risk_frame = ttk.LabelFrame(scroll, text="Risk Management", padding=15, bootstyle="success")
-        risk_frame.pack(fill=X, padx=10, pady=10)
+        risk_frame = ttk.LabelFrame(scroll_frame, text="Risk Management", padding=10, bootstyle="success")
+        risk_frame.pack(fill=X, padx=10, pady=5)
         
         self._add_setting(risk_frame, "Risk/Reward Ratio (1:x):", self.rr_ratio_var, 1.0, 10.0, 0)
-        ttk.Label(risk_frame, text="* 2.0 means if Risk $10, Target is $20", font=("Segoe UI", 8), foreground="gray").grid(row=1, column=0, columnspan=3, sticky=W)
 
     def _add_setting(self, parent, label_text, variable, min_val, max_val, row_idx):
-        ttk.Label(parent, text=label_text).grid(row=row_idx, column=0, sticky=W, padx=5, pady=5)
+        ttk.Label(parent, text=label_text).grid(row=row_idx, column=0, sticky=W, padx=5, pady=2)
         if isinstance(variable, tk.IntVar) or isinstance(variable, tk.DoubleVar):
             step = 1 if isinstance(variable, tk.IntVar) else 0.1
             ttk.Spinbox(parent, from_=min_val, to=max_val, increment=step, textvariable=variable, width=10).grid(row=row_idx, column=1, sticky=W, padx=5)
