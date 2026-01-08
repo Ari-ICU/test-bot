@@ -9,11 +9,14 @@ class TradingStrategy:
         self.news_engine = news_engine
         self.active = True
         
-        # --- Settings ---
-        self.max_positions = config.get('auto_trading', {}).get('max_positions', 5)
+        # --- Settings for Small Balance ---
+        self.max_positions = 1  # Force 1 position to protect small balance
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
-        self.max_trade_duration = 0 
-        self.min_profit_target = 0.50  
+        
+        # --- Profit Settings (Scalping Mode) ---
+        self.min_profit_target = 0.50    # Secure profit early (50 cents)
+        self.trailing_activation = 0.80  # Start trailing after 80 cents profit
+        self.trailing_offset = 0.20      # Close if profit drops 20 cents from peak
         
         # CRT Settings
         self.crt_lookback = 2      
@@ -26,11 +29,12 @@ class TradingStrategy:
         self.swing_lows = []
         
         self.current_profit = 0.0 
+        self.peak_profit = 0.0        # Track highest profit for trailing
         self.last_profit_close_time = 0
         self.profit_close_interval = 1 
 
     def start(self):
-        logger.info("CRT Strategy | Retest Mode ACTIVE | News Filter ACTIVE | NO SL")
+        logger.info("Strategy ACTIVE | Backtest Entry Mode | Smart Profit Locking")
 
     def stop(self):
         self.active = False
@@ -45,102 +49,144 @@ class TradingStrategy:
         if not candles or len(candles) < 20: return
         self.current_profit = profit 
 
-        # 1. PRIORITY: Check Signals
+        # --- Track Peak Profit (For Trailing Stop) ---
+        if positions > 0:
+            if profit > self.peak_profit:
+                self.peak_profit = profit
+        else:
+            self.peak_profit = 0.0 # Reset when no trades
+
+        # 1. PRIORITY: Check Signals (Only if we have no positions)
         if self.active and positions < self.max_positions:
             self.check_crt_signals(symbol, bid, ask, candles)
 
-        # 2. Analyze Trend
+        # 2. Analyze Trend Structure
         self.analyze_structure(symbol, candles)
 
-        # 3. Manage Profit (Auto Close)
-        self.check_and_close_profit(symbol)
+        # 3. Manage Profit (Smart Trailing)
+        if positions > 0:
+            self.check_and_close_profit(symbol)
 
         # 4. Status Log
         if time.time() % 10 < 1: 
             status = "Scanning"
-            if self.pending_setup: status = f"WAITING FOR TEST ({self.pending_setup['direction']})"
-            logger.info(f"Status: {symbol} | Trend: {self.trend} | PnL: {profit:.2f} | State: {status}")
+            if self.pending_setup: status = f"WAITING FOR BACKTEST ({self.pending_setup['direction']} at {self.pending_setup['entry_level']:.2f})"
+            logger.info(f"Status: {symbol} | Trend: {self.trend} | PnL: {profit:.2f} | Peak: {self.peak_profit:.2f} | {status}")
+
+    # --- SECURE CANDLE PREDICTION ---
+    def predict_momentum(self, candles):
+        """
+        Uses Heikin Ashi on CLOSED candles to confirm trend strength.
+        Returns: 'BULLISH', 'BEARISH', or 'NEUTRAL'
+        """
+        try:
+            # We use index 1 (Last Closed Candle) and index 2 (Previous)
+            c1 = candles[1] 
+            c2 = candles[2]
+            
+            # Heikin Ashi Calculation
+            ha_close = (c1['open'] + c1['high'] + c1['low'] + c1['close']) / 4
+            ha_open = (c2['open'] + c2['close']) / 2
+            
+            # Body Size Check (Candle must be strong)
+            body_size = abs(c1['close'] - c1['open'])
+            avg_body = abs(c2['close'] - c2['open'])
+            is_strong = body_size > (avg_body * 0.5)
+
+            if ha_close > ha_open and is_strong:
+                return "BULLISH"
+            elif ha_close < ha_open and is_strong:
+                return "BEARISH"
+            
+            return "NEUTRAL"
+        except:
+            return "NEUTRAL"
 
     def check_crt_signals(self, symbol, bid, ask, candles):
-        # --- A. EXECUTE PENDING SETUP (THE RETEST) ---
+        # --- A. EXECUTE PENDING SETUP (THE BACKTEST ENTRY) ---
         if self.pending_setup:
             setup = self.pending_setup
-            if time.time() - setup['timestamp'] > 600: 
-                logger.info("⚠️ Signal Timed Out")
+            # Increased Timeout to 20 mins (1200s) to allow market to backtest
+            if time.time() - setup['timestamp'] > 1200: 
+                logger.info("⚠️ Signal Timed Out (No Backtest) - Cancelled")
                 self.pending_setup = None
                 return
 
+            # Check if Price Retraces to Entry Level
             if setup['direction'] == "BUY":
+                # Entry: If Ask Price drops to Entry Level (within buffer)
                 if ask <= (setup['entry_level'] + setup['buffer']):
-                    logger.info(f"⚡ RETEST CONFIRMED ⚡ Price {ask:.2f} tested {setup['entry_level']:.2f}")
-                    self.execute_trade("BUY", symbol, self.lot_size, "CRT_RETEST", 0.0, setup['tp'])
+                    logger.info(f"⚡ BUY EXECUTED ⚡ Market Backtested {ask:.2f} (Target: {setup['entry_level']:.2f})")
+                    self.execute_trade("BUY", symbol, self.lot_size, "CRT_ENTRY", 0.0, setup['tp'])
                     self.pending_setup = None
                     return
                 
             elif setup['direction'] == "SELL":
+                # Entry: If Bid Price rises to Entry Level (within buffer)
                 if bid >= (setup['entry_level'] - setup['buffer']):
-                    logger.info(f"⚡ RETEST CONFIRMED ⚡ Price {bid:.2f} tested {setup['entry_level']:.2f}")
-                    self.execute_trade("SELL", symbol, self.lot_size, "CRT_RETEST", 0.0, setup['tp'])
+                    logger.info(f"⚡ SELL EXECUTED ⚡ Market Backtested {bid:.2f} (Target: {setup['entry_level']:.2f})")
+                    self.execute_trade("SELL", symbol, self.lot_size, "CRT_ENTRY", 0.0, setup['tp'])
                     self.pending_setup = None
                     return
 
         # --- B. FIND NEW SIGNALS ---
         c_range = candles[self.crt_lookback]    
         c_signal = candles[self.crt_signal_idx] 
+        
+        # Avoid duplicate signals for the same candle
         if self.pending_setup and self.pending_setup['candle_time'] == c_signal['time']: return 
 
         range_high = c_range['high']
         range_low = c_range['low']
 
-        if candles[0]['close'] > 500: # Gold
-            tp_dist = 5.00
-            retest_buffer = 0.50
-        else: # Forex
+        # Asset Class Adjustments
+        is_gold = candles[0]['close'] > 500
+        if is_gold:
+            tp_dist = 4.00
+            retest_buffer = 0.60  # Increased buffer for easier execution on backtest
+        else:
             tp_dist = 0.0030
-            retest_buffer = 0.0005
+            retest_buffer = 0.0006 # Increased buffer for easier execution
 
-        # --- GET MARKET SENTIMENT FROM NEWS ENGINE ---
+        # --- CONFLUENCE CHECKS ---
         market_sentiment = self.news_engine.get_market_sentiment()
+        candle_prediction = self.predict_momentum(candles) 
 
-        # 1. BULLISH SWEEP (BUY SIGNAL)
+        # 1. BUY SIGNAL LOGIC
         if c_signal['low'] < range_low and c_signal['close'] > range_low:
             if self.trend != "DOWNTREND":
-                # *** CONFLUENCE CHECK: NEWS MUST BE BULLISH ***
-                if market_sentiment == "BULLISH":
-                    logger.info(f"👀 CRT BUY FOUND (+News BULLISH) | Range Low: {range_low}")
+                # REQUIREMENT: News OR Secure Candle must be BULLISH
+                if market_sentiment == "BULLISH" or candle_prediction == "BULLISH":
+                    
+                    logger.info(f"👀 BUY SIGNAL FOUND (Waiting for Backtest to {range_low:.2f})")
                     self.pending_setup = { 
                         'direction': "BUY", 
                         'entry_level': range_low, 
                         'buffer': retest_buffer, 
-                        'sl': 0.0,  
+                        'sl': 0.0, # NO SL
                         'tp': ask + tp_dist, 
                         'timestamp': time.time(), 
                         'candle_time': c_signal['time'] 
                     }
                     self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
-                else:
-                    if time.time() % 30 < 1: # Log rarely to avoid spam
-                        logger.info(f"⛔ BUY Signal Ignored: Strategy=BUY but News={market_sentiment}")
 
-        # 2. BEARISH SWEEP (SELL SIGNAL)
+        # 2. SELL SIGNAL LOGIC
         elif c_signal['high'] > range_high and c_signal['close'] < range_high:
             if self.trend != "UPTREND":
-                # *** CONFLUENCE CHECK: NEWS MUST BE BEARISH ***
-                if market_sentiment == "BEARISH":
-                    logger.info(f"👀 CRT SELL FOUND (+News BEARISH) | Range High: {range_high}")
+                # REQUIREMENT: News OR Secure Candle must be BEARISH
+                if market_sentiment == "BEARISH" or candle_prediction == "BEARISH":
+                    
+                    logger.info(f"👀 SELL SIGNAL FOUND (Waiting for Backtest to {range_high:.2f})")
                     self.pending_setup = { 
                         'direction': "SELL", 
                         'entry_level': range_high, 
                         'buffer': retest_buffer, 
-                        'sl': 0.0, 
+                        'sl': 0.0, # NO SL
                         'tp': bid - tp_dist, 
                         'timestamp': time.time(), 
                         'candle_time': c_signal['time'] 
                     }
                     self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
-                else:
-                    if time.time() % 30 < 1:
-                        logger.info(f"⛔ SELL Signal Ignored: Strategy=SELL but News={market_sentiment}")
 
     def analyze_structure(self, symbol, candles):
         swings = [] 
@@ -177,14 +223,25 @@ class TradingStrategy:
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
         self.connector.send_command(direction, symbol, volume, sl, tp, 0)
-        logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl} | TP: {tp:.2f}")
+        logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl} (None) | TP: {tp:.2f}")
 
     def check_and_close_profit(self, symbol):
         if time.time() - self.last_profit_close_time < self.profit_close_interval: return
         self.last_profit_close_time = time.time()
         
-        if self.current_profit >= self.min_profit_target:
-            logger.info(f"💰 PROFIT TARGET HIT: {self.current_profit:.2f} >= {self.min_profit_target:.2f}")
+        # --- TRAILING STOP (PROFIT BETTER) ---
+        # 1. Check if we reached the Activation Level ($0.80)
+        if self.peak_profit >= self.trailing_activation:
+            # 2. Check if price dropped back by Offset ($0.20)
+            if self.current_profit <= (self.peak_profit - self.trailing_offset):
+                logger.info(f"🔒 TRAILING STOP HIT: Peak {self.peak_profit:.2f} -> Current {self.current_profit:.2f} | CLOSING")
+                self.connector.close_profit(symbol)
+                return
+
+        # --- BASIC TAKE PROFIT ---
+        # Only use this if we haven't activated the trailing stop yet
+        if self.current_profit >= self.min_profit_target and self.peak_profit < self.trailing_activation:
+            logger.info(f"💰 TARGET HIT: {self.current_profit:.2f} | CLOSING")
             self.connector.close_profit(symbol)
 
     def analyze_patterns(self, candles):

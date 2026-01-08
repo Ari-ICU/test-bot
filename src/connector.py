@@ -54,12 +54,10 @@ class MT5Connector:
 
     # --- NEW: ZIGZAG & LINES ---
     def send_trend_command(self, name, b1, p1, b2, p2, color_code, width=1):
-        # Format: DRAW_TREND|Name|Bar1|Price1|Bar2|Price2|Color|Width
         command = f"DRAW_TREND|{name}|{b1}|{p1}|{b2}|{p2}|{color_code}|{width}"
         self._queue_simple(command)
 
     def send_hline_command(self, name, price, color_code, style=0):
-        # Format: DRAW_LINE|Name|Price|Color|Style
         command = f"DRAW_LINE|{name}|{price}|{color_code}|{style}"
         self._queue_simple(command)
     # ---------------------------
@@ -73,6 +71,10 @@ class MT5Connector:
     def change_symbol(self, symbol):
         self._queue_simple(f"CHANGE_SYMBOL|{symbol}")
     
+    # --- ADDED THIS MISSING FUNCTION ---
+    def request_symbols(self):
+        self._queue_simple("GET_SYMBOLS|ALL")
+
     def change_timeframe(self, symbol, tf_str):
         tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
         minutes = tf_map.get(tf_str, 1) 
@@ -127,7 +129,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     if raw_candles:
                         for c_str in raw_candles.split('|'):
                             parts = c_str.split(',')
-                            # --- FIX START: Accept 5 parts (High, Low, Open, Close, TIME) ---
                             if len(parts) >= 5: 
                                 try:
                                     candles.append({
@@ -135,10 +136,9 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                         'low': float(parts[1]),
                                         'open': float(parts[2]), 
                                         'close': float(parts[3]),
-                                        'time': int(parts[4]) # CRITICAL FIX: Parse Time
+                                        'time': int(parts[4])
                                     })
                                 except ValueError: pass
-                            # Fallback for old EA versions (4 parts)
                             elif len(parts) == 4:
                                 try:
                                     candles.append({
@@ -149,7 +149,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                         'time': 0
                                     })
                                 except ValueError: pass
-                            # --- FIX END ---
 
                     self.connector.on_tick_received(
                         clean_symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles

@@ -32,7 +32,7 @@ class TradingBotUI(tb.Window):
         self.current_theme = "darkly"
         
         # State variables
-        self.last_price_update = 0
+        self.last_price_update = time.time() # Start time
         self.symbols_loaded = False
         self.current_bid = 0.0
         self.current_ask = 0.0
@@ -43,7 +43,7 @@ class TradingBotUI(tb.Window):
         # Default Config Values
         config_max_pos = 5
         config_duration = 0
-        config_min_profit = 0.50 # Default 50 cents
+        config_min_profit = 0.50 
         
         if self.news_engine and hasattr(self.news_engine, 'config'):
             auto_config = self.news_engine.config.get('auto_trading', {})
@@ -59,7 +59,7 @@ class TradingBotUI(tb.Window):
         self.max_duration_var = tk.IntVar(value=config_duration)
         self.max_duration_var.trace_add("write", self._on_setting_changed)
 
-        self.min_profit_var = tk.DoubleVar(value=config_min_profit) # <--- NEW SETTING
+        self.min_profit_var = tk.DoubleVar(value=config_min_profit)
         self.min_profit_var.trace_add("write", self._on_setting_changed)
 
         self.scalp_var = tk.BooleanVar(value=False)
@@ -87,6 +87,7 @@ class TradingBotUI(tb.Window):
         
         self.pulse_value = 0
         self._animate_pulse()
+        self._monitor_connection() # <--- NEW: Start monitoring
         self.after(5000, self._update_news)  
         self._update_header_time()
 
@@ -100,6 +101,15 @@ class TradingBotUI(tb.Window):
         if hasattr(self, 'lbl_time'):
             self.lbl_time.config(text=now)
         self.after(1000, self._update_header_time)
+
+    # --- NEW: CONNECTION MONITOR ---
+    def _monitor_connection(self):
+        """Checks if data has been received recently."""
+        time_diff = time.time() - self.last_price_update
+        if time_diff > 10:
+            # If no data for 10 seconds, show warning
+            self.lbl_mt5.config(text="MT5: Disconnected (Waiting...)", bootstyle="danger")
+        self.after(2000, self._monitor_connection) # Check every 2 seconds
 
     def _sync_ui_to_strategy(self):
         if self.strategy:
@@ -120,6 +130,7 @@ class TradingBotUI(tb.Window):
             logging.info(f"UI synced to strategy")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
+        self.last_price_update = time.time() # <--- NEW: Update timestamp on data receipt
         self.after(0, lambda: self._update_ui_data(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles))
         
         self.tick_count += 1
@@ -149,6 +160,7 @@ class TradingBotUI(tb.Window):
                 current_selection = clean_symbol
 
             if clean_symbol == current_selection:
+                # Connection is good, show Green
                 self.lbl_mt5.config(text=f"MT5: Connected ({clean_symbol})", bootstyle="success")
                 self.lbl_symbol_display.config(text=clean_symbol)
                 self.lbl_bid.config(text=f"{bid:.5f}")
