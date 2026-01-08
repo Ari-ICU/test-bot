@@ -12,24 +12,25 @@ class TradingStrategy:
         # --- Settings ---
         self.max_positions = config.get('auto_trading', {}).get('max_positions', 5)
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
-        self.max_trade_duration = 0 # Default disabled
+        self.max_trade_duration = 0 
+        self.min_profit_target = 0.50  
         
         # CRT Settings
-        self.crt_lookback = 2      # Candle defining the Range (Index 2)
-        self.crt_signal_idx = 1    # Candle confirming the Sweep (Index 1)
+        self.crt_lookback = 2      
+        self.crt_signal_idx = 1    
         
         # --- State ---
-        self.pending_setup = None  # <--- Stores signal while waiting for test
+        self.pending_setup = None  
         self.trend = "NEUTRAL"
         self.swing_highs = []  
         self.swing_lows = []
         
-        self.last_scan_log = 0 
-        self.auto_close_profit = True
+        self.current_profit = 0.0 
+        self.last_profit_close_time = 0
         self.profit_close_interval = 1 
 
     def start(self):
-        logger.info("CRT Strategy | Retest Mode ACTIVE")
+        logger.info("CRT Strategy | Retest Mode ACTIVE | News Filter ACTIVE | NO SL")
 
     def stop(self):
         self.active = False
@@ -42,108 +43,104 @@ class TradingStrategy:
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         if not candles or len(candles) < 20: return
+        self.current_profit = profit 
 
-        # 1. PRIORITY: Check Signals & Retests
+        # 1. PRIORITY: Check Signals
         if self.active and positions < self.max_positions:
             self.check_crt_signals(symbol, bid, ask, candles)
 
         # 2. Analyze Trend
         self.analyze_structure(symbol, candles)
 
-        # 3. Manage Profit / Duration
-        if self.auto_close_profit:
-            self.check_and_close_profit(symbol)
+        # 3. Manage Profit (Auto Close)
+        self.check_and_close_profit(symbol)
 
         # 4. Status Log
         if time.time() % 10 < 1: 
             status = "Scanning"
             if self.pending_setup: status = f"WAITING FOR TEST ({self.pending_setup['direction']})"
-            logger.info(f"Status: {symbol} | Trend: {self.trend} | State: {status}")
+            logger.info(f"Status: {symbol} | Trend: {self.trend} | PnL: {profit:.2f} | State: {status}")
 
     def check_crt_signals(self, symbol, bid, ask, candles):
         # --- A. EXECUTE PENDING SETUP (THE RETEST) ---
         if self.pending_setup:
             setup = self.pending_setup
-            
-            # 1. Check Timeout (e.g., if retest doesn't happen within 10 minutes)
-            if time.time() - setup['timestamp'] > 600: # 10 mins expiration
-                logger.info("⚠️ Signal Timed Out - Retest didn't happen.")
+            if time.time() - setup['timestamp'] > 600: 
+                logger.info("⚠️ Signal Timed Out")
                 self.pending_setup = None
                 return
 
-            # 2. Check BUY Test
             if setup['direction'] == "BUY":
-                # Wait for Ask to drop near the entry level (Retest)
-                # entry_level is range_low. We want price <= level + buffer
-                dist = ask - setup['entry_level']
                 if ask <= (setup['entry_level'] + setup['buffer']):
                     logger.info(f"⚡ RETEST CONFIRMED ⚡ Price {ask:.2f} tested {setup['entry_level']:.2f}")
-                    self.execute_trade("BUY", symbol, self.lot_size, "CRT_RETEST", setup['sl'], setup['tp'])
+                    self.execute_trade("BUY", symbol, self.lot_size, "CRT_RETEST", 0.0, setup['tp'])
                     self.pending_setup = None
                     return
                 
-            # 3. Check SELL Test
             elif setup['direction'] == "SELL":
-                # Wait for Bid to rise near the entry level
-                dist = setup['entry_level'] - bid
                 if bid >= (setup['entry_level'] - setup['buffer']):
                     logger.info(f"⚡ RETEST CONFIRMED ⚡ Price {bid:.2f} tested {setup['entry_level']:.2f}")
-                    self.execute_trade("SELL", symbol, self.lot_size, "CRT_RETEST", setup['sl'], setup['tp'])
+                    self.execute_trade("SELL", symbol, self.lot_size, "CRT_RETEST", 0.0, setup['tp'])
                     self.pending_setup = None
                     return
 
         # --- B. FIND NEW SIGNALS ---
-        c_range = candles[self.crt_lookback]    # Range Candle
-        c_signal = candles[self.crt_signal_idx] # Sweep Candle (Closed)
-        
-        # If we already have a setup for this specific candle, don't overwrite it
-        if self.pending_setup and self.pending_setup['candle_time'] == c_signal['time']:
-            return 
+        c_range = candles[self.crt_lookback]    
+        c_signal = candles[self.crt_signal_idx] 
+        if self.pending_setup and self.pending_setup['candle_time'] == c_signal['time']: return 
 
         range_high = c_range['high']
         range_low = c_range['low']
 
-        # Gold vs Forex Settings
         if candles[0]['close'] > 500: # Gold
-            sl_padding = 2.00
             tp_dist = 5.00
-            retest_buffer = 0.50 # Price must come within $0.50 of the level
+            retest_buffer = 0.50
         else: # Forex
-            sl_padding = 0.0015
             tp_dist = 0.0030
             retest_buffer = 0.0005
 
-        # 1. BULLISH SWEEP DETECTED
+        # --- GET MARKET SENTIMENT FROM NEWS ENGINE ---
+        market_sentiment = self.news_engine.get_market_sentiment()
+
+        # 1. BULLISH SWEEP (BUY SIGNAL)
         if c_signal['low'] < range_low and c_signal['close'] > range_low:
             if self.trend != "DOWNTREND":
-                logger.info(f"👀 CRT BUY FOUND | Range Low: {range_low} | Waiting for Retest...")
-                self.pending_setup = {
-                    'direction': "BUY",
-                    'entry_level': range_low,
-                    'buffer': retest_buffer,
-                    'sl': c_signal['low'] - sl_padding,
-                    'tp': ask + tp_dist,
-                    'timestamp': time.time(),
-                    'candle_time': c_signal['time']
-                }
-                # Draw Box
-                self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
+                # *** CONFLUENCE CHECK: NEWS MUST BE BULLISH ***
+                if market_sentiment == "BULLISH":
+                    logger.info(f"👀 CRT BUY FOUND (+News BULLISH) | Range Low: {range_low}")
+                    self.pending_setup = { 
+                        'direction': "BUY", 
+                        'entry_level': range_low, 
+                        'buffer': retest_buffer, 
+                        'sl': 0.0,  
+                        'tp': ask + tp_dist, 
+                        'timestamp': time.time(), 
+                        'candle_time': c_signal['time'] 
+                    }
+                    self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
+                else:
+                    if time.time() % 30 < 1: # Log rarely to avoid spam
+                        logger.info(f"⛔ BUY Signal Ignored: Strategy=BUY but News={market_sentiment}")
 
-        # 2. BEARISH SWEEP DETECTED
+        # 2. BEARISH SWEEP (SELL SIGNAL)
         elif c_signal['high'] > range_high and c_signal['close'] < range_high:
             if self.trend != "UPTREND":
-                logger.info(f"👀 CRT SELL FOUND | Range High: {range_high} | Waiting for Retest...")
-                self.pending_setup = {
-                    'direction': "SELL",
-                    'entry_level': range_high,
-                    'buffer': retest_buffer,
-                    'sl': c_signal['high'] + sl_padding,
-                    'tp': bid - tp_dist,
-                    'timestamp': time.time(),
-                    'candle_time': c_signal['time']
-                }
-                # Draw Box
-                self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
+                # *** CONFLUENCE CHECK: NEWS MUST BE BEARISH ***
+                if market_sentiment == "BEARISH":
+                    logger.info(f"👀 CRT SELL FOUND (+News BEARISH) | Range High: {range_high}")
+                    self.pending_setup = { 
+                        'direction': "SELL", 
+                        'entry_level': range_high, 
+                        'buffer': retest_buffer, 
+                        'sl': 0.0, 
+                        'tp': bid - tp_dist, 
+                        'timestamp': time.time(), 
+                        'candle_time': c_signal['time'] 
+                    }
+                    self.connector.send_draw_command(f"CRT_{c_range['time']}", range_high, range_low, self.crt_lookback, self.crt_signal_idx, 16776960)
+                else:
+                    if time.time() % 30 < 1:
+                        logger.info(f"⛔ SELL Signal Ignored: Strategy=SELL but News={market_sentiment}")
 
     def analyze_structure(self, symbol, candles):
         swings = [] 
@@ -180,20 +177,15 @@ class TradingStrategy:
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
         self.connector.send_command(direction, symbol, volume, sl, tp, 0)
-        logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume}")
+        logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl} | TP: {tp:.2f}")
 
     def check_and_close_profit(self, symbol):
-        if not hasattr(self, 'last_profit_close_time'): self.last_profit_close_time = 0
         if time.time() - self.last_profit_close_time < self.profit_close_interval: return
-        self.connector.close_profit(symbol)
-        
-        # Check Max Duration
-        if self.max_trade_duration > 0:
-            # Note: This requires the connector to return open times, which it currently doesn't fully support in this snippet.
-            # We can implement a simple safety close if needed later.
-            pass
-            
         self.last_profit_close_time = time.time()
+        
+        if self.current_profit >= self.min_profit_target:
+            logger.info(f"💰 PROFIT TARGET HIT: {self.current_profit:.2f} >= {self.min_profit_target:.2f}")
+            self.connector.close_profit(symbol)
 
     def analyze_patterns(self, candles):
         return {'fvg_zone': None, 'bullish_fvg': False, 'bearish_fvg': False}

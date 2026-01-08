@@ -22,7 +22,7 @@ class QueueHandler(logging.Handler):
 class TradingBotUI(tb.Window):
     def __init__(self, news_engine, mt5_connector):
         super().__init__(themename="darkly")  
-        self.title("MT5 Trading Bot - Pro Dashboard v7.4")
+        self.title("MT5 Trading Bot - Pro Dashboard v7.5")
         self.geometry("1000x850") 
         self.resizable(True, True) 
         
@@ -43,19 +43,24 @@ class TradingBotUI(tb.Window):
         # Default Config Values
         config_max_pos = 5
         config_duration = 0
+        config_min_profit = 0.50 # Default 50 cents
         
         if self.news_engine and hasattr(self.news_engine, 'config'):
             auto_config = self.news_engine.config.get('auto_trading', {})
             config_max_pos = auto_config.get('max_positions', 5)
             config_duration = auto_config.get('max_trade_duration', 0)
+            config_min_profit = auto_config.get('min_profit', 0.50)
         
         # Variables with Traces (Auto-Update)
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=config_max_pos)
-        self.max_pos_var.trace_add("write", self._on_max_pos_changed) # <--- FIX: Updates on typing
+        self.max_pos_var.trace_add("write", self._on_setting_changed)
         
         self.max_duration_var = tk.IntVar(value=config_duration)
-        self.max_duration_var.trace_add("write", self._on_duration_changed) # <--- FIX: Updates on typing
+        self.max_duration_var.trace_add("write", self._on_setting_changed)
+
+        self.min_profit_var = tk.DoubleVar(value=config_min_profit) # <--- NEW SETTING
+        self.min_profit_var.trace_add("write", self._on_setting_changed)
 
         self.scalp_var = tk.BooleanVar(value=False)
         self.scalp_tp_var = tk.DoubleVar(value=0.50)
@@ -98,8 +103,7 @@ class TradingBotUI(tb.Window):
 
     def _sync_ui_to_strategy(self):
         if self.strategy:
-            try:
-                self.strategy.max_positions = self.max_pos_var.get()
+            try: self.strategy.max_positions = self.max_pos_var.get()
             except: pass
             
             self.strategy.set_active(self.auto_trade_var.get())
@@ -107,8 +111,10 @@ class TradingBotUI(tb.Window):
             if hasattr(self.strategy, 'scalp_mode'):
                 self.strategy.scalp_mode = self.scalp_var.get()
             
-            try:
-                self.strategy.max_trade_duration = self.max_duration_var.get()
+            try: self.strategy.max_trade_duration = self.max_duration_var.get()
+            except: pass
+
+            try: self.strategy.min_profit_target = self.min_profit_var.get()
             except: pass
             
             logging.info(f"UI synced to strategy")
@@ -247,19 +253,16 @@ class TradingBotUI(tb.Window):
         state = "Enabled" if self.auto_trade_var.get() else "Disabled"
         self.show_notification("Auto Trade", f"Strategy {state}", "success" if self.auto_trade_var.get() else "info")
 
-    def _on_max_pos_changed(self, *args):
-        # Called automatically when typing in the box
+    def _on_setting_changed(self, *args):
+        # Universal setting updater
         if self.strategy: 
-            try:
-                self.strategy.max_positions = self.max_pos_var.get()
+            try: self.strategy.max_positions = self.max_pos_var.get()
+            except: pass
+            try: self.strategy.max_trade_duration = self.max_duration_var.get()
+            except: pass
+            try: self.strategy.min_profit_target = self.min_profit_var.get()
             except: pass
     
-    def _on_duration_changed(self, *args):
-        if self.strategy: 
-            try:
-                self.strategy.max_trade_duration = self.max_duration_var.get()
-            except: pass
-
     def _on_scalp_toggle(self):
         if self.strategy and hasattr(self.strategy, 'scalp_mode'): 
             self.strategy.scalp_mode = self.scalp_var.get()
@@ -328,7 +331,7 @@ class TradingBotUI(tb.Window):
         # Header
         header_frame = ttk.Frame(main_frame, relief="flat")
         header_frame.pack(fill=X, padx=10, pady=5)
-        ttk.Label(header_frame, text="🛡️ MT5 Pro Bot v7.4", font=("Segoe UI", 16, "bold"), bootstyle="inverse-dark").pack(side=LEFT)
+        ttk.Label(header_frame, text="🛡️ MT5 Pro Bot v7.5", font=("Segoe UI", 16, "bold"), bootstyle="inverse-dark").pack(side=LEFT)
         self.lbl_mt5 = ttk.Label(header_frame, text="MT5: Connecting...", bootstyle="warning", font=("Segoe UI", 10))
         self.lbl_mt5.pack(side=LEFT, padx=20)
         self.lbl_time = ttk.Label(header_frame, text="", font=("Segoe UI", 10))
@@ -496,14 +499,19 @@ class TradingBotUI(tb.Window):
         
         # Max Positions
         ttk.Label(sf, text="Max Auto Positions:").grid(row=0, column=0, sticky=W, pady=5)
-        ttk.Spinbox(sf, from_=1, to=20, textvariable=self.max_pos_var, width=10, command=self._on_max_pos_changed).grid(row=0, column=1, sticky=W)
+        ttk.Spinbox(sf, from_=1, to=20, textvariable=self.max_pos_var, width=10, command=self._on_setting_changed).grid(row=0, column=1, sticky=W)
         
-        # NEW: Max Duration
+        # Auto Close Duration
         ttk.Label(sf, text="Auto Close (Sec):").grid(row=1, column=0, sticky=W, pady=5)
-        ttk.Spinbox(sf, from_=0, to=3600, textvariable=self.max_duration_var, width=10, command=self._on_duration_changed).grid(row=1, column=1, sticky=W)
+        ttk.Spinbox(sf, from_=0, to=3600, textvariable=self.max_duration_var, width=10, command=self._on_setting_changed).grid(row=1, column=1, sticky=W)
         ttk.Label(sf, text="(0 = Disabled)", font=("Segoe UI", 8)).grid(row=1, column=2, sticky=W, padx=5)
+
+        # NEW: Min Profit Target
+        ttk.Label(sf, text="Min Profit ($):").grid(row=2, column=0, sticky=W, pady=5)
+        ttk.Spinbox(sf, from_=0.1, to=100.0, increment=0.1, textvariable=self.min_profit_var, width=10, command=self._on_setting_changed).grid(row=2, column=1, sticky=W)
+        ttk.Label(sf, text="(Target to Auto-Close)", font=("Segoe UI", 8)).grid(row=2, column=2, sticky=W, padx=5)
         
         # Checkboxes
-        ttk.Checkbutton(sf, text="Scalp Mode", variable=self.scalp_var, command=self._on_scalp_toggle).grid(row=2, column=0, sticky=W, pady=5)
-        ttk.Checkbutton(sf, text="Show FVG Zones", variable=self.fvg_var).grid(row=3, column=0, sticky=W, pady=5)
-        ttk.Checkbutton(sf, text="Show Order Blocks", variable=self.ob_var).grid(row=4, column=0, sticky=W, pady=5)
+        ttk.Checkbutton(sf, text="Scalp Mode", variable=self.scalp_var, command=self._on_scalp_toggle).grid(row=3, column=0, sticky=W, pady=5)
+        ttk.Checkbutton(sf, text="Show FVG Zones", variable=self.fvg_var).grid(row=4, column=0, sticky=W, pady=5)
+        ttk.Checkbutton(sf, text="Show Order Blocks", variable=self.ob_var).grid(row=5, column=0, sticky=W, pady=5)

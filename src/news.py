@@ -22,8 +22,8 @@ class NewsEngine:
         self.seen_news = set()
         self.news_items = []  
         self.update_interval = self.config.get('update_interval_seconds', 60)
-        self.trading_pause = False  # New: Pause trading on high-impact news
-        self.last_pause_time = 0  # For auto-reset
+        self.trading_pause = False  
+        self.last_pause_time = 0  
         
         # Start periodic fetching in background thread
         self.thread = threading.Thread(target=self._periodic_fetch, daemon=True)
@@ -95,21 +95,43 @@ class NewsEngine:
         else:
             logger.info(f"Processed {found_new} new headlines.")
 
-    # FIXED: Add the missing alias for UI compatibility
     def get_latest_news(self, count=5):
         return self.get_recent_news(count)
 
     def get_recent_news(self, count=5):
         recent = self.news_items[-count:]
-        # Format for UI (str lines)
         formatted = [f"{item['time']} | {item['title']} ({item['sentiment']}: {item['score']}) [{item['source']}]" for item in recent]
         return "\n".join(formatted) if formatted else "No recent news."
 
-    # Background periodic fetch
+    # --- NEW: Get Overall Market Sentiment ---
+    def get_market_sentiment(self):
+        """Calculates global market sentiment based on average of last 5 headlines."""
+        if not self.news_items:
+            return "NEUTRAL"
+        
+        recent_items = self.news_items[-5:]
+        total_score = 0.0
+        count = 0
+        
+        for item in recent_items:
+            try:
+                total_score += float(item['score'])
+                count += 1
+            except ValueError:
+                continue
+                
+        if count == 0: return "NEUTRAL"
+            
+        avg_score = total_score / count
+        
+        # Determine overall direction
+        if avg_score >= 0.05: return "BULLISH"
+        elif avg_score <= -0.05: return "BEARISH"
+        else: return "NEUTRAL"
+
     def _periodic_fetch(self):
         while True:
             self.fetch_latest()
-            # Reset pause after 5 min if no new bearish
             if self.trading_pause and time.time() - self.last_pause_time > 300:
                 self.trading_pause = False
                 logger.info("Trading pause lifted - no ongoing high-impact news.")
