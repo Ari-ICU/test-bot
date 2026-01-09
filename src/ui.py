@@ -190,16 +190,22 @@ class TradingBotUI(tb.Window):
                 macd_color = "success" if macd > signal else "danger"
                 self.lbl_live_macd.config(text=f"MACD: {macd:.5f}", bootstyle=macd_color)
 
-                # --- Zone Display ---
-                s_min = self.strategy.price_min
-                s_max = self.strategy.price_max
-                s_eq = self.strategy.equilibrium
-                
+                # --- Zone Display (UPDATED for Tradeciety Zones) ---
                 if self.use_zone_filter_var.get():
-                    if s_min > 0 and s_max > 0:
-                        self.lbl_detected_zone.config(text=f"Zone: {s_min:.2f}-{s_max:.2f} | Eq: {s_eq:.2f}", bootstyle="primary")
-                    else:
-                        self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
+                    # Support Zone Display
+                    supp_txt = "None"
+                    if hasattr(self.strategy, 'support_zones') and self.strategy.support_zones:
+                        # zones sorted by proximity, index 0 is nearest
+                        zone = self.strategy.support_zones[0]
+                        supp_txt = f"{zone['top']:.2f}"
+                    
+                    # Resistance Zone Display
+                    res_txt = "None"
+                    if hasattr(self.strategy, 'resistance_zones') and self.strategy.resistance_zones:
+                        zone = self.strategy.resistance_zones[0]
+                        res_txt = f"{zone['bottom']:.2f}"
+                        
+                    self.lbl_detected_zone.config(text=f"S: {supp_txt} | R: {res_txt}", bootstyle="primary")
                 else:
                     self.lbl_detected_zone.config(text="Zone: DISABLED", bootstyle="secondary")
 
@@ -382,7 +388,6 @@ class TradingBotUI(tb.Window):
         strat_frame.pack(side=LEFT, padx=5, fill=X, expand=True)
         ttk.Label(strat_frame, text="Active Strategy:", font=("Segoe UI", 9)).pack(anchor=W)
         self.combo_strat = ttk.Combobox(strat_frame, textvariable=self.strategy_mode_var, state="readonly", width=15)
-        # --- UPDATED STRATEGY LIST ---
         self.combo_strat['values'] = ["MACD_RSI", "BOLLINGER", "EMA_CROSS", "SMC", "CRT"]
         self.combo_strat.pack(fill=X)
         self.combo_strat.bind("<<ComboboxSelected>>", self._on_mode_change)
