@@ -179,7 +179,7 @@ class TradingStrategy:
         if len(candles) < (window * 2 + 1): return [], []
 
         # Iterate from oldest to newest (skipping unclosed candles at the very end)
-        for i in range(window, len(candles) - window):
+        for i in range(window, len(candles) - window - 1):
             curr = candles[i]
             
             # Check High Fractal
