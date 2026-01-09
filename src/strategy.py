@@ -22,6 +22,11 @@ class TradingStrategy:
         self.use_trend_filter = True
         self.use_zone_filter = True
 
+        # --- TIME FILTER (Applied to Pullbacks/Entries) ---
+        self.use_time_filter = True
+        self.start_hour = 8   # Example: Start trading at 08:00
+        self.end_hour = 20    # Example: Stop trading at 20:00
+
         # --- PROFIT SETTINGS ---
         self.min_profit_target = 0.50    
         self.trailing_activation = 0.80  
@@ -121,7 +126,11 @@ class TradingStrategy:
             
             zone_txt = f"S: {s_txt} | R: {r_txt}" if self.use_zone_filter else "Zone: OFF"
             trend_txt = f"Trend: {self.trend}" if self.use_trend_filter else "Trend: OFF"
-            logger.info(f"Status: {symbol} | {zone_txt} | {trend_txt} | PnL: {profit:.2f}")
+            
+            # Log Time Status
+            time_status = "Time: OK" if self._is_trading_time() else "Time: WAIT"
+            
+            logger.info(f"Status: {symbol} | {zone_txt} | {trend_txt} | {time_status} | PnL: {profit:.2f}")
 
     # =========================================================================
     # --- TRADECIETY S&R LOGIC ---
@@ -241,10 +250,28 @@ class TradingStrategy:
 
     # =========================================================================
 
+    def _is_trading_time(self):
+        """Checks if current time is within allowed trading hours."""
+        if not self.use_time_filter: return True
+        
+        curr_hour = time.localtime().tm_hour
+        
+        if self.start_hour <= self.end_hour:
+            # Intra-day (e.g., 08:00 to 20:00)
+            return self.start_hour <= curr_hour < self.end_hour
+        else:
+            # Overnight (e.g., 22:00 to 06:00)
+            return curr_hour >= self.start_hour or curr_hour < self.end_hour
+
     def _check_filters(self, direction, current_price):
         """Returns True if trade is allowed, False if blocked by filters."""
         
-        # 1. ZONE FILTER
+        # 1. TIME FILTER (NEW)
+        if not self._is_trading_time():
+            self._log_skip(f"Time Filter: Outside trading hours ({self.start_hour}:00 - {self.end_hour}:00)")
+            return False
+
+        # 2. ZONE FILTER
         if self.use_zone_filter:
             # If Buying: Don't buy directly into Resistance
             if direction == "BUY":
@@ -265,7 +292,7 @@ class TradingStrategy:
                         self._log_skip(f"Zone Filter: Too close to Support {nearest_supp['top']:.5f} (Dist: {dist_to_supp:.5f})")
                         return False
 
-        # 2. Trend Filter (200 EMA)
+        # 3. Trend Filter (200 EMA)
         if self.use_trend_filter:
             if direction == "BUY" and "BEARISH" in self.trend:
                 self._log_skip(f"Trend Filter: Trend is {self.trend}. No Buys.")
