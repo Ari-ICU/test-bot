@@ -52,8 +52,8 @@ class TradingStrategy:
         # --- S&R Zones (Tradeciety Method) ---
         self.support_zones = []     # List of dicts: {'top': float, 'bottom': float, 'strength': int}
         self.resistance_zones = []
-        self.zone_min_touches = 2   # Minimum swings to form a valid zone
-        self.zone_tolerance = 0.0010 # Price range to cluster swings (adjust for pair volatility)
+        self.zone_min_touches = 1   # Minimum swings to form a valid zone
+        self.zone_tolerance = 0.50 # Price range to cluster swings (adjust for pair volatility)
         self.last_draw_time = 0     # To limit draw calls
 
         self.current_profit = 0.0 
@@ -179,7 +179,7 @@ class TradingStrategy:
         if len(candles) < (window * 2 + 1): return [], []
 
         # Iterate from oldest to newest (skipping unclosed candles at the very end)
-        for i in range(window, len(candles) - 1):
+        for i in range(window, len(candles) - window):
             curr = candles[i]
             
             # Check High Fractal
