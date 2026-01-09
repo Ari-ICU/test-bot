@@ -1,5 +1,5 @@
 #property strict
-#property version "3.0"
+#property version "3.1"
 #property description "HTTP Bridge - Stable ZigZag & Auto Trade"
 
 input string ServerURL = "http://127.0.0.1:8001";
@@ -11,7 +11,7 @@ void OnDeinit(const int reason) { EventKillTimer(); ObjectsDeleteAll(0, "Py_"); 
 void OnTimer()
 {
     if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)) {
-        Print("⚠️ Algo Trading is Disabled!");
+        Print("⚠️ Algo Trading is Disabled! Enable 'Algo Trading' button.");
     }
 
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -42,9 +42,9 @@ void OnTimer()
     for(int i=0; i<total_symbols; i++) symbols_list += SymbolName(i, true) + (i < total_symbols - 1 ? "," : "");
 
     string candle_history = "";
-    int candles_to_send = 300;
+    // --- FIX: Reduced from 300 to 60 to prevent lag/timeouts ---
+    int candles_to_send = 500; 
     for(int i=0; i<candles_to_send; i++) {
-        // ADDED: Timestamp (IntegerToString(iTime...)) at the end
         candle_history += DoubleToString(iHigh(_Symbol, _Period, i), _Digits) + "," +
                           DoubleToString(iLow(_Symbol, _Period, i), _Digits) + "," +
                           DoubleToString(iOpen(_Symbol, _Period, i), _Digits) + "," +
@@ -65,6 +65,7 @@ void OnTimer()
                       "&avg_entry=" + DoubleToString(avg_entry, _Digits) +
                       "&all_symbols=" + symbols_list +
                       "&candles=" + candle_history;
+    
     SendRequest(post_str);
 }
 
@@ -73,10 +74,12 @@ void SendRequest(string data_str)
     char post_char[]; StringToCharArray(data_str, post_char);
     uchar post_uchar[]; ArrayResize(post_uchar, ArraySize(post_char));
     for(int i=0; i<ArraySize(post_char); i++) post_uchar[i] = (uchar)post_char[i];
+    
     uchar result_uchar[]; string response_headers;
     int http_res = WebRequest("POST", ServerURL, "Content-Type: application/x-www-form-urlencoded\r\n", 2000, post_uchar, result_uchar, response_headers);
     
-    if(http_res == -1 && GetLastError() == 4060) Print("⚠️ ALLOW WEBREQUEST FOR: ", ServerURL);
+    if(http_res == -1 && GetLastError() == 4060) Print("⚠️ ERROR: You must enable WebRequest for ", ServerURL, " in Tools -> Options -> Expert Advisors");
+    
     if(ArraySize(result_uchar) > 0) {
         string result_str = CharArrayToString(result_uchar);
         if(result_str != "OK" && result_str != "") {
@@ -116,19 +119,16 @@ void ProcessCommand(string cmd)
     }
 
     if(action == "DRAW_TREND") {
-        // DRAW_TREND|Name|Bar1|Price1|Bar2|Price2|Color|Width
         if(ArraySize(parts) < 8) return;
         DrawTrend(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), StringToDouble(parts[5]), (color)StringToInteger(parts[6]), (int)StringToInteger(parts[7]));
         return;
     }
 
     if(action == "DRAW_LINE") {
-        // DRAW_LINE|Name|Price|Color|Style
         if(ArraySize(parts) < 5) return;
         DrawHLine(parts[1], StringToDouble(parts[2]), (color)StringToInteger(parts[3]), (int)StringToInteger(parts[4]));
         return;
     }
-    // ------------------------
 
     if(action == "CLEAN_CHART") { ObjectsDeleteAll(0, "Py_"); return; }
     if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") { SymbolSelect(symbol, true); ChartSetSymbolPeriod(0, symbol, _Period); return; }
@@ -137,7 +137,7 @@ void ProcessCommand(string cmd)
     double sl = (ArraySize(parts) >= 4) ? StringToDouble(parts[3]) : 0;
     double tp = (ArraySize(parts) >= 5) ? StringToDouble(parts[4]) : 0;
     double price = (ArraySize(parts) >= 6) ? StringToDouble(parts[5]) : 0;
-
+    
     if(action == "BUY")             TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
     else if(action == "SELL")        TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
     else if(action == "BUY_LIMIT")   TradePending(symbol, ORDER_TYPE_BUY_LIMIT, lot, price, sl, tp);
@@ -147,7 +147,6 @@ void ProcessCommand(string cmd)
     else if(action == "CLOSE_LOSS")  ClosePositions(symbol, "LOSS");
 }
 
-// --- VISUAL FUNCTIONS ---
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     string n = "Py_" + name;
     if(ObjectFind(0, n) >= 0) ObjectDelete(0, n); 
@@ -168,14 +167,13 @@ void DrawText(string name, int b, double p, color c, string t) {
 void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w) {
     string n = "Py_Tr_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_TREND, 0, 0, 0, 0, 0);
-    // Update existing or new object
     ObjectSetInteger(0, n, OBJPROP_TIME, 0, iTime(_Symbol, _Period, b1));
     ObjectSetDouble(0, n, OBJPROP_PRICE, 0, p1);
     ObjectSetInteger(0, n, OBJPROP_TIME, 1, iTime(_Symbol, _Period, b2));
     ObjectSetDouble(0, n, OBJPROP_PRICE, 1, p2);
     ObjectSetInteger(0, n, OBJPROP_COLOR, c);
     ObjectSetInteger(0, n, OBJPROP_WIDTH, w);
-    ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, false); 
+    ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, true);
 }
 
 void DrawHLine(string name, double price, color c, int style) {
@@ -187,13 +185,15 @@ void DrawHLine(string name, double price, color c, int style) {
 }
 
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
-    MqlTradeRequest r; MqlTradeResult res;
+    MqlTradeRequest r;
+    MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
     r.action=TRADE_ACTION_DEAL; r.symbol=s; r.volume=v; r.type=t; r.price=(t==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID); r.sl=sl; r.tp=tp; 
     if(!OrderSend(r, res)) Print("Trade Fail: ", res.retcode);
 }
 void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
-    MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
+    MqlTradeRequest r;
+    MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
     r.action=TRADE_ACTION_PENDING; r.symbol=s; r.volume=v; r.type=t; r.price=p; r.sl=sl; r.tp=tp; 
     if(!OrderSend(r, res)) Print("Pending Fail: ", res.retcode);
 }
