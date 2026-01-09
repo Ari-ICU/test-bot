@@ -1,6 +1,5 @@
 import logging
 import time
-from datetime import datetime
 import pandas as pd
 import numpy as np
 
@@ -16,16 +15,18 @@ class TradingStrategy:
         self.risk_reward_ratio = 2.0     
         self.max_positions = 1           
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
+        self.trade_cooldown = 15.0       
         
+        # --- MODES & FILTERS ---
+        self.strategy_mode = "MACD_RSI" 
+        self.use_trend_filter = True
+        self.use_zone_filter = True
+
         # --- PROFIT SETTINGS ---
         self.min_profit_target = 0.50    
         self.trailing_activation = 0.80  
         self.trailing_offset = 0.20      
         
-        # --- NEW: Time Schedule ---
-        self.trading_start_hour = 8
-        self.trading_end_hour = 20
-
         # Indicator Settings
         self.rsi_period = 14
         self.rsi_buy_threshold = 40      
@@ -35,12 +36,15 @@ class TradingStrategy:
         self.macd_slow = 26
         self.macd_signal = 9
         
-        # --- Execution Safety ---
-        self.trade_cooldown = 15.0       
+        self.bb_period = 20
+        self.bb_dev = 2.0
+        
+        self.ema_fast = 9
+        self.ema_slow = 21
+
+        # --- State ---
         self.last_trade_time = 0         
         self.last_log_time = 0           
-        
-        # --- State ---
         self.trend = "NEUTRAL"
         self.swing_highs = []  
         self.swing_lows = []
@@ -56,7 +60,7 @@ class TradingStrategy:
         self.profit_close_interval = 1 
 
     def start(self):
-        logger.info(f"Strategy ACTIVE | Target: ${self.min_profit_target} | Trail: ${self.trailing_activation}")
+        logger.info(f"Strategy ACTIVE | Mode: {self.strategy_mode}")
 
     def stop(self):
         self.active = False
@@ -78,13 +82,24 @@ class TradingStrategy:
             self.peak_profit = 0.0
 
         # --- 1. PRIORITY: Analyze Structure & Trend ---
-        self.analyze_structure(symbol, candles)
-        self.analyze_trend(candles)
+        if self.use_zone_filter: self.analyze_structure(symbol, candles)
+        if self.use_trend_filter: self.analyze_trend(candles)
 
-        # --- 2. Check Signals ---
+        # --- 2. Check Signals based on Selected Mode ---
         if self.active and positions < self.max_positions:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
-                self.check_signals_macd_rsi(symbol, bid, ask, candles)
+                
+                # Mode Dispatcher
+                if self.strategy_mode == "MACD_RSI":
+                    self.check_signals_macd_rsi(symbol, bid, ask, candles)
+                elif self.strategy_mode == "BOLLINGER":
+                    self.check_signals_bollinger(symbol, bid, ask, candles)
+                elif self.strategy_mode == "EMA_CROSS":
+                    self.check_signals_ema_cross(symbol, bid, ask, candles)
+                elif self.strategy_mode == "SMC":
+                    self.check_signals_smc(symbol, bid, ask, candles)
+                elif self.strategy_mode == "CRT":
+                    self.check_signals_crt(symbol, bid, ask, candles)
 
         # 3. Manage Profit 
         if positions > 0:
@@ -92,9 +107,9 @@ class TradingStrategy:
 
         # 4. Status Log
         if time.time() % 10 < 1: 
-            zone_info = f"{self.price_min:.2f}-{self.price_max:.2f}"
-            eq_info = f"Eq: {self.equilibrium:.2f}"
-            logger.info(f"Status: {symbol} | Zone: {zone_info} | {eq_info} | PnL: {profit:.2f}")
+            zone_txt = f"Zone: {self.price_min:.2f}-{self.price_max:.2f}" if self.use_zone_filter else "Zone: OFF"
+            trend_txt = f"Trend: {self.trend}" if self.use_trend_filter else "Trend: OFF"
+            logger.info(f"Status: {symbol} | Mode: {self.strategy_mode} | {zone_txt} | {trend_txt} | PnL: {profit:.2f}")
 
     def calculate_indicators(self, candles):
         try:
@@ -117,92 +132,182 @@ class TradingStrategy:
             last_closed = df.iloc[-2] 
             return last_closed['rsi'], last_closed['macd'], last_closed['macd_signal']
         except Exception as e:
-            logger.error(f"Indicator Error: {e}")
             return 50, 0, 0
 
-    def calculate_safe_risk(self, direction, entry_price):
-        sl = 0.0
-        tp = 0.0
-        is_gold = entry_price > 500
-        min_dist = 2.00 if is_gold else 0.0020  
+    def calculate_bollinger(self, candles):
+        try:
+            df = pd.DataFrame(candles)
+            df = df.iloc[::-1].reset_index(drop=True)
+            df['sma'] = df['close'].rolling(window=self.bb_period).mean()
+            df['std'] = df['close'].rolling(window=self.bb_period).std()
+            df['upper'] = df['sma'] + (df['std'] * self.bb_dev)
+            df['lower'] = df['sma'] - (df['std'] * self.bb_dev)
+            last = df.iloc[-2]
+            return last['upper'], last['lower'], last['close']
+        except: return 0,0,0
+
+    def calculate_ema_cross(self, candles):
+        try:
+            df = pd.DataFrame(candles)
+            df = df.iloc[::-1].reset_index(drop=True)
+            df['fast'] = df['close'].ewm(span=self.ema_fast, adjust=False).mean()
+            df['slow'] = df['close'].ewm(span=self.ema_slow, adjust=False).mean()
+            
+            curr = df.iloc[-2]
+            prev = df.iloc[-3]
+            
+            cross_up = prev['fast'] <= prev['slow'] and curr['fast'] > curr['slow']
+            cross_down = prev['fast'] >= prev['slow'] and curr['fast'] < curr['slow']
+            return cross_up, cross_down
+        except: return False, False
+
+    def calculate_smc(self, candles):
+        """Detects the latest Fair Value Gap (FVG)."""
+        try:
+            # We look at the last few candles (3-candle formation)
+            # FVG is formed by Candle i-2 and i. Candle i-1 is the impulsive move.
+            # We scan the last 5 candles to find a recent open FVG.
+            bullish_fvg = None
+            bearish_fvg = None
+            
+            # Iterate backwards from current closed candle (-2)
+            # Indices: -2=LatestClosed, -3=Prev, -4=PrevPrev
+            for i in range(-2, -6, -1):
+                try:
+                    c3 = candles[i]     # Current (right)
+                    # c2 = candles[i-1] # Middle (impulse)
+                    c1 = candles[i-2]   # Left (start)
+
+                    # Bullish FVG: Low of c3 > High of c1
+                    if c3['low'] > c1['high']:
+                        gap_size = c3['low'] - c1['high']
+                        if gap_size > 0.0001: # Min filter
+                            bullish_fvg = (c1['high'], c3['low']) # Zone
+                            break # Use most recent
+
+                    # Bearish FVG: High of c3 < Low of c1
+                    if c3['high'] < c1['low']:
+                        gap_size = c1['low'] - c3['high']
+                        if gap_size > 0.0001:
+                            bearish_fvg = (c3['high'], c1['low']) # Zone
+                            break
+                except IndexError: pass
+            
+            return bullish_fvg, bearish_fvg
+        except: return None, None
+
+    def _check_filters(self, direction, current_price):
+        """Returns True if trade is allowed, False if blocked by filters."""
+        # 1. Zone Filter (Buy Low / Sell High)
+        if self.use_zone_filter and self.equilibrium > 0:
+            if direction == "BUY" and current_price > self.equilibrium:
+                if self.trend != "BULLISH_STRONG":
+                    self._log_skip(f"Zone Filter: Price in Premium. Wait for Discount.")
+                    return False
+            if direction == "SELL" and current_price < self.equilibrium:
+                if self.trend != "BEARISH_STRONG":
+                    self._log_skip(f"Zone Filter: Price in Discount. Wait for Premium.")
+                    return False
+
+        # 2. Trend Filter (200 EMA)
+        if self.use_trend_filter:
+            if direction == "BUY" and "BEARISH" in self.trend:
+                self._log_skip(f"Trend Filter: Trend is {self.trend}. No Buys.")
+                return False
+            if direction == "SELL" and "BULLISH" in self.trend:
+                self._log_skip(f"Trend Filter: Trend is {self.trend}. No Sells.")
+                return False
         
-        if direction == "BUY":
-            # SL below recent support
-            if self.swing_lows:
-                last_low = self.swing_lows[-1]['price']
-                if (entry_price - last_low) < min_dist: sl = entry_price - min_dist
-                else: sl = last_low
-            else:
-                sl = entry_price - min_dist 
-            tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
-
-        elif direction == "SELL":
-            # SL above recent resistance
-            if self.swing_highs:
-                last_high = self.swing_highs[-1]['price']
-                if (last_high - entry_price) < min_dist: sl = entry_price + min_dist
-                else: sl = last_high
-            else:
-                sl = entry_price + min_dist 
-            tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
-
-        return float(sl), float(tp)
+        return True
 
     def check_signals_macd_rsi(self, symbol, bid, ask, candles):
-        current_price = (bid + ask) / 2
-        
-        # --- NEW: Check Time Schedule ---
-        now_hour = datetime.now().hour
-        # Logic to handle both standard (8-20) and overnight (22-5)
-        if self.trading_start_hour < self.trading_end_hour:
-             # Standard Day Range
-             if not (self.trading_start_hour <= now_hour < self.trading_end_hour):
-                 self._log_skip(f"Outside Trading Hours ({self.trading_start_hour}:00 - {self.trading_end_hour}:00)")
-                 return
-        else:
-             # Overnight Range (e.g., Start 22, End 5)
-             # Valid if >= 22 OR < 5
-             if not (now_hour >= self.trading_start_hour or now_hour < self.trading_end_hour):
-                 self._log_skip(f"Outside Trading Hours ({self.trading_start_hour}:00 - {self.trading_end_hour}:00)")
-                 return
-
-        # --- "Buy Low, Sell High" Logic (Premium vs Discount) ---
-        if self.equilibrium > 0:
-            if current_price > self.equilibrium:
-                if self.trend != "BULLISH_STRONG": 
-                    self._log_skip(f"Price {current_price:.2f} is in PREMIUM (> {self.equilibrium:.2f}). Wait for Discount to BUY.")
-                    return 
-            
-            if current_price < self.equilibrium:
-                if self.trend != "BEARISH_STRONG":
-                    self._log_skip(f"Price {current_price:.2f} is in DISCOUNT (< {self.equilibrium:.2f}). Wait for Premium to SELL.")
-                    return 
-
-        # --- Indicator Logic ---
         rsi, macd, macd_signal = self.calculate_indicators(candles)
         
-        # BUY SIGNAL
         if rsi < self.rsi_buy_threshold and macd > macd_signal:
-            if self.trend == "BEARISH_STRONG":
-                self._log_skip("Trend is Strong Bearish. Skipping Counter-Trend Buy.")
-                return
+            if self._check_filters("BUY", ask):
+                sl, tp = self.calculate_safe_risk("BUY", ask)
+                logger.info(f"✅ BUY (MACD) | RSI: {rsi:.1f}")
+                self.execute_trade("BUY", symbol, self.lot_size, "MACD_RSI", sl, tp)
 
-            sl, tp = self.calculate_safe_risk("BUY", ask)
-            logger.info(f"✅ BUY SIGNAL | Discount Zone Valid | RSI: {rsi:.1f}")
-            self.execute_trade("BUY", symbol, self.lot_size, "MACD_RSI", sl, tp)
-
-        # SELL SIGNAL
         elif rsi > self.rsi_sell_threshold and macd < macd_signal:
-            if self.trend == "BULLISH_STRONG":
-                self._log_skip("Trend is Strong Bullish. Skipping Counter-Trend Sell.")
-                return
+            if self._check_filters("SELL", bid):
+                sl, tp = self.calculate_safe_risk("SELL", bid)
+                logger.info(f"✅ SELL (MACD) | RSI: {rsi:.1f}")
+                self.execute_trade("SELL", symbol, self.lot_size, "MACD_RSI", sl, tp)
 
-            sl, tp = self.calculate_safe_risk("SELL", bid)
-            logger.info(f"✅ SELL SIGNAL | Premium Zone Valid | RSI: {rsi:.1f}")
-            self.execute_trade("SELL", symbol, self.lot_size, "MACD_RSI", sl, tp)
+    def check_signals_bollinger(self, symbol, bid, ask, candles):
+        upper, lower, close = self.calculate_bollinger(candles)
+        rsi, _, _ = self.calculate_indicators(candles)
         
-        else:
-            self._log_skip(f"No Signal | RSI: {rsi:.1f}")
+        if close < lower and rsi < self.rsi_buy_threshold:
+             if self._check_filters("BUY", ask):
+                sl, tp = self.calculate_safe_risk("BUY", ask)
+                logger.info(f"✅ BUY (BB) | Price < Lower | RSI: {rsi:.1f}")
+                self.execute_trade("BUY", symbol, self.lot_size, "BB_RSI", sl, tp)
+        
+        elif close > upper and rsi > self.rsi_sell_threshold:
+             if self._check_filters("SELL", bid):
+                sl, tp = self.calculate_safe_risk("SELL", bid)
+                logger.info(f"✅ SELL (BB) | Price > Upper | RSI: {rsi:.1f}")
+                self.execute_trade("SELL", symbol, self.lot_size, "BB_RSI", sl, tp)
+
+    def check_signals_ema_cross(self, symbol, bid, ask, candles):
+        cross_up, cross_down = self.calculate_ema_cross(candles)
+        
+        if cross_up:
+             if self._check_filters("BUY", ask):
+                sl, tp = self.calculate_safe_risk("BUY", ask)
+                logger.info(f"✅ BUY (EMA CROSS)")
+                self.execute_trade("BUY", symbol, self.lot_size, "EMA_CROSS", sl, tp)
+        
+        elif cross_down:
+             if self._check_filters("SELL", bid):
+                sl, tp = self.calculate_safe_risk("SELL", bid)
+                logger.info(f"✅ SELL (EMA CROSS)")
+                self.execute_trade("SELL", symbol, self.lot_size, "EMA_CROSS", sl, tp)
+
+    def check_signals_smc(self, symbol, bid, ask, candles):
+        """SMC: Trade Retracements into FVG."""
+        bullish_fvg, bearish_fvg = self.calculate_smc(candles)
+        current_price = (bid + ask) / 2
+        
+        # Buy Signal: Price dips into Bullish FVG
+        if bullish_fvg:
+            low, high = bullish_fvg
+            if low <= current_price <= high:
+                if self._check_filters("BUY", ask):
+                    sl, tp = self.calculate_safe_risk("BUY", ask)
+                    logger.info(f"✅ BUY (SMC) | Inside Bullish FVG {low:.5f}-{high:.5f}")
+                    self.execute_trade("BUY", symbol, self.lot_size, "SMC_FVG", sl, tp)
+
+        # Sell Signal: Price rallies into Bearish FVG
+        if bearish_fvg:
+            low, high = bearish_fvg
+            if low <= current_price <= high:
+                if self._check_filters("SELL", bid):
+                    sl, tp = self.calculate_safe_risk("SELL", bid)
+                    logger.info(f"✅ SELL (SMC) | Inside Bearish FVG {low:.5f}-{high:.5f}")
+                    self.execute_trade("SELL", symbol, self.lot_size, "SMC_FVG", sl, tp)
+
+    def check_signals_crt(self, symbol, bid, ask, candles):
+        """CRT: Candle Range Breakout (Continuation)."""
+        if len(candles) < 3: return
+        prev = candles[-2] # Last completed candle
+        
+        # Breakout Buy: Current Price > Prev High
+        if ask > prev['high']:
+            # Confirm with Trend
+            if self._check_filters("BUY", ask):
+                sl, tp = self.calculate_safe_risk("BUY", ask)
+                logger.info(f"✅ BUY (CRT) | Breakout Prev High {prev['high']}")
+                self.execute_trade("BUY", symbol, self.lot_size, "CRT_BREAK", sl, tp)
+
+        # Breakout Sell: Current Price < Prev Low
+        elif bid < prev['low']:
+             if self._check_filters("SELL", bid):
+                sl, tp = self.calculate_safe_risk("SELL", bid)
+                logger.info(f"✅ SELL (CRT) | Breakout Prev Low {prev['low']}")
+                self.execute_trade("SELL", symbol, self.lot_size, "CRT_BREAK", sl, tp)
 
     def _log_skip(self, message):
         if time.time() - self.last_log_time > 15:
@@ -227,17 +332,11 @@ class TradingStrategy:
         self.swing_lows = [s for s in swings if s['type'] == 'L']
 
         # --- UPDATE ZONE ---
-        if self.swing_highs:
-            self.price_max = self.swing_highs[-1]['price']
-        
-        if self.swing_lows:
-            self.price_min = self.swing_lows[-1]['price']
-
-        # Calculate Equilibrium (50% Retracement Level)
+        if self.swing_highs: self.price_max = self.swing_highs[-1]['price']
+        if self.swing_lows: self.price_min = self.swing_lows[-1]['price']
         if self.price_max > self.price_min:
             self.equilibrium = (self.price_max + self.price_min) / 2
-        else:
-            self.equilibrium = 0.0
+        else: self.equilibrium = 0.0
 
     def analyze_trend(self, candles):
         """Simple Trend Filter using 200 EMA."""
@@ -253,6 +352,32 @@ class TradingStrategy:
                 self.trend = "BEARISH_STRONG" if current < (ema200 * 0.999) else "BEARISH_WEAK"
         except:
             self.trend = "NEUTRAL"
+
+    def calculate_safe_risk(self, direction, entry_price):
+        sl = 0.0
+        tp = 0.0
+        is_gold = entry_price > 500
+        min_dist = 2.00 if is_gold else 0.0020  
+        
+        if direction == "BUY":
+            if self.swing_lows:
+                last_low = self.swing_lows[-1]['price']
+                if (entry_price - last_low) < min_dist: sl = entry_price - min_dist
+                else: sl = last_low
+            else:
+                sl = entry_price - min_dist 
+            tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
+
+        elif direction == "SELL":
+            if self.swing_highs:
+                last_high = self.swing_highs[-1]['price']
+                if (last_high - entry_price) < min_dist: sl = entry_price + min_dist
+                else: sl = last_high
+            else:
+                sl = entry_price + min_dist 
+            tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
+
+        return float(sl), float(tp)
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
         self.last_trade_time = time.time()

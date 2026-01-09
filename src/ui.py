@@ -18,7 +18,7 @@ class TradingBotUI(tb.Window):
     def __init__(self, news_engine, mt5_connector):
         super().__init__(themename="darkly")  
         self.title("MT5 Bot - Laptop Edition")
-        self.geometry("1100x700") 
+        self.geometry("1150x750") 
         self.resizable(True, True) 
         
         self.news_engine = news_engine
@@ -34,11 +34,20 @@ class TradingBotUI(tb.Window):
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=1)
         self.lot_size_var = tk.DoubleVar(value=0.01)
-        
+        self.cooldown_var = tk.DoubleVar(value=15.0)
+
+        # Strategies & Toggles
+        self.strategy_mode_var = tk.StringVar(value="MACD_RSI")
+        self.use_trend_filter_var = tk.BooleanVar(value=True) 
+        self.use_zone_filter_var = tk.BooleanVar(value=True) 
+
+        # Profit Settings
         self.min_profit_var = tk.DoubleVar(value=0.50)
         self.trail_active_var = tk.DoubleVar(value=0.80)
         self.trail_offset_var = tk.DoubleVar(value=0.20)
+        self.rr_ratio_var = tk.DoubleVar(value=2.0)
 
+        # Indicator Settings
         self.rsi_period_var = tk.IntVar(value=14)
         self.rsi_buy_var = tk.IntVar(value=40)
         self.rsi_sell_var = tk.IntVar(value=60)
@@ -46,13 +55,16 @@ class TradingBotUI(tb.Window):
         self.macd_fast_var = tk.IntVar(value=12)
         self.macd_slow_var = tk.IntVar(value=26)
         self.macd_signal_var = tk.IntVar(value=9)
-        
-        self.rr_ratio_var = tk.DoubleVar(value=2.0)
-        self.cooldown_var = tk.DoubleVar(value=15.0)
+
+        self.bb_period_var = tk.IntVar(value=20)
+        self.bb_dev_var = tk.DoubleVar(value=2.0)
+
+        self.ema_fast_var = tk.IntVar(value=9)
+        self.ema_slow_var = tk.IntVar(value=21)
 
         # Dashboard Manual Inputs
         self.symbol_var = tk.StringVar()
-        self.tf_var = tk.StringVar(value="M1")  # Default Timeframe
+        self.tf_var = tk.StringVar(value="M1") 
         self.manual_sl_var = tk.DoubleVar(value=0.0)
         self.manual_tp_var = tk.DoubleVar(value=0.0)
         
@@ -71,10 +83,15 @@ class TradingBotUI(tb.Window):
 
     def _bind_traces(self):
         """Syncs UI changes to Strategy instantly"""
-        for var in [self.max_pos_var, self.rsi_period_var, self.rsi_buy_var, 
-                    self.rsi_sell_var, self.macd_fast_var, self.macd_slow_var, 
-                    self.macd_signal_var, self.rr_ratio_var, self.cooldown_var,
-                    self.min_profit_var, self.trail_active_var, self.trail_offset_var]:
+        vars_to_trace = [
+            self.max_pos_var, self.lot_size_var, self.cooldown_var,
+            self.strategy_mode_var, self.use_trend_filter_var, self.use_zone_filter_var,
+            self.min_profit_var, self.trail_active_var, self.trail_offset_var, self.rr_ratio_var,
+            self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
+            self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
+            self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var
+        ]
+        for var in vars_to_trace:
             var.trace_add("write", self._on_setting_changed)
 
     def _sync_ui_to_strategy(self):
@@ -83,27 +100,57 @@ class TradingBotUI(tb.Window):
                 self.strategy.set_active(self.auto_trade_var.get())
                 self.strategy.max_positions = self.max_pos_var.get()
                 self.strategy.lot_size = self.lot_size_var.get()
+                self.strategy.trade_cooldown = self.cooldown_var.get()
+                
+                # Logic & Filters
+                self.strategy.strategy_mode = self.strategy_mode_var.get()
+                self.strategy.use_trend_filter = self.use_trend_filter_var.get()
+                self.strategy.use_zone_filter = self.use_zone_filter_var.get()
+
+                # Profit
                 self.strategy.min_profit_target = self.min_profit_var.get()
                 self.strategy.trailing_activation = self.trail_active_var.get()
                 self.strategy.trailing_offset = self.trail_offset_var.get()
+                self.strategy.risk_reward_ratio = self.rr_ratio_var.get()
+
+                # Indicators
                 self.strategy.rsi_period = self.rsi_period_var.get()
                 self.strategy.rsi_buy_threshold = self.rsi_buy_var.get()
                 self.strategy.rsi_sell_threshold = self.rsi_sell_var.get()
+                
                 self.strategy.macd_fast = self.macd_fast_var.get()
                 self.strategy.macd_slow = self.macd_slow_var.get()
                 self.strategy.macd_signal = self.macd_signal_var.get()
-                self.strategy.risk_reward_ratio = self.rr_ratio_var.get()
-                self.strategy.trade_cooldown = self.cooldown_var.get()
-                logging.info("Strategy settings updated.")
+
+                self.strategy.bb_period = self.bb_period_var.get()
+                self.strategy.bb_dev = self.bb_dev_var.get()
+
+                self.strategy.ema_fast = self.ema_fast_var.get()
+                self.strategy.ema_slow = self.ema_slow_var.get()
+
+                logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode} | Trend={self.strategy.use_trend_filter} | Zone={self.strategy.use_zone_filter}")
             except Exception as e:
                 pass
 
     def _update_strategy_logic_text(self):
         if not hasattr(self, 'lbl_buy_logic'): return
-        b_rsi = self.rsi_buy_var.get()
-        s_rsi = self.rsi_sell_var.get()
-        self.lbl_buy_logic.config(text=f"🟢 BUY WHEN:  RSI < {b_rsi}  AND  MACD > Signal")
-        self.lbl_sell_logic.config(text=f"🔴 SELL WHEN:  RSI > {s_rsi}  AND  MACD < Signal")
+        
+        mode = self.strategy_mode_var.get()
+        if mode == "MACD_RSI":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: RSI < {self.rsi_buy_var.get()} & MACD > Sig")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: RSI > {self.rsi_sell_var.get()} & MACD < Sig")
+        elif mode == "BOLLINGER":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Price < Lower BB & RSI < {self.rsi_buy_var.get()}")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Price > Upper BB & RSI > {self.rsi_sell_var.get()}")
+        elif mode == "EMA_CROSS":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: EMA {self.ema_fast_var.get()} Crosses Above {self.ema_slow_var.get()}")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: EMA {self.ema_fast_var.get()} Crosses Below {self.ema_slow_var.get()}")
+        elif mode == "SMC":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Retrace into Bullish FVG (Gap)")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Retrace into Bearish FVG (Gap)")
+        elif mode == "CRT":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Break above Prev Candle High")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Break below Prev Candle Low")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         self.last_price_update = time.time() 
@@ -125,7 +172,8 @@ class TradingBotUI(tb.Window):
 
             if clean_symbol == self.symbol_var.get():
                 tf_display = self.tf_var.get()
-                self.lbl_mt5.config(text=f"MT5: {clean_symbol} [{tf_display}]", bootstyle="success")
+                mode_display = self.strategy_mode_var.get()
+                self.lbl_mt5.config(text=f"MT5: {clean_symbol} [{tf_display}] ({mode_display})", bootstyle="success")
                 self.lbl_bid.config(text=f"{bid:.5f}")
                 self.lbl_ask.config(text=f"{ask:.5f}")
 
@@ -136,22 +184,24 @@ class TradingBotUI(tb.Window):
             if self.strategy and len(candles) > 50:
                 rsi, macd, signal = self.strategy.calculate_indicators(candles)
                 
-                # Update Indicators
                 rsi_color = "success" if rsi < self.rsi_buy_var.get() else "danger" if rsi > self.rsi_sell_var.get() else "secondary"
-                self.lbl_live_rsi.config(text=f"RSI (14): {rsi:.2f}", bootstyle=rsi_color)
+                self.lbl_live_rsi.config(text=f"RSI: {rsi:.2f}", bootstyle=rsi_color)
                 
                 macd_color = "success" if macd > signal else "danger"
-                self.lbl_live_macd.config(text=f"MACD: {macd:.5f} | Sig: {signal:.5f}", bootstyle=macd_color)
+                self.lbl_live_macd.config(text=f"MACD: {macd:.5f}", bootstyle=macd_color)
 
-                # --- Detected Zone & Equilibrium Display ---
+                # --- Zone Display ---
                 s_min = self.strategy.price_min
                 s_max = self.strategy.price_max
                 s_eq = self.strategy.equilibrium
                 
-                if s_min > 0 and s_max > 0:
-                    self.lbl_detected_zone.config(text=f"Zone: {s_min:.2f}-{s_max:.2f} | Eq: {s_eq:.2f}", bootstyle="primary")
+                if self.use_zone_filter_var.get():
+                    if s_min > 0 and s_max > 0:
+                        self.lbl_detected_zone.config(text=f"Zone: {s_min:.2f}-{s_max:.2f} | Eq: {s_eq:.2f}", bootstyle="primary")
+                    else:
+                        self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
                 else:
-                    self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
+                    self.lbl_detected_zone.config(text="Zone: DISABLED", bootstyle="secondary")
 
         except Exception as e:
             pass
@@ -184,14 +234,15 @@ class TradingBotUI(tb.Window):
         self._sync_ui_to_strategy()
         self._update_strategy_logic_text()
     
-    # --- NEW: Timeframe Change Handler ---
     def _on_tf_change(self, event=None):
         symbol = self.symbol_var.get()
         tf = self.tf_var.get()
         if symbol and tf:
-            # Send command to MT5 to switch timeframe
             self.mt5_connector.change_timeframe(symbol, tf)
             logging.info(f"Requested Timeframe change: {symbol} -> {tf}")
+    
+    def _on_mode_change(self, event=None):
+        self._on_setting_changed()
 
     def _set_combo_values(self, symbols_list):
         self.combo_symbol['values'] = symbols_list
@@ -233,7 +284,7 @@ class TradingBotUI(tb.Window):
         
         header_frame = ttk.Frame(main_frame, relief="flat")
         header_frame.pack(fill=X, padx=10, pady=5)
-        ttk.Label(header_frame, text="🛡️ MT5 Auto Zone Bot", font=("Segoe UI", 14, "bold"), bootstyle="inverse-primary").pack(side=LEFT)
+        ttk.Label(header_frame, text="🛡️ MT5 Multi-Strategy Bot", font=("Segoe UI", 14, "bold"), bootstyle="inverse-primary").pack(side=LEFT)
         self.lbl_mt5 = ttk.Label(header_frame, text="MT5: Connecting...", bootstyle="warning")
         self.lbl_mt5.pack(side=LEFT, padx=20)
         self.lbl_time = ttk.Label(header_frame, text="")
@@ -285,7 +336,7 @@ class TradingBotUI(tb.Window):
         ind_frame = ttk.LabelFrame(right_frame, text="Live Indicators & Zone", padding=10, bootstyle="info")
         ind_frame.pack(fill=X, pady=(0, 5))
         
-        self.lbl_live_rsi = ttk.Label(ind_frame, text="RSI (14): Waiting...", font=("Segoe UI", 12, "bold"), bootstyle="secondary")
+        self.lbl_live_rsi = ttk.Label(ind_frame, text="RSI: Waiting...", font=("Segoe UI", 12, "bold"), bootstyle="secondary")
         self.lbl_live_rsi.pack(fill=X, pady=2)
         
         self.lbl_live_macd = ttk.Label(ind_frame, text="MACD: Waiting...", font=("Segoe UI", 10), bootstyle="secondary")
@@ -306,7 +357,7 @@ class TradingBotUI(tb.Window):
         ctl_box = ttk.LabelFrame(right_frame, text="Execution", padding=10)
         ctl_box.pack(fill=X, pady=5)
         
-        # --- NEW: Symbol + Timeframe Row ---
+        # --- Symbol + Timeframe + Strategy Row ---
         sel_frame = ttk.Frame(ctl_box)
         sel_frame.pack(fill=X, pady=(0, 5))
 
@@ -314,17 +365,27 @@ class TradingBotUI(tb.Window):
         sym_frame = ttk.Frame(sel_frame)
         sym_frame.pack(side=LEFT, fill=X, expand=True)
         ttk.Label(sym_frame, text="Symbol:", font=("Segoe UI", 9)).pack(anchor=W)
-        self.combo_symbol = ttk.Combobox(sym_frame, textvariable=self.symbol_var, state="readonly")
+        self.combo_symbol = ttk.Combobox(sym_frame, textvariable=self.symbol_var, state="readonly", width=10)
         self.combo_symbol.pack(fill=X)
 
         # Timeframe
         tf_frame = ttk.Frame(sel_frame)
-        tf_frame.pack(side=RIGHT, padx=(5, 0))
-        ttk.Label(tf_frame, text="Timeframe:", font=("Segoe UI", 9)).pack(anchor=W)
-        self.combo_tf = ttk.Combobox(tf_frame, textvariable=self.tf_var, state="readonly", width=6)
+        tf_frame.pack(side=LEFT, padx=5)
+        ttk.Label(tf_frame, text="TF:", font=("Segoe UI", 9)).pack(anchor=W)
+        self.combo_tf = ttk.Combobox(tf_frame, textvariable=self.tf_var, state="readonly", width=5)
         self.combo_tf['values'] = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
         self.combo_tf.pack(fill=X)
         self.combo_tf.bind("<<ComboboxSelected>>", self._on_tf_change)
+
+        # Strategy
+        strat_frame = ttk.Frame(sel_frame)
+        strat_frame.pack(side=LEFT, padx=5, fill=X, expand=True)
+        ttk.Label(strat_frame, text="Active Strategy:", font=("Segoe UI", 9)).pack(anchor=W)
+        self.combo_strat = ttk.Combobox(strat_frame, textvariable=self.strategy_mode_var, state="readonly", width=15)
+        # --- UPDATED STRATEGY LIST ---
+        self.combo_strat['values'] = ["MACD_RSI", "BOLLINGER", "EMA_CROSS", "SMC", "CRT"]
+        self.combo_strat.pack(fill=X)
+        self.combo_strat.bind("<<ComboboxSelected>>", self._on_mode_change)
         
         prices_frame = ttk.Frame(ctl_box)
         prices_frame.pack(fill=X, pady=5)
@@ -355,12 +416,11 @@ class TradingBotUI(tb.Window):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # --- Configure Grid for 3 Columns ---
         scroll_frame.columnconfigure(0, weight=1)
         scroll_frame.columnconfigure(1, weight=1)
         scroll_frame.columnconfigure(2, weight=1)
 
-        # --- Column 0: General & Risk ---
+        # --- Column 0: General & Filters ---
         col0_frame = ttk.Frame(scroll_frame)
         col0_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         
@@ -369,6 +429,12 @@ class TradingBotUI(tb.Window):
         self._add_setting(gen_frame, "Max Open Positions:", self.max_pos_var, 1, 10, 0)
         self._add_setting(gen_frame, "Lot Size:", self.lot_size_var, 0.01, 10.0, 1)
         self._add_setting(gen_frame, "Trade Cooldown (sec):", self.cooldown_var, 5.0, 300.0, 2)
+
+        # NEW: Filters
+        filter_frame = ttk.LabelFrame(col0_frame, text="Strategy Filters", padding=10, bootstyle="secondary")
+        filter_frame.pack(fill=X, pady=5)
+        ttk.Checkbutton(filter_frame, text="Use Trend Filter (200 EMA)", variable=self.use_trend_filter_var, bootstyle="round-toggle").pack(anchor=W, pady=2)
+        ttk.Checkbutton(filter_frame, text="Use Zone Filter (Supp/Res)", variable=self.use_zone_filter_var, bootstyle="round-toggle").pack(anchor=W, pady=2)
 
         risk_frame = ttk.LabelFrame(col0_frame, text="Risk Management", padding=10, bootstyle="success")
         risk_frame.pack(fill=X, pady=5)
@@ -399,6 +465,14 @@ class TradingBotUI(tb.Window):
         self._add_setting(macd_frame, "Fast EMA:", self.macd_fast_var, 5, 50, 0)
         self._add_setting(macd_frame, "Slow EMA:", self.macd_slow_var, 10, 100, 1)
         self._add_setting(macd_frame, "Signal SMA:", self.macd_signal_var, 2, 50, 2)
+
+        # NEW: Bollinger & EMA
+        other_ind_frame = ttk.LabelFrame(col2_frame, text="Bollinger & EMA Settings", padding=10, bootstyle="light")
+        other_ind_frame.pack(fill=X, pady=5)
+        self._add_setting(other_ind_frame, "BB Period:", self.bb_period_var, 10, 50, 0)
+        self._add_setting(other_ind_frame, "BB Deviation:", self.bb_dev_var, 0.5, 4.0, 1)
+        self._add_setting(other_ind_frame, "EMA Fast:", self.ema_fast_var, 2, 50, 2)
+        self._add_setting(other_ind_frame, "EMA Slow:", self.ema_slow_var, 5, 200, 3)
 
     def _add_setting(self, parent, label_text, variable, min_val, max_val, row_idx):
         ttk.Label(parent, text=label_text).grid(row=row_idx, column=0, sticky=W, padx=5, pady=2)
