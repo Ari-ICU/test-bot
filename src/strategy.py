@@ -129,21 +129,29 @@ class TradingStrategy:
 
     def analyze_structure_zones(self, symbol, candles):
         """
-        Identifies Support & Resistance Zones by clustering Swing Highs/Lows.
+        Identifies Support & Resistance Zones.
+        FIXED: Reverses candle order to ensure [-1] is the Current Price.
         """
-        # [FIX] DYNAMIC TOLERANCE: Set tolerance to 0.05% of current price
-        # EURUSD (1.0500) -> 0.0005 | Gold (2000) -> 1.0
-        current_price = candles[-1]['close']
+        if not candles: return
+
+        # --- FIX 1: Reverse Data to be [Oldest, ..., Newest] ---
+        # MT5 sends [Newest, ..., Oldest], so we flip it.
+        ts_candles = candles[::-1]
+
+        # Now ts_candles[-1] is the REAL current price
+        current_price = ts_candles[-1]['close']
+        
+        # Dynamic Tolerance (0.05% of price)
         self.zone_tolerance = current_price * 0.0005 
 
-        # 1. Get Fractals (Highs and Lows)
-        highs, lows = self._get_fractals(candles)
+        # 1. Get Fractals using the TIME SERIES sorted list
+        highs, lows = self._get_fractals(ts_candles)
         
         # 2. Cluster Swings into Zones
         all_swings = highs + lows
         zones = self._cluster_levels(all_swings, threshold=self.zone_tolerance)
         
-        # 3. Classify Zones as Support or Resistance relative to current price
+        # 3. Classify Zones
         self.support_zones = []
         self.resistance_zones = []
         
