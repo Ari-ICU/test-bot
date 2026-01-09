@@ -50,11 +50,11 @@ class TradingStrategy:
         self.swing_lows = []
         
         # --- S&R Zones (Tradeciety Method) ---
-        self.support_zones = []     # List of dicts: {'top': float, 'bottom': float, 'strength': int}
+        self.support_zones = []     
         self.resistance_zones = []
-        self.zone_min_touches = 1   # Minimum swings to form a valid zone
-        self.zone_tolerance = 0.50 # Price range to cluster swings (adjust for pair volatility)
-        self.last_draw_time = 0     # To limit draw calls
+        self.zone_min_touches = 1   
+        self.zone_tolerance = 0.0   # [FIX] Initialized to 0, will be set dynamically
+        self.last_draw_time = 0     
 
         self.current_profit = 0.0 
         self.peak_profit = 0.0        
@@ -84,7 +84,6 @@ class TradingStrategy:
             self.peak_profit = 0.0
 
         # --- 1. PRIORITY: Analyze Structure (S&R Zones) & Trend ---
-        # Analyze structure every tick (or throttle it for performance)
         if self.use_zone_filter: 
             self.analyze_structure_zones(symbol, candles)
             
@@ -113,7 +112,6 @@ class TradingStrategy:
 
         # 4. Status Log
         if time.time() % 10 < 1: 
-            # Find nearest zones for logging
             curr_price = (bid + ask) / 2
             nearest_supp = self._get_nearest_zone(curr_price, is_support=True)
             nearest_res = self._get_nearest_zone(curr_price, is_support=False)
@@ -132,57 +130,47 @@ class TradingStrategy:
     def analyze_structure_zones(self, symbol, candles):
         """
         Identifies Support & Resistance Zones by clustering Swing Highs/Lows.
-        1. Find Fractals (Swings)
-        2. Cluster nearby swings into Zones
-        3. Filter weak zones (min touches)
-        4. Draw them on MT5
         """
+        # [FIX] DYNAMIC TOLERANCE: Set tolerance to 0.05% of current price
+        # EURUSD (1.0500) -> 0.0005 | Gold (2000) -> 1.0
+        current_price = candles[-1]['close']
+        self.zone_tolerance = current_price * 0.0005 
+
         # 1. Get Fractals (Highs and Lows)
         highs, lows = self._get_fractals(candles)
         
         # 2. Cluster Swings into Zones
-        # We group highs to find Resistance, lows to find Support (and Flip zones)
         all_swings = highs + lows
         zones = self._cluster_levels(all_swings, threshold=self.zone_tolerance)
         
         # 3. Classify Zones as Support or Resistance relative to current price
-        current_price = candles[-1]['close']
-        
         self.support_zones = []
         self.resistance_zones = []
         
         for zone in zones:
-            # Tradeciety: Strong zones have multiple touches
             if zone['count'] >= self.zone_min_touches:
-                # If zone is below price -> Support
                 if zone['top'] < current_price:
                     self.support_zones.append(zone)
-                # If zone is above price -> Resistance
                 elif zone['bottom'] > current_price:
                     self.resistance_zones.append(zone)
         
-        # Sort zones: Support descending (nearest first), Resistance ascending (nearest first)
         self.support_zones.sort(key=lambda x: x['top'], reverse=True)
         self.resistance_zones.sort(key=lambda x: x['bottom'])
         
-        # 4. Visualize (Draw rectangles on MT5)
-        # Throttle drawing to avoid flooding the connector (every 5 seconds)
+        # 4. Visualize
         if time.time() - self.last_draw_time > 5.0:
             self._draw_zones(symbol)
             self.last_draw_time = time.time()
 
     def _get_fractals(self, candles, window=2):
-        """Finds Swing Highs and Lows using a fractal window (e.g., 2 candles L/R)."""
         highs = []
         lows = []
         
         if len(candles) < (window * 2 + 1): return [], []
 
-        # Iterate from oldest to newest (skipping unclosed candles at the very end)
         for i in range(window, len(candles) - window - 1):
             curr = candles[i]
             
-            # Check High Fractal
             is_high = True
             for j in range(1, window + 1):
                 if candles[i-j]['high'] > curr['high'] or candles[i+j]['high'] > curr['high']:
@@ -191,7 +179,6 @@ class TradingStrategy:
             if is_high:
                 highs.append(curr['high'])
 
-            # Check Low Fractal
             is_low = True
             for j in range(1, window + 1):
                 if candles[i-j]['low'] < curr['low'] or candles[i+j]['low'] < curr['low']:
@@ -203,25 +190,20 @@ class TradingStrategy:
         return highs, lows
 
     def _cluster_levels(self, levels, threshold):
-        """Groups individual price levels into Zones."""
         if not levels: return []
         
         levels.sort()
         zones = []
-        
         current_cluster = [levels[0]]
         
         for i in range(1, len(levels)):
             price = levels[i]
-            # If price is within threshold of the cluster
             if price - current_cluster[-1] <= threshold:
                 current_cluster.append(price)
             else:
-                # Close current cluster
                 zones.append(self._make_zone_dict(current_cluster))
                 current_cluster = [price]
         
-        # Append last cluster
         if current_cluster:
             zones.append(self._make_zone_dict(current_cluster))
             
@@ -232,46 +214,38 @@ class TradingStrategy:
             'top': max(cluster),
             'bottom': min(cluster),
             'center': sum(cluster) / len(cluster),
-            'count': len(cluster) # Strength
+            'count': len(cluster)
         }
 
     def _get_nearest_zone(self, price, is_support):
-        """Returns the nearest valid zone to the current price."""
         zones = self.support_zones if is_support else self.resistance_zones
         if not zones: return None
-        # Since lists are sorted by proximity (desc for supp, asc for res), return first
         return zones[0]
 
     def _draw_zones(self, symbol):
-        """Sends draw commands to the MT5 Connector."""
-        # Visualizing the nearest 3 Support and 3 Resistance zones
-        
-        # Draw Support (Green 0x00FF00)
-        # We draw from index 100 (past) to index 0 (current) to form a strip
         for i, zone in enumerate(self.support_zones[:3]):
             name = f"Supp_{i}"
-            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x008000") # Dark Green
+            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x008000") 
 
-        # Draw Resistance (Red 0x0000FF)
         for i, zone in enumerate(self.resistance_zones[:3]):
             name = f"Res_{i}"
-            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x000080") # Dark Red
+            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x000080") 
 
     # =========================================================================
 
     def _check_filters(self, direction, current_price):
         """Returns True if trade is allowed, False if blocked by filters."""
         
-        # 1. ZONE FILTER (Updated for Tradeciety Zones)
+        # 1. ZONE FILTER
         if self.use_zone_filter:
             # If Buying: Don't buy directly into Resistance
             if direction == "BUY":
                 nearest_res = self._get_nearest_zone(current_price, is_support=False)
                 if nearest_res:
                     dist_to_res = nearest_res['bottom'] - current_price
-                    # If we are very close to resistance (e.g., < 5 pips), skip
+                    # [FIX] Use dynamic zone tolerance (0.05% of price)
                     if dist_to_res < (self.zone_tolerance * 0.5): 
-                        self._log_skip(f"Zone Filter: Too close to Resistance {nearest_res['bottom']:.5f}")
+                        self._log_skip(f"Zone Filter: Too close to Resistance {nearest_res['bottom']:.5f} (Dist: {dist_to_res:.5f})")
                         return False
 
             # If Selling: Don't sell directly into Support
@@ -280,7 +254,7 @@ class TradingStrategy:
                 if nearest_supp:
                     dist_to_supp = current_price - nearest_supp['top']
                     if dist_to_supp < (self.zone_tolerance * 0.5):
-                        self._log_skip(f"Zone Filter: Too close to Support {nearest_supp['top']:.5f}")
+                        self._log_skip(f"Zone Filter: Too close to Support {nearest_supp['top']:.5f} (Dist: {dist_to_supp:.5f})")
                         return False
 
         # 2. Trend Filter (200 EMA)
@@ -480,10 +454,8 @@ class TradingStrategy:
         min_dist = 2.00 if is_gold else 0.0020  
         
         # --- Updated Risk Management using S&R Zones ---
-        # If we have a valid zone, place SL behind it.
         
         if direction == "BUY":
-            # Find nearest support zone below entry
             nearest_supp = self._get_nearest_zone(entry_price, is_support=True)
             if nearest_supp:
                 # Place SL below the support zone
@@ -494,7 +466,6 @@ class TradingStrategy:
             tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
 
         elif direction == "SELL":
-            # Find nearest resistance zone above entry
             nearest_res = self._get_nearest_zone(entry_price, is_support=False)
             if nearest_res:
                 # Place SL above the resistance zone
