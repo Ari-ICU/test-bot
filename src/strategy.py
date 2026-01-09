@@ -422,7 +422,10 @@ class TradingStrategy:
 
     def check_signals_crt(self, symbol, bid, ask, candles):
         if len(candles) < 3: return
-        prev = candles[-2] 
+        
+        # FIX: Use index 1 for the immediate previous candle
+        # (Index 0 is the current forming candle)
+        prev = candles[1] 
         
         if ask > prev['high']:
             if self._check_filters("BUY", ask):
