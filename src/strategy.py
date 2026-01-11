@@ -693,26 +693,123 @@ class TradingStrategy:
                 logger.info(f"✅ SELL (EMA CROSS) | Conf: {conf}%")
                 self.execute_trade("SELL", symbol, self.lot_size, "EMA_CROSS", sl, tp)
 
-    def check_signals_smc(self, symbol, bid, ask, candles):
-        bullish_fvg, bearish_fvg = self.calculate_smc(candles)
-        current_price = (bid + ask) / 2
-        conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
-        
-        if bullish_fvg and conf >= 50:
-            low, high = bullish_fvg
-            if low <= current_price <= high:
-                if self._check_filters("BUY", ask):
-                    sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                    logger.info(f"✅ BUY (SMC) | Conf: {conf}% | Inside Bullish FVG")
-                    self.execute_trade("BUY", symbol, self.lot_size, "SMC_FVG", sl, tp)
+    # =========================================================================
+    # --- UPDATED: SMART MONEY CONCEPTS (SMC) STRATEGY ---
+    # =========================================================================
 
-        if bearish_fvg and conf >= 50:
-            low, high = bearish_fvg
-            if low <= current_price <= high:
-                if self._check_filters("SELL", bid):
-                    sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                    logger.info(f"✅ SELL (SMC) | Conf: {conf}% | Inside Bearish FVG")
-                    self.execute_trade("SELL", symbol, self.lot_size, "SMC_FVG", sl, tp)
+    def calculate_order_blocks(self, candles):
+        """
+        Identifies the last opposing candle before a strong move (Imbalance).
+        Returns: (bullish_ob, bearish_ob) as dictionaries with 'top', 'bottom'.
+        """
+        bullish_ob = None
+        bearish_ob = None
+        
+        # We need a few candles to detect a "Strong Move"
+        if len(candles) < 10: return None, None
+        
+        # Look backwards for the most recent unmitigated Order Block
+        # We look at the last 20 candles
+        for i in range(len(candles) - 4, len(candles) - 20, -1):
+            curr = candles[i]
+            next_1 = candles[i+1]
+            next_2 = candles[i+2]
+            
+            # --- 1. BULLISH OB DETECTION ---
+            # Criteria: Bearish Candle -> Followed by Strong Bullish Move (Green, Green)
+            # Simplification: Current is Red, Next 2 are Green and broke structure or moved fast
+            is_bearish_candle = curr['close'] < curr['open']
+            strong_move_up = (next_1['close'] > next_1['open']) and \
+                             (next_2['close'] > next_2['open']) and \
+                             (next_2['close'] > curr['high']) # Broke the high of the OB candle
+            
+            if is_bearish_candle and strong_move_up:
+                # This is a potential Bullish Order Block
+                # Define zone: High to Low of the bearish candle
+                bullish_ob = {'top': curr['high'], 'bottom': curr['low'], 'time': curr['time']}
+                break # Found the most recent one
+
+            # --- 2. BEARISH OB DETECTION ---
+            # Criteria: Bullish Candle -> Followed by Strong Bearish Move
+            is_bullish_candle = curr['close'] > curr['open']
+            strong_move_down = (next_1['close'] < next_1['open']) and \
+                               (next_2['close'] < next_2['open']) and \
+                               (next_2['close'] < curr['low']) # Broke the low of the OB candle
+            
+            if is_bullish_candle and strong_move_down:
+                bearish_ob = {'bottom': curr['low'], 'top': curr['high'], 'time': curr['time']}
+                break 
+
+        return bullish_ob, bearish_ob
+
+    def check_signals_smc(self, symbol, bid, ask, candles):
+        """
+        SMC Strategy:
+        1. Identify Market Structure (Trend).
+        2. Wait for price to return to a Discount Zone (Order Block or FVG).
+        3. Enter on the 'Mitigation'.
+        """
+        # 1. Get Key Levels
+        bullish_fvg, bearish_fvg = self.calculate_smc(candles)
+        bullish_ob, bearish_ob = self.calculate_order_blocks(candles)
+        
+        atr = self.calculate_atr(candles)
+        current_price = (bid + ask) / 2
+        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
+        
+        # --- BUY SCENARIOS (Bullish Structure) ---
+        if conf >= 50 and direction == "BUY":
+            # A. Order Block Entry (High Probability)
+            if bullish_ob:
+                # Check if price tapped into the OB (Mitigation)
+                in_zone = bullish_ob['bottom'] <= ask <= bullish_ob['top']
+                # Or slightly above it (Front-run)
+                near_zone = (ask - bullish_ob['top']) < (atr * 0.5) and ask > bullish_ob['bottom']
+                
+                if in_zone or near_zone:
+                    if self._check_filters("BUY", ask):
+                        # SL below the OB
+                        sl = bullish_ob['bottom'] - (atr * 0.2)
+                        tp = ask + ((ask - sl) * 2.5) # 1:2.5 RR for SMC
+                        logger.info(f"✅ BUY (SMC-OB) | Price tapped Bullish Order Block")
+                        self.execute_trade("BUY", symbol, self.lot_size, "SMC_OB", sl, tp)
+                        return
+
+            # B. FVG Entry (Secondary)
+            if bullish_fvg:
+                low, high = bullish_fvg
+                if low <= ask <= high:
+                    if self._check_filters("BUY", ask):
+                        sl = low - (atr * 0.3)
+                        tp = ask + ((ask - sl) * 2.0)
+                        logger.info(f"✅ BUY (SMC-FVG) | Price inside Fair Value Gap")
+                        self.execute_trade("BUY", symbol, self.lot_size, "SMC_FVG", sl, tp)
+
+        # --- SELL SCENARIOS (Bearish Structure) ---
+        elif conf >= 50 and direction == "SELL":
+            # A. Order Block Entry
+            if bearish_ob:
+                in_zone = bearish_ob['bottom'] <= bid <= bearish_ob['top']
+                near_zone = (bearish_ob['bottom'] - bid) < (atr * 0.5) and bid < bearish_ob['top']
+                
+                if in_zone or near_zone:
+                    if self._check_filters("SELL", bid):
+                        # SL above the OB
+                        sl = bearish_ob['top'] + (atr * 0.2)
+                        tp = bid - ((sl - bid) * 2.5)
+                        logger.info(f"✅ SELL (SMC-OB) | Price tapped Bearish Order Block")
+                        self.execute_trade("SELL", symbol, self.lot_size, "SMC_OB", sl, tp)
+                        return
+
+            # B. FVG Entry
+            if bearish_fvg:
+                low, high = bearish_fvg
+                if low <= bid <= high:
+                    if self._check_filters("SELL", bid):
+                        sl = high + (atr * 0.3)
+                        tp = bid - ((sl - bid) * 2.0)
+                        logger.info(f"✅ SELL (SMC-FVG) | Price inside Fair Value Gap")
+                        self.execute_trade("SELL", symbol, self.lot_size, "SMC_FVG", sl, tp)
 
     # =========================================================================
     # --- UPDATED: CANDLE RANGE THEORY (CRT) STRATEGY ---
