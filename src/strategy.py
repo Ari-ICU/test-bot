@@ -521,36 +521,6 @@ class TradingStrategy:
             return cross_up, cross_down
         except: return False, False
 
-    def calculate_smc(self, candles):
-        """Detects the latest Fair Value Gap (FVG) using ATR for normalization."""
-        try:
-            atr = self.calculate_atr(candles)
-            if atr == 0: return None, None
-            
-            bullish_fvg = None
-            bearish_fvg = None
-            for i in range(-2, -6, -1):
-                try:
-                    c3 = candles[i]
-                    c1 = candles[i-2]
-
-                    # Bullish FVG (Gap between Candle 1 High and Candle 3 Low)
-                    if c3['low'] > c1['high']:
-                        gap_size = c3['low'] - c1['high']
-                        if gap_size > (atr * 0.1): 
-                            bullish_fvg = (c1['high'], c3['low']) 
-                            break 
-
-                    # Bearish FVG (Gap between Candle 1 Low and Candle 3 High)
-                    if c3['high'] < c1['low']:
-                        gap_size = c1['low'] - c3['high']
-                        if gap_size > (atr * 0.1):
-                            bearish_fvg = (c3['high'], c1['low']) 
-                            break
-                except IndexError: pass
-            
-            return bullish_fvg, bearish_fvg
-        except: return None, None
 
     def _check_filters(self, direction, current_price):
         """Returns True if trade is allowed, False if blocked by filters."""
@@ -731,6 +701,37 @@ class TradingStrategy:
         if current_close > prev_close: return "BULLISH" # Weak proxy if ranging
         
         return "NEUTRAL"
+
+    def calculate_smc(self, candles):
+        """Detects the latest Fair Value Gap (FVG) using ATR for normalization."""
+        try:
+            atr = self.calculate_atr(candles)
+            if atr == 0: return None, None
+            
+            bullish_fvg = None
+            bearish_fvg = None
+            for i in range(-2, -6, -1):
+                try:
+                    c3 = candles[i]
+                    c1 = candles[i-2]
+
+                    # Bullish FVG (Gap between Candle 1 High and Candle 3 Low)
+                    if c3['low'] > c1['high']:
+                        gap_size = c3['low'] - c1['high']
+                        if gap_size > (atr * 0.1): 
+                            bullish_fvg = (c1['high'], c3['low']) 
+                            break 
+
+                    # Bearish FVG (Gap between Candle 1 Low and Candle 3 High)
+                    if c3['high'] < c1['low']:
+                        gap_size = c1['low'] - c3['high']
+                        if gap_size > (atr * 0.1):
+                            bearish_fvg = (c3['high'], c1['low']) 
+                            break
+                except IndexError: pass
+            
+            return bullish_fvg, bearish_fvg
+        except: return None, None
 
     def calculate_order_blocks(self, candles):
         """
