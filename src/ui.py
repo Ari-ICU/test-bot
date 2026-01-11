@@ -42,7 +42,8 @@ class TradingBotUI(tb.Window):
         self.use_zone_filter_var = tk.BooleanVar(value=True) 
 
         # Profit Settings
-        self.min_profit_var = tk.DoubleVar(value=0.50)
+        self.auto_close_sec_var = tk.DoubleVar(value=2.0)
+        self.use_profit_mgmt_var = tk.BooleanVar(value=True)
         self.trail_active_var = tk.DoubleVar(value=0.80)
         self.trail_offset_var = tk.DoubleVar(value=0.20)
         self.rr_ratio_var = tk.DoubleVar(value=2.0)
@@ -77,6 +78,7 @@ class TradingBotUI(tb.Window):
         # CRT Settings
         self.crt_htf_var = tk.IntVar(value=240)       # Big Timeframe (e.g. 4H)
         self.crt_lookback_var = tk.IntVar(value=10)   # Small Timeframe Lookback (Candles)
+        self.crt_zone_var = tk.DoubleVar(value=0.25)  # Entry Zone % of Range (e.g. 0.25 = 25%)
         
         self._bind_traces()
 
@@ -99,12 +101,12 @@ class TradingBotUI(tb.Window):
         vars_to_trace = [
             self.max_pos_var, self.lot_size_var, self.cooldown_var,
             self.strategy_mode_var, self.use_trend_filter_var, self.use_zone_filter_var,
-            self.min_profit_var, self.trail_active_var, self.trail_offset_var, self.rr_ratio_var,
+            self.auto_close_sec_var, self.use_profit_mgmt_var, self.trail_active_var, self.trail_offset_var, self.rr_ratio_var,
             self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
             self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
             self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var,
             self.use_time_filter_var, self.time_zone_var, self.start_hour_var, self.end_hour_var,
-            self.crt_htf_var, self.crt_lookback_var
+            self.crt_htf_var, self.crt_lookback_var, self.crt_zone_var
         ]
         for var in vars_to_trace:
             var.trace_add("write", self._on_setting_changed)
@@ -132,7 +134,8 @@ class TradingBotUI(tb.Window):
                 self.strategy.use_zone_filter = self.use_zone_filter_var.get()
 
                 # Profit
-                self.strategy.min_profit_target = self._safe_get(self.min_profit_var, 0.5)
+                self.strategy.profit_close_interval = self._safe_get(self.auto_close_sec_var, 2.0)
+                self.strategy.use_profit_management = self.use_profit_mgmt_var.get()
                 self.strategy.trailing_activation = self._safe_get(self.trail_active_var, 0.8)
                 self.strategy.trailing_offset = self._safe_get(self.trail_offset_var, 0.2)
                 self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 2.0)
@@ -161,6 +164,7 @@ class TradingBotUI(tb.Window):
                 # CRT Sync
                 self.strategy.crt_htf = self._safe_get(self.crt_htf_var, 240)
                 self.strategy.crt_lookback = self._safe_get(self.crt_lookback_var, 10)
+                self.strategy.crt_zone_size = self._safe_get(self.crt_zone_var, 0.25)
 
                 logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode} | Trend={self.strategy.use_trend_filter} | Zone={self.strategy.use_zone_filter}")
             except (tk.TclError, ValueError, TypeError):
@@ -567,9 +571,14 @@ class TradingBotUI(tb.Window):
 
         prof_frame = ttk.LabelFrame(col1_frame, text="Profit & Trailing Settings", padding=10, bootstyle="warning")
         prof_frame.pack(fill=X, pady=5)
-        self._add_setting(prof_frame, "Min Profit Target ($):", self.min_profit_var, 0.50, 1000.0, 0)
-        self._add_setting(prof_frame, "Trailing Activation ($):", self.trail_active_var, 0.50, 1000.0, 1)
-        self._add_setting(prof_frame, "Trailing Offset ($):", self.trail_offset_var, 0.10, 500.0, 2)
+        ttk.Checkbutton(prof_frame, text="Active", variable=self.use_profit_mgmt_var, bootstyle="round-toggle").pack(anchor=W, pady=(0, 5))
+        
+        # Container for settings to easily add logic
+        prof_settings = ttk.Frame(prof_frame)
+        prof_settings.pack(fill=X)
+        self._add_setting(prof_settings, "Auto Close (sec):", self.auto_close_sec_var, 1.0, 60.0, 0)
+        self._add_setting(prof_settings, "Trailing Activation ($):", self.trail_active_var, 0.50, 1000.0, 1)
+        self._add_setting(prof_settings, "Trailing Offset ($):", self.trail_offset_var, 0.10, 500.0, 2)
         
         # --- Column 2: Indicators ---
         col2_frame = ttk.Frame(scroll_frame)
@@ -600,11 +609,12 @@ class TradingBotUI(tb.Window):
         crt_frame.pack(fill=X, pady=5)
         self._add_setting(crt_frame, "Big TF (Range) Min:", self.crt_htf_var, 15, 1440, 0)
         self._add_setting(crt_frame, "Small TF (Sweep) Lookback:", self.crt_lookback_var, 1, 50, 1)
-        ttk.Label(crt_frame, text="(Range: 60=1H, 240=4H | Lookback: Candles)", font=("", 8), foreground="gray").grid(row=2, column=0, columnspan=2, sticky=W)
+        self._add_setting(crt_frame, "Entry Zone (% of Range):", self.crt_zone_var, 0.05, 0.50, 2)
+        ttk.Label(crt_frame, text="(Range: 60=1H, 240=4H | Zone: 0.1-0.5)", font=("", 8), foreground="gray").grid(row=3, column=0, columnspan=2, sticky=W)
         
         # Guide Frame for Time Conversion
         g_frame = ttk.Frame(crt_frame)
-        g_frame.grid(row=3, column=0, columnspan=2, sticky=W, pady=5)
+        g_frame.grid(row=4, column=0, columnspan=2, sticky=W, pady=5)
         
         ttk.Label(g_frame, text="Formula: Lookback × Chart TF = Search Time", font=("", 8, "bold"), foreground="#e67e22").pack(anchor=W)
         guide_text = (
@@ -615,7 +625,7 @@ class TradingBotUI(tb.Window):
         )
         ttk.Label(g_frame, text=guide_text, font=("", 8), foreground="#bdc3c7", justify=LEFT).pack(anchor=W, padx=5)
         
-        ttk.Label(crt_frame, text="Ensures Sweep & Reclaim logic is precise for\ndual-timeframe reversal confirmations.", font=("", 8), foreground="#00bc8c", justify=LEFT).grid(row=4, column=0, columnspan=2, sticky=W, pady=(5,0))
+        ttk.Label(crt_frame, text="Ensures Sweep & Reclaim logic is precise for\ndual-timeframe reversal confirmations.", font=("", 8), foreground="#00bc8c", justify=LEFT).grid(row=5, column=0, columnspan=2, sticky=W, pady=(5,0))
 
     def _add_setting(self, parent, label_text, variable, min_val, max_val, row_idx):
         ttk.Label(parent, text=label_text).grid(row=row_idx, column=0, sticky=W, padx=5, pady=2)

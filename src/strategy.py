@@ -43,7 +43,8 @@ class TradingStrategy:
         self.end_hour = 20    
 
         # --- PROFIT SETTINGS ---
-        self.min_profit_target = 0.50    
+        self.use_profit_management = True
+        self.min_profit_target = 0.10    # Default if not in UI
         self.trailing_activation = 0.80  
         self.trailing_offset = 0.20      
         
@@ -64,6 +65,7 @@ class TradingStrategy:
 
         # CRT Settings
         self.crt_htf = 240
+        self.crt_zone_size = 0.25 # Entry zone is bottom/top 25% of the range
 
         # --- State ---
         self.last_trade_time = 0         
@@ -170,7 +172,7 @@ class TradingStrategy:
                     self.check_signals_crt(symbol, bid, ask, candles)
 
         # 3. Manage Profit 
-        if positions > 0:
+        if positions > 0 and self.use_profit_management:
             self.check_and_close_profit(symbol)
 
             # 4. Status Log (Once per 10 seconds)
@@ -785,8 +787,13 @@ class TradingStrategy:
         # 4. Use user-defined Small TF Lookback
         lookback = getattr(self, 'crt_lookback', 10)
 
-        # 5. Visual Feedback: Draw Range on MT5
-        # Only draw every 10 seconds to avoid spamming
+        # 5. Execution Parameters
+        range_width = crt_high - crt_low
+        if range_width <= 0: return 
+        entry_threshold = range_width * getattr(self, 'crt_zone_size', 0.25)
+        atr = self.calculate_atr(candles)
+
+        # 6. Visual Feedback: Draw Range on MT5
         if not hasattr(self, 'last_crt_draw'): self.last_crt_draw = 0
         if time.time() - self.last_crt_draw > 10:
             # Draw a box representing the HTF range
@@ -796,24 +803,30 @@ class TradingStrategy:
             )
             self.connector.send_text_command(f"CRT_LBL_HI", 5, crt_high, " turquoise", f"{htf_label} RANGE HI")
             self.connector.send_text_command(f"CRT_LBL_LO", 5, crt_low, " turquoise", f"{htf_label} RANGE LO")
+            
+            # Draw entry thresholds (Dashed Lines)
+            buy_thresh = crt_low + entry_threshold
+            sell_thresh = crt_high - entry_threshold
+            self.connector.send_hline_command("CRT_BUY_BND", buy_thresh, "0x00FF00", 2) 
+            self.connector.send_hline_command("CRT_SELL_BND", sell_thresh, "0x0000FF", 2) 
+            
             self.last_crt_draw = time.time()
 
-        # 6. Sweep Detection Logic
+        # 7. Sweep Detection Logic
         current_price = (bid + ask) / 2
         conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
         if conf < 50: return 
 
+        # 8. Execution Logic with Proximity Check
         recent_candles = candles[-lookback:]
         recent_lows = [c['low'] for c in recent_candles]
         min_recent = min(recent_lows)
         recent_highs = [c['high'] for c in recent_candles]
         max_recent = max(recent_highs)
-
-        # 7. Execution Logic with Proximity Check
-        atr = self.calculate_atr(candles)
         
         # --- BULLISH CRT ---
-        if min_recent < crt_low and crt_low < current_price < (crt_low + atr) and direction == "BUY":
+        # Logic: Sweep below HTF Low -> Reclaim back into LTF Range Bottom Zone
+        if min_recent < crt_low and crt_low < current_price < (crt_low + entry_threshold) and direction == "BUY":
             if self._check_filters("BUY", ask):
                 sl = min_recent - (atr * 0.5)
                 tp = crt_high
@@ -824,7 +837,8 @@ class TradingStrategy:
                     self.execute_trade("BUY", symbol, self.lot_size, f"CRT_SWEEP_{htf_label}", sl, tp)
 
         # --- BEARISH CRT ---
-        elif max_recent > crt_high and crt_high > current_price > (crt_high - atr) and direction == "SELL":
+        # Logic: Sweep above HTF High -> Reclaim back into LTF Range Top Zone
+        elif max_recent > crt_high and crt_high > current_price > (crt_high - entry_threshold) and direction == "SELL":
             if self._check_filters("SELL", bid):
                 sl = max_recent + (atr * 0.5)
                 tp = crt_low
@@ -926,6 +940,6 @@ class TradingStrategy:
 
         # 3. Take Profit Target
         if self.current_profit >= self.min_profit_target and self.peak_profit < self.trailing_activation:
-            logger.info(f"💰 TARGET HIT: {self.current_profit:.2f}")
+            logger.info(f"💰 TARGET HIT: ${self.current_profit:.2f}. Closing...")
             self.connector.close_profit(symbol)
             self.break_even_active = False

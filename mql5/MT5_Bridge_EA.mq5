@@ -42,8 +42,14 @@ void OnTimer()
     for(int i=0; i<total_symbols; i++) symbols_list += SymbolName(i, true) + (i < total_symbols - 1 ? "," : "");
 
     string candle_history = "";
-    // --- FIX: Reduced from 300 to 60 to prevent lag/timeouts ---
-    int candles_to_send = 500; 
+    int candles_to_send = 200; // Base default
+    if(GlobalVariableCheck("Py_Req_History")) {
+        candles_to_send = (int)GlobalVariableGet("Py_Req_History");
+    }
+    
+    int available = iBars(_Symbol, _Period);
+    if(candles_to_send > available) candles_to_send = available;
+
     for(int i=0; i<candles_to_send; i++) {
         candle_history += DoubleToString(iHigh(_Symbol, _Period, i), _Digits) + "," +
                           DoubleToString(iLow(_Symbol, _Period, i), _Digits) + "," +
@@ -102,7 +108,9 @@ void ProcessCommand(string cmd)
         if(tf==1) p=PERIOD_M1; else if(tf==5) p=PERIOD_M5; else if(tf==15) p=PERIOD_M15;
         else if(tf==30) p=PERIOD_M30;
         else if(tf==60) p=PERIOD_H1; else if(tf==240) p=PERIOD_H4; else if(tf==1440) p=PERIOD_D1;
-        ChartSetSymbolPeriod(0, symbol, p); return;
+        ChartSetSymbolPeriod(0, symbol, p); 
+        GlobalVariableDel("Py_Req_History");
+        return;
     }
     
     // --- DRAWING COMMANDS ---
@@ -131,13 +139,27 @@ void ProcessCommand(string cmd)
     }
 
     if(action == "CLEAN_CHART") { ObjectsDeleteAll(0, "Py_"); return; }
-    if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") { SymbolSelect(symbol, true); ChartSetSymbolPeriod(0, symbol, _Period); return; }
+    if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") { 
+        SymbolSelect(symbol, true); 
+        ChartSetSymbolPeriod(0, symbol, _Period); 
+        GlobalVariableDel("Py_Req_History");
+        return; 
+    }
     
     double lot = (ArraySize(parts) >= 3) ? StringToDouble(parts[2]) : DefaultLot;
     double sl = (ArraySize(parts) >= 4) ? StringToDouble(parts[3]) : 0;
     double tp = (ArraySize(parts) >= 5) ? StringToDouble(parts[4]) : 0;
     double price = (ArraySize(parts) >= 6) ? StringToDouble(parts[5]) : 0;
     
+    if(action == "GET_HISTORY") {
+        if(ArraySize(parts) < 3) return;
+        int count = (int)StringToInteger(parts[2]);
+        int available = iBars(_Symbol, _Period);
+        if(count > available) count = available;
+        if(count > 0) GlobalVariableSet("Py_Req_History", count);
+        return;
+    }
+
     if(action == "BUY")             TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
     else if(action == "SELL")        TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
     else if(action == "BUY_LIMIT")   TradePending(symbol, ORDER_TYPE_BUY_LIMIT, lot, price, sl, tp);
