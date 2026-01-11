@@ -47,14 +47,14 @@ class TradingBotUI(tb.Window):
         self.trail_offset_var = tk.DoubleVar(value=0.20)
         self.rr_ratio_var = tk.DoubleVar(value=2.0)
 
-        # Indicator Settings
-        self.rsi_period_var = tk.IntVar(value=14)
-        self.rsi_buy_var = tk.IntVar(value=40)
-        self.rsi_sell_var = tk.IntVar(value=60)
+        # Indicator Settings (Optimized for M5)
+        self.rsi_period_var = tk.IntVar(value=9)
+        self.rsi_buy_var = tk.IntVar(value=35)
+        self.rsi_sell_var = tk.IntVar(value=65)
         
-        self.macd_fast_var = tk.IntVar(value=12)
-        self.macd_slow_var = tk.IntVar(value=26)
-        self.macd_signal_var = tk.IntVar(value=9)
+        self.macd_fast_var = tk.IntVar(value=8)
+        self.macd_slow_var = tk.IntVar(value=21)
+        self.macd_signal_var = tk.IntVar(value=5)
 
         self.bb_period_var = tk.IntVar(value=20)
         self.bb_dev_var = tk.DoubleVar(value=2.0)
@@ -104,13 +104,22 @@ class TradingBotUI(tb.Window):
         for var in vars_to_trace:
             var.trace_add("write", self._on_setting_changed)
 
+    def _safe_get(self, var, default=0):
+        """Safely get a value from a Tkinter variable, returning default if empty."""
+        try:
+            val = var.get()
+            return val if val != "" else default
+        except:
+            return default
+
     def _sync_ui_to_strategy(self):
         if self.strategy:
             try:
+                # Basic Settings
                 self.strategy.set_active(self.auto_trade_var.get())
-                self.strategy.max_positions = self.max_pos_var.get()
-                self.strategy.lot_size = self.lot_size_var.get()
-                self.strategy.trade_cooldown = self.cooldown_var.get()
+                self.strategy.max_positions = self._safe_get(self.max_pos_var, 1)
+                self.strategy.lot_size = self._safe_get(self.lot_size_var, 0.01)
+                self.strategy.trade_cooldown = self._safe_get(self.cooldown_var, 15.0)
                 
                 # Logic & Filters
                 self.strategy.strategy_mode = self.strategy_mode_var.get()
@@ -118,49 +127,57 @@ class TradingBotUI(tb.Window):
                 self.strategy.use_zone_filter = self.use_zone_filter_var.get()
 
                 # Profit
-                self.strategy.min_profit_target = self.min_profit_var.get()
-                self.strategy.trailing_activation = self.trail_active_var.get()
-                self.strategy.trailing_offset = self.trail_offset_var.get()
-                self.strategy.risk_reward_ratio = self.rr_ratio_var.get()
+                self.strategy.min_profit_target = self._safe_get(self.min_profit_var, 0.5)
+                self.strategy.trailing_activation = self._safe_get(self.trail_active_var, 0.8)
+                self.strategy.trailing_offset = self._safe_get(self.trail_offset_var, 0.2)
+                self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 2.0)
 
                 # Indicators
-                self.strategy.rsi_period = self.rsi_period_var.get()
-                self.strategy.rsi_buy_threshold = self.rsi_buy_var.get()
-                self.strategy.rsi_sell_threshold = self.rsi_sell_var.get()
+                self.strategy.rsi_period = self._safe_get(self.rsi_period_var, 14)
+                self.strategy.rsi_buy_threshold = self._safe_get(self.rsi_buy_var, 30)
+                self.strategy.rsi_sell_threshold = self._safe_get(self.rsi_sell_var, 70)
                 
-                self.strategy.macd_fast = self.macd_fast_var.get()
-                self.strategy.macd_slow = self.macd_slow_var.get()
-                self.strategy.macd_signal = self.macd_signal_var.get()
+                self.strategy.macd_fast = self._safe_get(self.macd_fast_var, 12)
+                self.strategy.macd_slow = self._safe_get(self.macd_slow_var, 26)
+                self.strategy.macd_signal = self._safe_get(self.macd_signal_var, 9)
 
-                self.strategy.bb_period = self.bb_period_var.get()
-                self.strategy.bb_dev = self.bb_dev_var.get()
+                self.strategy.bb_period = self._safe_get(self.bb_period_var, 20)
+                self.strategy.bb_dev = self._safe_get(self.bb_dev_var, 2.0)
 
-                self.strategy.ema_fast = self.ema_fast_var.get()
-                self.strategy.ema_slow = self.ema_slow_var.get()
+                self.strategy.ema_fast = self._safe_get(self.ema_fast_var, 9)
+                self.strategy.ema_slow = self._safe_get(self.ema_slow_var, 21)
 
                 # Time Filter Sync
                 self.strategy.use_time_filter = self.use_time_filter_var.get()
                 self.strategy.time_zone = self.time_zone_var.get()
-                self.strategy.start_hour = self.start_hour_var.get()
-                self.strategy.end_hour = self.end_hour_var.get()
+                self.strategy.start_hour = self._safe_get(self.start_hour_var, 8)
+                self.strategy.end_hour = self._safe_get(self.end_hour_var, 20)
 
                 logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode} | Trend={self.strategy.use_trend_filter} | Zone={self.strategy.use_zone_filter}")
-            except Exception as e:
+            except (tk.TclError, ValueError, TypeError):
+                # Silently catch errors while user is typing in boxes
                 pass
+            except Exception as e:
+                logging.debug(f"Sync error: {e}")
 
     def _update_strategy_logic_text(self):
         if not hasattr(self, 'lbl_buy_logic'): return
         
         mode = self.strategy_mode_var.get()
+        rsi_b = self._safe_get(self.rsi_buy_var, 30)
+        rsi_s = self._safe_get(self.rsi_sell_var, 70)
+        
         if mode == "MACD_RSI":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: RSI < {self.rsi_buy_var.get()} & MACD > Sig")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: RSI > {self.rsi_sell_var.get()} & MACD < Sig")
+            self.lbl_buy_logic.config(text=f"🟢 BUY: RSI < {rsi_b} & MACD > Sig")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: RSI > {rsi_s} & MACD < Sig")
         elif mode == "BOLLINGER":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Price < Lower BB & RSI < {self.rsi_buy_var.get()}")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Price > Upper BB & RSI > {self.rsi_sell_var.get()}")
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Price < Lower BB & RSI < {rsi_b}")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Price > Upper BB & RSI > {rsi_s}")
         elif mode == "EMA_CROSS":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: EMA {self.ema_fast_var.get()} Crosses Above {self.ema_slow_var.get()}")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: EMA {self.ema_fast_var.get()} Crosses Below {self.ema_slow_var.get()}")
+            ema_f = self._safe_get(self.ema_fast_var, 9)
+            ema_s = self._safe_get(self.ema_slow_var, 21)
+            self.lbl_buy_logic.config(text=f"🟢 BUY: EMA {ema_f} Crosses Above {ema_s}")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: EMA {ema_f} Crosses Below {ema_s}")
         elif mode == "SMC":
             self.lbl_buy_logic.config(text=f"🟢 BUY: Retrace into Bullish FVG (Gap)")
             self.lbl_sell_logic.config(text=f"🔴 SELL: Retrace into Bearish FVG (Gap)")
@@ -304,9 +321,10 @@ class TradingBotUI(tb.Window):
     def _update_news(self):
         if self.news_engine:
             news_str = self.news_engine.get_latest_news(10)
+            sync_time = time.strftime("%H:%M:%S")
             self.news_text.delete(1.0, tk.END)
-            self.news_text.insert(tk.END, news_str)
-        self.after(30000, self._update_news)
+            self.news_text.insert(tk.END, f"🛰️ Last News Sync: {sync_time}\n" + "-"*40 + "\n" + news_str)
+        self.after(5000, self._update_news)
 
     def _setup_logging(self):
         formatter = logging.Formatter('%(asctime)s: %(message)s', datefmt='%H:%M:%S')
