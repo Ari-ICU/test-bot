@@ -68,6 +68,12 @@ class TradingBotUI(tb.Window):
         self.manual_sl_var = tk.DoubleVar(value=0.0)
         self.manual_tp_var = tk.DoubleVar(value=0.0)
         
+        # Time Filter Settings
+        self.use_time_filter_var = tk.BooleanVar(value=True)
+        self.time_zone_var = tk.StringVar(value="Auto")
+        self.start_hour_var = tk.IntVar(value=8)
+        self.end_hour_var = tk.IntVar(value=20)
+        
         self._bind_traces()
 
         self.mt5_connector.on_tick_received = self._on_tick_received
@@ -92,7 +98,8 @@ class TradingBotUI(tb.Window):
             self.min_profit_var, self.trail_active_var, self.trail_offset_var, self.rr_ratio_var,
             self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
             self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
-            self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var
+            self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var,
+            self.use_time_filter_var, self.time_zone_var, self.start_hour_var, self.end_hour_var
         ]
         for var in vars_to_trace:
             var.trace_add("write", self._on_setting_changed)
@@ -130,6 +137,12 @@ class TradingBotUI(tb.Window):
 
                 self.strategy.ema_fast = self.ema_fast_var.get()
                 self.strategy.ema_slow = self.ema_slow_var.get()
+
+                # Time Filter Sync
+                self.strategy.use_time_filter = self.use_time_filter_var.get()
+                self.strategy.time_zone = self.time_zone_var.get()
+                self.strategy.start_hour = self.start_hour_var.get()
+                self.strategy.end_hour = self.end_hour_var.get()
 
                 logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode} | Trend={self.strategy.use_trend_filter} | Zone={self.strategy.use_zone_filter}")
             except Exception as e:
@@ -267,6 +280,22 @@ class TradingBotUI(tb.Window):
             if self.strategy and hasattr(self.strategy, 'reset_state'):
                 self.strategy.reset_state()
 
+    def _on_tz_change(self, event=None):
+        tz = self.time_zone_var.get()
+        # Official Session Hours (Local Time)
+        session_hours = {
+            "London": (8, 17),
+            "New York": (8, 17),
+            "Tokyo": (9, 18),
+            "Sydney": (7, 16),
+            "Auto": (0, 23) # Open wide for auto-rotation
+        }
+        if tz in session_hours:
+            start, end = session_hours[tz]
+            self.start_hour_var.set(start)
+            self.end_hour_var.set(end)
+            logging.info(f"Market Hours synced for {tz}: {start:02d}:00 - {end:02d}:00")
+
     def _set_combo_values(self, symbols_list):
         self.combo_symbol['values'] = symbols_list
         if symbols_list and not self.symbol_var.get(): 
@@ -297,8 +326,16 @@ class TradingBotUI(tb.Window):
         self.after(100, self._check_log_queue)
     
     def _update_header_time(self):
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        if hasattr(self, 'lbl_time'): self.lbl_time.config(text=now)
+        now = time.strftime("%H:%M:%S")
+        market_info = ""
+        if self.strategy:
+            session = self.strategy.active_session_name
+            all_times = self.strategy.get_session_times()
+            market_info = f" | {session} Session | {all_times}"
+            
+        if hasattr(self, 'lbl_time'): 
+            self.lbl_time.config(text=f"🕒 {now}{market_info}")
+        
         self.after(1000, self._update_header_time)
 
     def _create_widgets(self):
@@ -310,7 +347,7 @@ class TradingBotUI(tb.Window):
         ttk.Label(header_frame, text="🛡️ MT5 Multi-Strategy Bot", font=("Segoe UI", 14, "bold"), bootstyle="inverse-primary").pack(side=LEFT)
         self.lbl_mt5 = ttk.Label(header_frame, text="MT5: Connecting...", bootstyle="warning")
         self.lbl_mt5.pack(side=LEFT, padx=20)
-        self.lbl_time = ttk.Label(header_frame, text="")
+        self.lbl_time = ttk.Label(header_frame, text="", font=("Segoe UI", 9))
         self.lbl_time.pack(side=RIGHT)
 
         notebook = ttk.Notebook(main_frame, padding=5)
@@ -462,6 +499,23 @@ class TradingBotUI(tb.Window):
         risk_frame = ttk.LabelFrame(col0_frame, text="Risk Management", padding=10, bootstyle="success")
         risk_frame.pack(fill=X, pady=5)
         self._add_setting(risk_frame, "Risk/Reward Ratio (1:x):", self.rr_ratio_var, 1.0, 10.0, 0)
+
+        # NEW: Time Filter
+        time_frame = ttk.LabelFrame(col0_frame, text="Time Filter", padding=10, bootstyle="info")
+        time_frame.pack(fill=X, pady=5)
+        ttk.Checkbutton(time_frame, text="Use Time Filter", variable=self.use_time_filter_var, bootstyle="round-toggle").pack(anchor=W, pady=2)
+        
+        ttk.Label(time_frame, text="Time Zone (Session):").pack(anchor=W, pady=(5,0))
+        self.combo_tz = ttk.Combobox(time_frame, textvariable=self.time_zone_var, state="readonly")
+        self.combo_tz['values'] = ["Local", "London", "New York", "Tokyo", "Sydney", "Auto"]
+        self.combo_tz.pack(fill=X, pady=2)
+        self.combo_tz.bind("<<ComboboxSelected>>", self._on_tz_change)
+        
+        # Grid frame for the spinboxes
+        time_grid = ttk.Frame(time_frame)
+        time_grid.pack(fill=X, pady=5)
+        self._add_setting(time_grid, "Start Hour:", self.start_hour_var, 0, 23, 0)
+        self._add_setting(time_grid, "End Hour:", self.end_hour_var, 0, 23, 1)
 
         # --- Column 1: Profit ---
         col1_frame = ttk.Frame(scroll_frame)

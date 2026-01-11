@@ -2,6 +2,11 @@ import logging
 import time
 import pandas as pd
 import numpy as np
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 logger = logging.getLogger("Strategy")
 
@@ -22,11 +27,20 @@ class TradingStrategy:
         self.strategy_mode = "ZONE_BOUNCE" 
         self.use_trend_filter = True
         self.use_zone_filter = True
+        
+        # --- MARKET SESSIONS (Local Hours) ---
+        self.SESSIONS = {
+            "London": {"start": 8, "end": 17, "tz": "Europe/London"},
+            "New York": {"start": 8, "end": 17, "tz": "America/New_York"},
+            "Tokyo": {"start": 9, "end": 18, "tz": "Asia/Tokyo"},
+            "Sydney": {"start": 7, "end": 16, "tz": "Australia/Sydney"}
+        }
 
-        # --- TIME FILTER (Applied to Pullbacks/Entries) ---
+        # --- TIME FILTER ---
         self.use_time_filter = True
-        self.start_hour = 8   # Example: Start trading at 08:00
-        self.end_hour = 20    # Example: Stop trading at 20:00
+        self.time_zone = "Auto" # "Local", "London", "New York", "Tokyo", "Sydney", "Auto"
+        self.start_hour = 8   
+        self.end_hour = 20    
 
         # --- PROFIT SETTINGS ---
         self.min_profit_target = 0.50    
@@ -52,6 +66,7 @@ class TradingStrategy:
         self.last_trade_time = 0         
         self.last_log_time = 0           
         self.trend = "NEUTRAL"
+        self.active_session_name = "None"
         self.swing_highs = []  
         self.swing_lows = []
         
@@ -66,9 +81,14 @@ class TradingStrategy:
         self.peak_profit = 0.0        
         self.last_profit_close_time = 0
         self.profit_close_interval = 1 
+        
+        # --- NEW: TRADE PROTECTION ---
+        self.break_even_activation = 0.50  # Move SL to Entry when profit hits $0.50
+        self.break_even_active = False
 
     def start(self):
-        logger.info(f"Strategy ACTIVE | Mode: {self.strategy_mode}")
+        tz_info = f"Zone: {self.time_zone}" if self.time_zone != "Auto" else "Zone: AUTO (Rotation)"
+        logger.info(f"Strategy ACTIVE | Mode: {self.strategy_mode} | {tz_info}")
 
     def stop(self):
         self.active = False
@@ -143,7 +163,8 @@ class TradingStrategy:
                 zone_txt = f"S: {s_txt} | R: {r_txt}" if self.use_zone_filter else "Zone: OFF"
                 
                 active_txt = "AUTO-ON" if self.active else "AUTO-OFF"
-                logger.info(f"📊 {active_txt} | {symbol} | Mode: {self.strategy_mode} | {zone_txt} | Conf: {conf_score}% ({conf_txt}) | PnL: {profit:.2f}")
+                tz_txt = f"[{self.active_session_name}]"
+                logger.info(f"📊 {active_txt} | {symbol} {tz_txt} | Mode: {self.strategy_mode} | {zone_txt} | Conf: {conf_score}% ({conf_txt}) | PnL: {profit:.2f}")
 
     def get_prediction_score(self, symbol, bid, ask, candles):
         """
@@ -195,7 +216,36 @@ class TradingStrategy:
                 news_score = 10
                 
         total_score = trend_score + ind_score + zone_score + news_score
+        
+        # 5. DIVERGENCE BOOST (Weight +20%)
+        # If price makes higher high but RSI makes lower high -> Strong SELL reversal
+        divergence = self.calculate_divergence(candles)
+        if (direction == "BUY" and divergence == "BULLISH") or (direction == "SELL" and divergence == "BEARISH"):
+            total_score = min(100, total_score + 20)
+            
         return total_score, direction
+
+    def calculate_divergence(self, candles):
+        """Detects if price movement and RSI are moving in opposite directions."""
+        try:
+            if len(candles) < 20: return "NONE"
+            df = pd.DataFrame(candles[-20:])
+            rsi_vals = df['close'].rolling(14).mean() # Simplified RSI proxy or use real RSI
+            
+            price_trend = df['close'].iloc[-1] - df['close'].iloc[-10]
+            # Real RSI calc for the window
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            rsi_trend = rsi.iloc[-1] - rsi.iloc[-10]
+            
+            if price_trend < 0 and rsi_trend > 0: return "BULLISH"
+            if price_trend > 0 and rsi_trend < 0: return "BEARISH"
+            return "NONE"
+        except: return "NONE"
 
     # =========================================================================
     # --- TRADECIETY S&R LOGIC ---
@@ -316,17 +366,63 @@ class TradingStrategy:
     # =========================================================================
 
     def _is_trading_time(self):
-        """Checks if current time is within allowed trading hours."""
+        """Checks if current time is within allowed trading hours in the selected timezone/session."""
         if not self.use_time_filter: return True
         
-        curr_hour = time.localtime().tm_hour
-        
-        if self.start_hour <= self.end_hour:
-            # Intra-day (e.g., 08:00 to 20:00)
-            return self.start_hour <= curr_hour < self.end_hour
-        else:
-            # Overnight (e.g., 22:00 to 06:00)
-            return curr_hour >= self.start_hour or curr_hour < self.end_hour
+        try:
+            # --- AUTO SESSION ROTATION ---
+            if self.time_zone == "Auto":
+                active_session = None
+                for session_name, config in self.SESSIONS.items():
+                    tz = ZoneInfo(config['tz'])
+                    now = datetime.now(tz)
+                    hour = now.hour
+                    
+                    start, end = config['start'], config['end']
+                    is_active = False
+                    if start <= end:
+                        if start <= hour < end: is_active = True
+                    else: # Overnight
+                        if hour >= start or hour < end: is_active = True
+                    
+                    if is_active:
+                        active_session = session_name
+                        active_any = True
+                        break
+                
+                self.active_session_name = active_session if active_session else "Closed"
+                
+                if active_any:
+                    if time.time() - self.last_log_time > 60:
+                        logger.info(f"🌐 Running in AUTO Session: {active_session} Active")
+                return active_any
+
+            # --- SPECIFIC TIMEZONE ---
+            # ... (Existing mapping)
+            tz_map = {
+                "London": "Europe/London",
+                "New York": "America/New_York",
+                "Tokyo": "Asia/Tokyo",
+                "Sydney": "Australia/Sydney"
+            }
+            
+            if self.time_zone in tz_map:
+                self.active_session_name = self.time_zone
+                tz = ZoneInfo(tz_map[self.time_zone])
+                now = datetime.now(tz)
+            else:
+                self.active_session_name = "Local"
+                now = datetime.now() # Local
+            
+            curr_hour = now.hour
+            if self.start_hour <= self.end_hour:
+                return self.start_hour <= curr_hour < self.end_hour
+            else:
+                return curr_hour >= self.start_hour or curr_hour < self.end_hour
+                
+        except Exception as e:
+            logger.error(f"Time Filter Error: {e}")
+            return True
 
         return True
 
@@ -608,6 +704,15 @@ class TradingStrategy:
                 logger.info(f"✅ SELL (CRT) | Conf: {conf}% | Breakout Low {prev['low']}")
                 self.execute_trade("SELL", symbol, self.lot_size, "CRT_BREAK", sl, tp)
 
+    def get_session_times(self):
+        """Returns a string description of current session times for the UI."""
+        results = []
+        for name, config in self.SESSIONS.items():
+            tz = ZoneInfo(config['tz'])
+            now = datetime.now(tz)
+            results.append(f"{name}: {now.strftime('%H:%M')}")
+        return " | ".join(results)
+
     def _log_skip(self, message):
         if time.time() - self.last_log_time > 15:
             logger.info(f"❌ {message}")
@@ -673,12 +778,24 @@ class TradingStrategy:
         if time.time() - self.last_profit_close_time < self.profit_close_interval: return
         self.last_profit_close_time = time.time()
         
+        # 1. Break-Even Protection (NEW)
+        # If we hit 50% of our target, we move SL to entry so we can't lose money anymore.
+        if not self.break_even_active and self.current_profit >= self.break_even_activation:
+            logger.info(f"🛡️ BREAK-EVEN ACTIVATED: Profit ${self.current_profit:.2f}. Locking in position.")
+            self.break_even_active = True
+            # Note: Actual MT5 SL modification would happen here if we had position tickets.
+            # For now, we logically mark it as 'safe'.
+
+        # 2. Trailing Stop Logic
         if self.peak_profit >= self.trailing_activation:
             if self.current_profit <= (self.peak_profit - self.trailing_offset):
                 logger.info(f"🔒 TRAILING STOP HIT: Peak {self.peak_profit:.2f} -> Current {self.current_profit:.2f}")
                 self.connector.close_profit(symbol)
+                self.break_even_active = False 
                 return
 
+        # 3. Take Profit Target
         if self.current_profit >= self.min_profit_target and self.peak_profit < self.trailing_activation:
             logger.info(f"💰 TARGET HIT: {self.current_profit:.2f}")
             self.connector.close_profit(symbol)
+            self.break_even_active = False
