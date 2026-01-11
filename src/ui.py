@@ -73,6 +73,9 @@ class TradingBotUI(tb.Window):
         self.mt5_connector.on_tick_received = self._on_tick_received
         self.mt5_connector.on_symbols_received = self._on_symbols_received
         
+        # Request symbol list from MT5 immediately
+        self.mt5_connector.request_symbols()
+        
         self._setup_logging()
         self._create_widgets()
         self._check_log_queue()
@@ -250,6 +253,20 @@ class TradingBotUI(tb.Window):
     def _on_mode_change(self, event=None):
         self._on_setting_changed()
 
+    def _on_symbol_change(self, event=None):
+        symbol = self.symbol_var.get()
+        if symbol:
+            self.mt5_connector.change_symbol(symbol)
+            logging.info(f"Requested Symbol change to: {symbol}")
+            # Reset UI labels to show we're waiting for new data
+            self.lbl_live_rsi.config(text="RSI: Waiting...", bootstyle="secondary")
+            self.lbl_live_macd.config(text="MACD: Waiting...", bootstyle="secondary")
+            self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
+            
+            # Reset strategy state if available
+            if self.strategy and hasattr(self.strategy, 'reset_state'):
+                self.strategy.reset_state()
+
     def _set_combo_values(self, symbols_list):
         self.combo_symbol['values'] = symbols_list
         if symbols_list and not self.symbol_var.get(): 
@@ -373,6 +390,7 @@ class TradingBotUI(tb.Window):
         ttk.Label(sym_frame, text="Symbol:", font=("Segoe UI", 9)).pack(anchor=W)
         self.combo_symbol = ttk.Combobox(sym_frame, textvariable=self.symbol_var, state="readonly", width=10)
         self.combo_symbol.pack(fill=X)
+        self.combo_symbol.bind("<<ComboboxSelected>>", self._on_symbol_change)
 
         # Timeframe
         tf_frame = ttk.Frame(sel_frame)
