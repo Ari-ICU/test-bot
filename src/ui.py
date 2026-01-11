@@ -74,6 +74,10 @@ class TradingBotUI(tb.Window):
         self.start_hour_var = tk.IntVar(value=8)
         self.end_hour_var = tk.IntVar(value=20)
         
+        # CRT Settings
+        self.crt_htf_var = tk.IntVar(value=240)       # Big Timeframe (e.g. 4H)
+        self.crt_lookback_var = tk.IntVar(value=10)   # Small Timeframe Lookback (Candles)
+        
         self._bind_traces()
 
         self.mt5_connector.on_tick_received = self._on_tick_received
@@ -99,7 +103,8 @@ class TradingBotUI(tb.Window):
             self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
             self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
             self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var,
-            self.use_time_filter_var, self.time_zone_var, self.start_hour_var, self.end_hour_var
+            self.use_time_filter_var, self.time_zone_var, self.start_hour_var, self.end_hour_var,
+            self.crt_htf_var, self.crt_lookback_var
         ]
         for var in vars_to_trace:
             var.trace_add("write", self._on_setting_changed)
@@ -153,6 +158,10 @@ class TradingBotUI(tb.Window):
                 self.strategy.start_hour = self._safe_get(self.start_hour_var, 8)
                 self.strategy.end_hour = self._safe_get(self.end_hour_var, 20)
 
+                # CRT Sync
+                self.strategy.crt_htf = self._safe_get(self.crt_htf_var, 240)
+                self.strategy.crt_lookback = self._safe_get(self.crt_lookback_var, 10)
+
                 logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode} | Trend={self.strategy.use_trend_filter} | Zone={self.strategy.use_zone_filter}")
             except (tk.TclError, ValueError, TypeError):
                 # Silently catch errors while user is typing in boxes
@@ -182,8 +191,10 @@ class TradingBotUI(tb.Window):
             self.lbl_buy_logic.config(text=f"🟢 BUY: Retrace into Bullish FVG (Gap)")
             self.lbl_sell_logic.config(text=f"🔴 SELL: Retrace into Bearish FVG (Gap)")
         elif mode == "CRT":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Break above Prev Candle High")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Break below Prev Candle Low")
+            htf = self._safe_get(self.crt_htf_var, 240)
+            h_label = f"{htf//60}H" if htf % 60 == 0 else f"{htf}m"
+            self.lbl_buy_logic.config(text=f"🟢 BUY: {h_label} Low Sweep & M5/M15 Reclaim")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: {h_label} High Sweep & M5/M15 Reclaim")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         self.last_price_update = time.time() 
@@ -214,7 +225,18 @@ class TradingBotUI(tb.Window):
             self._update_card(self.lbl_profit, f"${profit:+,.2f}", "success" if profit >= 0 else "danger")
             self._update_card(self.lbl_positions, f"{positions}/{self.max_pos_var.get()}", "warning" if positions >= self.max_pos_var.get() else "secondary")
             
-            if self.strategy and len(candles) > 50:
+            # --- Sync Status Calculation ---
+            min_needed = 200
+            if self.strategy_mode_var.get() == "CRT":
+                min_needed = (self.crt_htf_var.get() // 5) * 3 
+            
+            count = len(candles)
+            if count >= min_needed:
+                self._update_card(self.lbl_sync, "READY", "success")
+            else:
+                self._update_card(self.lbl_sync, f"{count}/{min_needed}", "warning")
+
+            if self.strategy and len(candles) > 20:
                 rsi, macd, signal = self.strategy.calculate_indicators(candles)
                 
                 rsi_color = "success" if rsi < self.rsi_buy_var.get() else "danger" if rsi > self.rsi_sell_var.get() else "secondary"
@@ -407,6 +429,10 @@ class TradingBotUI(tb.Window):
         self._create_stat_card(left_frame, "📊 Positions", "0/0", "warning").pack(fill=X, pady=5)
         self.lbl_positions = left_frame.winfo_children()[-1].winfo_children()[0]
 
+        # Sync Card
+        self._create_stat_card(left_frame, "🔄 Data Sync", "Scanning...", "info").pack(fill=X, pady=5)
+        self.lbl_sync = left_frame.winfo_children()[-1].winfo_children()[0]
+
         # Right Column
         right_frame = ttk.Frame(parent, padding=10)
         right_frame.grid(row=0, column=1, sticky="nsew")
@@ -568,6 +594,28 @@ class TradingBotUI(tb.Window):
         self._add_setting(other_ind_frame, "BB Deviation:", self.bb_dev_var, 0.5, 4.0, 1)
         self._add_setting(other_ind_frame, "EMA Fast:", self.ema_fast_var, 2, 50, 2)
         self._add_setting(other_ind_frame, "EMA Slow:", self.ema_slow_var, 5, 200, 3)
+
+        # NEW: CRT Settings
+        crt_frame = ttk.LabelFrame(col2_frame, text="CRT Strategy Settings", padding=10, bootstyle="danger")
+        crt_frame.pack(fill=X, pady=5)
+        self._add_setting(crt_frame, "Big TF (Range) Min:", self.crt_htf_var, 15, 1440, 0)
+        self._add_setting(crt_frame, "Small TF (Sweep) Lookback:", self.crt_lookback_var, 1, 50, 1)
+        ttk.Label(crt_frame, text="(Range: 60=1H, 240=4H | Lookback: Candles)", font=("", 8), foreground="gray").grid(row=2, column=0, columnspan=2, sticky=W)
+        
+        # Guide Frame for Time Conversion
+        g_frame = ttk.Frame(crt_frame)
+        g_frame.grid(row=3, column=0, columnspan=2, sticky=W, pady=5)
+        
+        ttk.Label(g_frame, text="Formula: Lookback × Chart TF = Search Time", font=("", 8, "bold"), foreground="#e67e22").pack(anchor=W)
+        guide_text = (
+            "• M5 Chart  + 1 Lookback  = 5 Mins\n"
+            "• M5 Chart  + 12 Lookback = 60 Mins (1H)\n"
+            "• M15 Chart + 4 Lookback  = 60 Mins (1H)\n"
+            "• M1 Chart  + 10 Lookback = 10 Mins"
+        )
+        ttk.Label(g_frame, text=guide_text, font=("", 8), foreground="#bdc3c7", justify=LEFT).pack(anchor=W, padx=5)
+        
+        ttk.Label(crt_frame, text="Ensures Sweep & Reclaim logic is precise for\ndual-timeframe reversal confirmations.", font=("", 8), foreground="#00bc8c", justify=LEFT).grid(row=4, column=0, columnspan=2, sticky=W, pady=(5,0))
 
     def _add_setting(self, parent, label_text, variable, min_val, max_val, row_idx):
         ttk.Label(parent, text=label_text).grid(row=row_idx, column=0, sticky=W, padx=5, pady=2)

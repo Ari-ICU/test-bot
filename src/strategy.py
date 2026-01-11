@@ -62,6 +62,9 @@ class TradingStrategy:
         self.ema_fast = 9
         self.ema_slow = 21
 
+        # CRT Settings
+        self.crt_htf = 240
+
         # --- State ---
         self.last_trade_time = 0         
         self.last_log_time = 0           
@@ -110,7 +113,29 @@ class TradingStrategy:
         logging.info("Strategy state reset for new symbol.")
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
-        if not candles or len(candles) < 200: return
+        current_time = time.time()
+        # 0. Data Validation & Automated History Fetching
+        min_needed = 200 # Standard for indicators like 200 EMA
+        if self.strategy_mode == "CRT":
+            # CRT needs enough candles to build at least 2 HTF candles
+            ltf_mins = 5
+            if candles and len(candles) > 1:
+                ltf_mins = (candles[1]['time'] - candles[0]['time']) // 60
+            min_needed = (self.crt_htf // ltf_mins) * 3 # 3 candles for safety
+
+        if not candles or len(candles) < min_needed:
+            # Request more history if we haven't asked recently (every 5s)
+            if not hasattr(self, 'last_hist_req'): self.last_hist_req = 0
+            if current_time - self.last_hist_req > 5:
+                # Ask for slightly more than we need
+                self.connector.request_history(symbol, min_needed + 50)
+                self.last_hist_req = current_time
+                logging.info(f"Requesting {min_needed + 50} candles for {symbol}...")
+            
+            if candles and len(candles) > 0:
+                self._log_skip(f"Gathering data... ({len(candles)}/{min_needed} candles)")
+            return
+
         self.current_profit = profit 
 
         # --- Track Peak Profit ---
@@ -687,22 +712,127 @@ class TradingStrategy:
                     logger.info(f"✅ SELL (SMC) | Conf: {conf}% | Inside Bearish FVG")
                     self.execute_trade("SELL", symbol, self.lot_size, "SMC_FVG", sl, tp)
 
-    def check_signals_crt(self, symbol, bid, ask, candles):
-        if len(candles) < 3: return
-        prev = candles[1] 
-        conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
-        
-        if ask > prev['high'] and conf >= 60:
-            if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                logger.info(f"✅ BUY (CRT) | Conf: {conf}% | Breakout High {prev['high']}")
-                self.execute_trade("BUY", symbol, self.lot_size, "CRT_BREAK", sl, tp)
+    # =========================================================================
+    # --- UPDATED: CANDLE RANGE THEORY (CRT) STRATEGY ---
+    # =========================================================================
 
-        elif bid < prev['low'] and conf >= 60:
+    def get_htf_structure(self, candles, timeframe_minutes=240):
+        """
+        Reconstructs the Previous Higher Timeframe (HTF) Candle from M5 data.
+        Default: 240 minutes (4 Hours).
+        Returns: (prev_high, prev_low, range_status)
+        """
+        if not candles or len(candles) < 20: 
+            return None, None, "NO_DATA"
+
+        # 1. Convert list of dicts to DataFrame for easy resampling
+        df = pd.DataFrame(candles)
+        # Ensure 'time' is datetime (MT5 sends epoch int)
+        df['dt'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('dt', inplace=True)
+
+        # 2. Resample to HTF (e.g., 4H)
+        # Logic: Aggregate 5m candles into 4h blocks
+        htf_rule = f"{timeframe_minutes}min"
+        htf_candles = df.resample(htf_rule).agg({
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'open': 'first'
+        }).dropna()
+
+        # We need at least 2 completed HTF candles to identify the "Previous" range
+        if len(htf_candles) < 2:
+            return None, None, "INSUFFICIENT_DATA"
+
+        # 3. Get the "Previous" completed HTF candle
+        # [-1] is the current forming candle, [-2] is the last completed one
+        prev_htf = htf_candles.iloc[-2]
+        
+        return prev_htf['high'], prev_htf['low'], "OK"
+
+    def check_signals_crt(self, symbol, bid, ask, candles):
+        """
+        Candle Range Theory (CRT) Implementation:
+        Optimized for: M5/M15 (LTF) to catch H1/H4 (HTF) sweeps.
+        """
+        if len(candles) < 10: return
+        
+        # 1. Detect Candle Timeframe (minutes)
+        # Difference between two candles in minutes
+        ltf_mins = (candles[1]['time'] - candles[0]['time']) // 60
+        if ltf_mins <= 0: ltf_mins = 5 # Default fallback
+        
+        # 2. Get User-Defined HTF from UI (Default 240 = 4H)
+        htf_minutes = getattr(self, 'crt_htf', 240)
+        htf_label = "H4" if htf_minutes == 240 else "H1" if htf_minutes == 60 else f"{htf_minutes}m"
+        
+        # 3. Check if we have enough data (Need at least 2 full HTF candles + some buffer)
+        # e.g. for M5 to H4, we need (240/5) * 2 = 96 candles.
+        needed_candles = (htf_minutes // ltf_mins) * 2
+        if len(candles) < needed_candles:
+            # Fallback to H1 if history is limited but enough for 1H
+            if htf_minutes > 60 and len(candles) >= (60 // ltf_mins) * 2:
+                htf_minutes = 60
+                htf_label = "H1"
+            else:
+                self._log_skip(f"CRT waiting for enough {htf_label} history... (Got {len(candles)}/{needed_candles})")
+                return
+
+        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
+        if status != "OK": return
+
+        # 4. Use user-defined Small TF Lookback
+        lookback = getattr(self, 'crt_lookback', 10)
+
+        # 5. Visual Feedback: Draw Range on MT5
+        # Only draw every 10 seconds to avoid spamming
+        if not hasattr(self, 'last_crt_draw'): self.last_crt_draw = 0
+        if time.time() - self.last_crt_draw > 10:
+            # Draw a box representing the HTF range
+            self.connector.send_draw_command(
+                f"CRT_RANGE_{htf_label}", crt_high, crt_low, 
+                lookback + 20, 0, "64,224,208" # Turquoise
+            )
+            self.connector.send_text_command(f"CRT_LBL_HI", 5, crt_high, " turquoise", f"{htf_label} RANGE HI")
+            self.connector.send_text_command(f"CRT_LBL_LO", 5, crt_low, " turquoise", f"{htf_label} RANGE LO")
+            self.last_crt_draw = time.time()
+
+        # 6. Sweep Detection Logic
+        current_price = (bid + ask) / 2
+        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
+        if conf < 50: return 
+
+        recent_candles = candles[-lookback:]
+        recent_lows = [c['low'] for c in recent_candles]
+        min_recent = min(recent_lows)
+        recent_highs = [c['high'] for c in recent_candles]
+        max_recent = max(recent_highs)
+
+        # 7. Execution Logic with Proximity Check
+        atr = self.calculate_atr(candles)
+        
+        # --- BULLISH CRT ---
+        if min_recent < crt_low and crt_low < current_price < (crt_low + atr) and direction == "BUY":
+            if self._check_filters("BUY", ask):
+                sl = min_recent - (atr * 0.5)
+                tp = crt_high
+                risk = ask - sl
+                reward = tp - ask
+                if risk > 0 and (reward / risk) > 1.2:
+                    logger.info(f"✅ BUY (CRT) | {htf_label} Sweep Reclaim | Risk: {risk:.2f} | TP: {tp:.2f}")
+                    self.execute_trade("BUY", symbol, self.lot_size, f"CRT_SWEEP_{htf_label}", sl, tp)
+
+        # --- BEARISH CRT ---
+        elif max_recent > crt_high and crt_high > current_price > (crt_high - atr) and direction == "SELL":
             if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                logger.info(f"✅ SELL (CRT) | Conf: {conf}% | Breakout Low {prev['low']}")
-                self.execute_trade("SELL", symbol, self.lot_size, "CRT_BREAK", sl, tp)
+                sl = max_recent + (atr * 0.5)
+                tp = crt_low
+                risk = sl - bid
+                reward = bid - tp
+                if risk > 0 and (reward / risk) > 1.2:
+                    logger.info(f"✅ SELL (CRT) | {htf_label} Sweep Reclaim | Risk: {risk:.2f} | TP: {tp:.2f}")
+                    self.execute_trade("SELL", symbol, self.lot_size, f"CRT_SWEEP_{htf_label}", sl, tp)
 
     def get_session_times(self):
         """Returns a string description of current session times for the UI."""

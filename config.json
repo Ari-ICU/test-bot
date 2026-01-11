@@ -43,6 +43,7 @@
   "scalping": {
     "rsi_period": 14,
     "tp_amount": 0.50,
-    "max_spread": 20
+    "max_spread": 20,
+    "crt_htf_minutes": 240
   }
 }

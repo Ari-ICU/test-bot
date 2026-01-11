@@ -80,6 +80,9 @@ class MT5Connector:
         minutes = tf_map.get(tf_str, 1) 
         self._queue_simple(f"CHANGE_TF|{symbol}|{minutes}")
 
+    def request_history(self, symbol, count):
+        self._queue_simple(f"GET_HISTORY|{symbol}|{count}")
+
     def _queue_simple(self, cmd):
         with self.lock: self.command_queue.append(cmd)
 
