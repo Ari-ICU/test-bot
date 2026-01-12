@@ -70,6 +70,8 @@ class TradingStrategy:
         # --- State ---
         self.last_trade_time = 0         
         self.last_log_time = 0           
+        self.last_status_time = 0        # NEW: Timer for DASHBOARD logs
+        self.last_crt_diag_time = 0      # NEW: Timer for CRT diagnostics
         self.trend = "NEUTRAL"
         self.active_session_name = "None"
         self.swing_highs = []  
@@ -138,6 +140,11 @@ class TradingStrategy:
                 self._log_skip(f"Gathering data... ({len(candles)}/{min_needed} candles)")
             return
 
+        # --- FIX: Standardize to [Oldest, ..., Newest] ---
+        # MT5 sends [Newest, ..., Oldest] by default
+        if candles[0]['time'] > candles[-1]['time']:
+            candles = candles[::-1]
+        
         self.current_profit = profit 
 
         # --- Track Peak Profit ---
@@ -176,8 +183,8 @@ class TradingStrategy:
             self.check_and_close_profit(symbol)
 
             # 4. Status Log (Once per 10 seconds)
-            if current_time - self.last_log_time >= 10:
-                self.last_log_time = current_time
+            if current_time - self.last_status_time >= 10:
+                self.last_status_time = current_time
                 
                 # Prediction/Confidence check
                 conf_score, conf_txt = self.get_prediction_score(symbol, bid, ask, candles)
@@ -203,54 +210,49 @@ class TradingStrategy:
         rsi, macd, macd_sig = self.calculate_indicators(candles)
         atr = self.calculate_atr(candles)
         
-        # 1. Trend Alignment (Weight 30%)
-        trend_score = 0
-        direction = "NEUTRAL"
-        if "BULLISH" in self.trend:
-            trend_score = 30
-            direction = "BUY"
-        elif "BEARISH" in self.trend:
-            trend_score = 30
-            direction = "SELL"
+        # 1. Indicator-based score (Base Weight 40%)
+        # Determine inherent strength of markers regardless of trend
+        buy_strength = 0
+        sell_strength = 0
+        
+        if rsi < 50: buy_strength += 20
+        else: sell_strength += 20
+        
+        if macd > macd_sig: buy_strength += 20
+        else: sell_strength += 20
+        
+        # 2. Zone Proximity (Weight 20%)
+        near_supp = self._get_nearest_zone(bid, is_support=True)
+        if near_supp and (bid - near_supp['top']) < (atr * 2):
+            buy_strength += 20
             
-        # 2. Indicator Confluence (Weight 30%)
-        ind_score = 0
-        if direction == "BUY":
-            if rsi < 50: ind_score += 15
-            if macd > macd_sig: ind_score += 15
-        elif direction == "SELL":
-            if rsi > 50: ind_score += 15
-            if macd < macd_sig: ind_score += 15
-            
-        # 3. Zone Proximity (Weight 20%)
-        zone_score = 0
-        if direction == "BUY":
-            near_supp = self._get_nearest_zone(bid, is_support=True)
-            if near_supp and (bid - near_supp['top']) < (atr * 2):
-                zone_score = 20
-        elif direction == "SELL":
-            near_res = self._get_nearest_zone(bid, is_support=False)
-            if near_res and (near_res['bottom'] - bid) < (atr * 2):
-                zone_score = 20
+        near_res = self._get_nearest_zone(bid, is_support=False)
+        if near_res and (near_res['bottom'] - bid) < (atr * 2):
+            sell_strength += 20
                 
-        # 4. News Sentiment (Weight 20%)
-        news_score = 0
+        # 3. News Sentiment (Weight 20%)
         if self.news_engine:
             sentiment = self.news_engine.get_market_sentiment()
-            if (direction == "BUY" and sentiment == "BULLISH") or (direction == "SELL" and sentiment == "BEARISH"):
-                news_score = 20
-            elif sentiment == "NEUTRAL":
-                news_score = 10
-                
-        total_score = trend_score + ind_score + zone_score + news_score
+            if sentiment == "BULLISH": buy_strength += 20
+            elif sentiment == "BEARISH": sell_strength += 20
+            elif sentiment == "NEUTRAL": 
+                buy_strength += 10
+                sell_strength += 10
         
+        # 4. Trend Context (Weight 20%)
+        if "BULLISH" in self.trend: buy_strength += 20
+        elif "BEARISH" in self.trend: sell_strength += 20
+
         # 5. DIVERGENCE BOOST (Weight +20%)
-        # If price makes higher high but RSI makes lower high -> Strong SELL reversal
         divergence = self.calculate_divergence(candles)
-        if (direction == "BUY" and divergence == "BULLISH") or (direction == "SELL" and divergence == "BEARISH"):
-            total_score = min(100, total_score + 20)
-            
-        return total_score, direction
+        if divergence == "BULLISH": buy_strength = min(100, buy_strength + 20)
+        elif divergence == "BEARISH": sell_strength = min(100, sell_strength + 20)
+
+        # Result Logic
+        if buy_strength >= sell_strength:
+            return buy_strength, "BUY"
+        else:
+            return sell_strength, "SELL"
 
     def calculate_divergence(self, candles):
         """Detects if price movement and RSI are moving in opposite directions."""
@@ -285,11 +287,8 @@ class TradingStrategy:
         """
         if not candles: return
 
-        # --- FIX 1: Reverse Data to be [Oldest, ..., Newest] ---
-        # MT5 sends [Newest, ..., Oldest], so we flip it.
-        ts_candles = candles[::-1]
-
-        # Now ts_candles[-1] is the REAL current price
+        # Candles are already [Oldest -> Newest] from on_tick check
+        ts_candles = candles
         current_price = ts_candles[-1]['close']
         
         # Dynamic Tolerance (0.05% of price)
@@ -474,7 +473,7 @@ class TradingStrategy:
     def calculate_indicators(self, candles):
         try:
             df = pd.DataFrame(candles)
-            df = df.iloc[::-1].reset_index(drop=True) 
+            # Candles are already chronological [Oldest -> Newest]
             
             # RSI
             delta = df['close'].diff()
@@ -500,11 +499,15 @@ class TradingStrategy:
         # Symbol-agnostic Digit Handling
         is_high_value = current_price > 100 
         
+        # 0. NEWS PAUSE
+        if self.news_engine and self.news_engine.trading_pause:
+            self._log_skip("News Filter: Trading is currently PAUSED due to high-impact news.")
+            return False
+
         # 1. TIME FILTER
         if not self._is_trading_time():
             self._log_skip(f"Time Filter: Outside trading hours ({self.start_hour}:00 - {self.end_hour}:00)")
             return False
-
         # 2. ZONE FILTER
         if self.use_zone_filter:
             # Distances are already normalized by zone_tolerance (0.05% of price)
@@ -526,12 +529,16 @@ class TradingStrategy:
 
         # 3. Trend Filter
         if self.use_trend_filter:
-            if direction == "BUY" and "BEARISH" in self.trend:
-                self._log_skip(f"Trend Filter: Trend is {self.trend}.")
-                return False
-            if direction == "SELL" and "BULLISH" in self.trend:
-                self._log_skip(f"Trend Filter: Trend is {self.trend}.")
-                return False
+            # Reversal strategies (CRT/SMC) often trade against the 200 EMA trend
+            is_reversal_mode = self.strategy_mode in ["CRT", "SMC", "BOLLINGER"]
+            
+            if not is_reversal_mode:
+                if direction == "BUY" and "BEARISH" in self.trend:
+                    self._log_skip(f"Trend Filter: Trend is {self.trend}.")
+                    return False
+                if direction == "SELL" and "BULLISH" in self.trend:
+                    self._log_skip(f"Trend Filter: Trend is {self.trend}.")
+                    return False
         
         return True
     
@@ -1010,98 +1017,120 @@ class TradingStrategy:
 
     def check_signals_crt(self, symbol, bid, ask, candles):
         """
-        Candle Range Theory (CRT) Implementation:
-        Optimized for: M5/M15 (LTF) to catch H1/H4 (HTF) sweeps.
+        Candle Range Theory (CRT) - Fixed 'Missing Symbol' Error.
         """
         if len(candles) < 10: return
         
-        # 1. Detect Candle Timeframe (minutes)
-        # Difference between two candles in minutes
+        # 1. Helper: Estimate Timeframe & Requirements
         ltf_mins = (candles[1]['time'] - candles[0]['time']) // 60
-        if ltf_mins <= 0: ltf_mins = 5 # Default fallback
+        if ltf_mins <= 0: ltf_mins = 5
         
-        # 2. Get User-Defined HTF from UI (Default 240 = 4H)
         htf_minutes = getattr(self, 'crt_htf', 240)
         htf_label = "H4" if htf_minutes == 240 else "H1" if htf_minutes == 60 else f"{htf_minutes}m"
         
-        # 3. Check if we have enough data (Need at least 2 full HTF candles + some buffer)
-        # e.g. for M5 to H4, we need (240/5) * 2 = 96 candles.
         needed_candles = (htf_minutes // ltf_mins) * 2
-        if len(candles) < needed_candles:
-            # Fallback to H1 if history is limited but enough for 1H
-            if htf_minutes > 60 and len(candles) >= (60 // ltf_mins) * 2:
-                htf_minutes = 60
-                htf_label = "H1"
-            else:
-                self._log_skip(f"CRT waiting for enough {htf_label} history... (Got {len(candles)}/{needed_candles})")
-                return
+        if len(candles) < needed_candles: return
 
+        # 2. Get HTF Range
         crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
         if status != "OK": return
 
-        # 4. Use user-defined Small TF Lookback
+        # 3. Parameters
         lookback = getattr(self, 'crt_lookback', 10)
-
-        # 5. Execution Parameters
         range_width = crt_high - crt_low
         if range_width <= 0: return 
-        entry_threshold = range_width * getattr(self, 'crt_zone_size', 0.25)
+        
+        entry_threshold = range_width * getattr(self, 'crt_zone_size', 0.25) 
         atr = self.calculate_atr(candles)
 
-        # 6. Visual Feedback: Draw Range on MT5
+        # -----------------------------------------------------------
+        # SECURE LOGIC: Analyze PREVIOUS CLOSED CANDLE ([-2])
+        # -----------------------------------------------------------
+        last_closed = candles[-2]
+        close_price = last_closed['close']
+        open_price = last_closed['open']
+        
+        # Identify Candle Color
+        is_red = close_price < open_price
+        candle_color = "RED" if is_red else "GREEN"
+        display_color = "255,69,0" if is_red else "0,255,0" 
+
+        # Scan recent history for the Sweep
+        recent_history = candles[-(lookback+1):-1] 
+        recent_lows = [c['low'] for c in recent_history]
+        recent_highs = [c['high'] for c in recent_history]
+        
+        has_swept_low = min(recent_lows) < crt_low
+        has_swept_high = max(recent_highs) > crt_high
+        is_sweep_active = has_swept_low or has_swept_high
+
+        # -----------------------------------------------------------
+        # VISUAL UPDATE (FIXED)
+        # -----------------------------------------------------------
         if not hasattr(self, 'last_crt_draw'): self.last_crt_draw = 0
-        if time.time() - self.last_crt_draw > 10:
-            # Draw a box representing the HTF range
-            self.connector.send_draw_command(
-                f"CRT_RANGE_{htf_label}", crt_high, crt_low, 
-                lookback + 20, 0, "64,224,208" # Turquoise
-            )
-            self.connector.send_text_command(f"CRT_LBL_HI", 5, crt_high, " turquoise", f"{htf_label} RANGE HI")
-            self.connector.send_text_command(f"CRT_LBL_LO", 5, crt_low, " turquoise", f"{htf_label} RANGE LO")
+        
+        if is_sweep_active and (time.time() - self.last_crt_draw > 5):
+            # 1. Draw Range Box
+            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
             
-            # Draw entry thresholds (Dashed Lines)
-            buy_thresh = crt_low + entry_threshold
-            sell_thresh = crt_high - entry_threshold
-            self.connector.send_hline_command("CRT_BUY_BND", buy_thresh, "0x00FF00", 2) 
-            self.connector.send_hline_command("CRT_SELL_BND", sell_thresh, "0x0000FF", 2) 
+            # 2. Draw Status Label
+            lbl_text = f"CRT {htf_label} SWEEP | Secure: {candle_color}"
+            self.connector.send_label_command(f"CRT_STATUS_{symbol}", lbl_text, display_color, 50)
             
+            self._log_skip(f"CRT Monitor | Sending Visuals to MT5 | Secure: {candle_color}")
             self.last_crt_draw = time.time()
 
-        # 7. Sweep Detection Logic
-        current_price = (bid + ask) / 2
+        # 4. Prediction Engine
         conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
         if conf < 50: return 
 
-        # 8. Execution Logic with Proximity Check
-        recent_candles = candles[-lookback:]
-        recent_lows = [c['low'] for c in recent_candles]
-        min_recent = min(recent_lows)
-        recent_highs = [c['high'] for c in recent_candles]
-        max_recent = max(recent_highs)
-        
-        # --- BULLISH CRT ---
-        # Logic: Sweep below HTF Low -> Reclaim back into LTF Range Bottom Zone
-        if min_recent < crt_low and crt_low < current_price < (crt_low + entry_threshold) and direction == "BUY":
-            if self._check_filters("BUY", ask):
-                sl = min_recent - (atr * 0.5)
-                tp = crt_high
-                risk = ask - sl
-                reward = tp - ask
-                if risk > 0 and (reward / risk) > 1.2:
-                    logger.info(f"✅ BUY (CRT) | {htf_label} Sweep Reclaim | Risk: {risk:.2f} | TP: {tp:.2f}")
-                    self.execute_trade("BUY", symbol, self.lot_size, f"CRT_SWEEP_{htf_label}", sl, tp)
+        # --- BULLISH SETUP ---
+        if has_swept_low:
+            is_reclaimed = close_price > crt_low
+            in_range_buy = crt_low < ask < (crt_low + entry_threshold)
 
-        # --- BEARISH CRT ---
-        # Logic: Sweep above HTF High -> Reclaim back into LTF Range Top Zone
-        elif max_recent > crt_high and crt_high > current_price > (crt_high - entry_threshold) and direction == "SELL":
-            if self._check_filters("SELL", bid):
-                sl = max_recent + (atr * 0.5)
-                tp = crt_low
-                risk = sl - bid
-                reward = bid - tp
-                if risk > 0 and (reward / risk) > 1.2:
-                    logger.info(f"✅ SELL (CRT) | {htf_label} Sweep Reclaim | Risk: {risk:.2f} | TP: {tp:.2f}")
-                    self.execute_trade("SELL", symbol, self.lot_size, f"CRT_SWEEP_{htf_label}", sl, tp)
+            if is_reclaimed and in_range_buy and direction == "BUY":
+                if self._check_filters("BUY", ask):
+                    sweep_low = min(recent_lows)
+                    sl = sweep_low - (atr * 0.2)
+                    tp = crt_high 
+                    
+                    if (tp - ask) > (ask - sl):
+                        logger.info(f"✅ BUY (CRT) | Secure: {candle_color} | {htf_label} Reclaim")
+                        self.execute_trade("BUY", symbol, self.lot_size, f"CRT_RANGE_{htf_label}", sl, tp)
+                    else:
+                        self._log_crt_diag(f"CRT Skip: RR ratio < 1 ({tp-ask:.5f} vs {ask-sl:.5f})")
+            else:
+                if time.time() - self.last_crt_diag_time > 10:
+                    diag = f"Wait Bull: Recl={is_reclaimed}, InRange={in_range_buy}, ConfDir={direction}"
+                    self._log_crt_diag(diag)
+
+        # --- BEARISH SETUP ---
+        elif has_swept_high:
+            is_reclaimed = close_price < crt_high
+            in_range_sell = (crt_high - entry_threshold) < bid < crt_high
+
+            if is_reclaimed and in_range_sell and direction == "SELL":
+                if self._check_filters("SELL", bid):
+                    sweep_high = max(recent_highs)
+                    sl = sweep_high + (atr * 0.2)
+                    tp = crt_low 
+                    
+                    if (bid - tp) > (sl - bid):
+                        logger.info(f"✅ SELL (CRT) | Secure: {candle_color} | {htf_label} Reclaim")
+                        self.execute_trade("SELL", symbol, self.lot_size, f"CRT_RANGE_{htf_label}", sl, tp)
+                    else:
+                        self._log_crt_diag(f"CRT Skip: RR ratio < 1 ({bid-tp:.5f} vs {sl-bid:.5f})")
+            else:
+                if time.time() - self.last_crt_diag_time > 10:
+                    diag = f"Wait Bear: Recl={is_reclaimed}, InRange={in_range_sell}, ConfDir={direction}"
+                    self._log_crt_diag(diag)
+
+    def _log_crt_diag(self, message):
+        """Dedicated throttled logger for CRT conditions to avoid flooding."""
+        if time.time() - self.last_crt_diag_time > 12:
+            logger.info(f"🔍 {message}")
+            self.last_crt_diag_time = time.time()
 
     def get_session_times(self):
         """Returns a string description of current session times for the UI."""
@@ -1120,7 +1149,7 @@ class TradingStrategy:
     def analyze_trend(self, candles):
         try:
             df = pd.DataFrame(candles)
-            df = df.iloc[::-1].reset_index(drop=True) 
+            # Chronological order guaranteed by standardized on_tick
             ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             current = df['close'].iloc[-1]
             

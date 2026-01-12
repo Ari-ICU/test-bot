@@ -60,6 +60,10 @@ class MT5Connector:
     def send_hline_command(self, name, price, color_code, style=0):
         command = f"DRAW_LINE|{name}|{price}|{color_code}|{style}"
         self._queue_simple(command)
+
+    def send_label_command(self, name, text, color_code, y_pos):
+        command = f"DRAW_LABEL|{name}|{text}|{color_code}|{y_pos}"
+        self._queue_simple(command)
     # ---------------------------
 
     def close_position(self, symbol):

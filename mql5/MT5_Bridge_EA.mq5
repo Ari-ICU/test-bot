@@ -1,11 +1,11 @@
 #property strict
-#property version "3.1"
-#property description "HTTP Bridge - Stable ZigZag & Auto Trade"
+#property version "3.3"
+#property description "HTTP Bridge - Stable ZigZag & Auto Trade & CRT Monitor"
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
 
-int OnInit() { EventSetMillisecondTimer(250); return INIT_SUCCEEDED; }
+int OnInit() { EventSetMillisecondTimer(500); return INIT_SUCCEEDED; }
 void OnDeinit(const int reason) { EventKillTimer(); ObjectsDeleteAll(0, "Py_"); }
 
 void OnTimer()
@@ -42,7 +42,7 @@ void OnTimer()
     for(int i=0; i<total_symbols; i++) symbols_list += SymbolName(i, true) + (i < total_symbols - 1 ? "," : "");
 
     string candle_history = "";
-    int candles_to_send = 200; // Base default
+    int candles_to_send = 200; 
     if(GlobalVariableCheck("Py_Req_History")) {
         candles_to_send = (int)GlobalVariableGet("Py_Req_History");
     }
@@ -96,6 +96,20 @@ void SendRequest(string data_str)
     }
 }
 
+// --- HELPER: Parse "R,G,B" string to Color Manually ---
+color StringToColorRGB(string rgb_str) {
+    string parts[];
+    // Split by comma
+    if(StringSplit(rgb_str, ',', parts) == 3) {
+        int r = (int)StringToInteger(parts[0]);
+        int g = (int)StringToInteger(parts[1]);
+        int b = (int)StringToInteger(parts[2]);
+        // Construct MQL5 Color (0x00BBGGRR)
+        return (color)(r + (g << 8) + (b << 16));
+    }
+    return (color)StringToInteger(rgb_str); // Fallback
+}
+
 void ProcessCommand(string cmd)
 {
     string parts[]; if(StringSplit(cmd, '|', parts) < 2) return;
@@ -116,25 +130,36 @@ void ProcessCommand(string cmd)
     // --- DRAWING COMMANDS ---
     if(action == "DRAW_RECT") {
         if(ArraySize(parts) < 7) return;
-        DrawRect(parts[1], StringToDouble(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), (int)StringToInteger(parts[5]), (color)StringToInteger(parts[6]));
+        color c = StringToColorRGB(parts[6]); // Uses new robust helper
+        DrawRect(parts[1], StringToDouble(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), (int)StringToInteger(parts[5]), c);
+        return;
+    }
+
+    if(action == "DRAW_LABEL") {
+        if(ArraySize(parts) < 5) return;
+        color c = StringToColorRGB(parts[3]);
+        DrawLabel(parts[1], parts[2], c, (int)StringToInteger(parts[4]));
         return;
     }
 
     if(action == "DRAW_TEXT") {
         if(ArraySize(parts) < 6) return;
-        DrawText(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), (color)StringToInteger(parts[4]), parts[5]);
+        color c = StringToColorRGB(parts[4]);
+        DrawText(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), c, parts[5]);
         return;
     }
 
     if(action == "DRAW_TREND") {
         if(ArraySize(parts) < 8) return;
-        DrawTrend(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), StringToDouble(parts[5]), (color)StringToInteger(parts[6]), (int)StringToInteger(parts[7]));
+        color c = StringToColorRGB(parts[6]);
+        DrawTrend(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), StringToDouble(parts[5]), c, (int)StringToInteger(parts[7]));
         return;
     }
 
     if(action == "DRAW_LINE") {
         if(ArraySize(parts) < 5) return;
-        DrawHLine(parts[1], StringToDouble(parts[2]), (color)StringToInteger(parts[3]), (int)StringToInteger(parts[4]));
+        color c = StringToColorRGB(parts[3]);
+        DrawHLine(parts[1], StringToDouble(parts[2]), c, (int)StringToInteger(parts[4]));
         return;
     }
 
@@ -161,7 +186,7 @@ void ProcessCommand(string cmd)
     }
 
     if(action == "BUY")             TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
-    else if(action == "SELL")        TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
+    else if(action == "SELL")       TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
     else if(action == "BUY_LIMIT")   TradePending(symbol, ORDER_TYPE_BUY_LIMIT, lot, price, sl, tp);
     else if(action == "SELL_LIMIT")  TradePending(symbol, ORDER_TYPE_SELL_LIMIT, lot, price, sl, tp);
     else if(action == "CLOSE_ALL")   ClosePositions(symbol, "ALL");
@@ -171,9 +196,28 @@ void ProcessCommand(string cmd)
 
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     string n = "Py_" + name;
-    if(ObjectFind(0, n) >= 0) ObjectDelete(0, n); 
-    ObjectCreate(0, n, OBJ_RECTANGLE, 0, iTime(_Symbol, _Period, b1), p1, iTime(_Symbol, _Period, b2), p2);
-    ObjectSetInteger(0, n, OBJPROP_COLOR, c); ObjectSetInteger(0, n, OBJPROP_FILL, true); ObjectSetInteger(0, n, OBJPROP_BACK, true);
+    if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_RECTANGLE, 0, 0, 0, 0, 0);
+    ObjectSetInteger(0, n, OBJPROP_TIME, 0, iTime(_Symbol, _Period, b1));
+    ObjectSetDouble(0, n, OBJPROP_PRICE, 0, p1);
+    ObjectSetInteger(0, n, OBJPROP_TIME, 1, iTime(_Symbol, _Period, b2));
+    ObjectSetDouble(0, n, OBJPROP_PRICE, 1, p2);
+    ObjectSetInteger(0, n, OBJPROP_COLOR, c); 
+    ObjectSetInteger(0, n, OBJPROP_FILL, true); 
+    ObjectSetInteger(0, n, OBJPROP_BACK, true);
+    ChartRedraw();
+}
+
+void DrawLabel(string name, string text, color c, int y) {
+    string n = "Py_Lbl_" + name;
+    if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_LABEL, 0, 0, 0);
+    ObjectSetString(0, n, OBJPROP_TEXT, text);
+    ObjectSetInteger(0, n, OBJPROP_COLOR, c);
+    ObjectSetInteger(0, n, OBJPROP_XDISTANCE, 20);
+    ObjectSetInteger(0, n, OBJPROP_YDISTANCE, y);
+    ObjectSetInteger(0, n, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+    ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 10);
+    ObjectSetInteger(0, n, OBJPROP_BACK, false);
+    ChartRedraw();
 }
 
 void DrawText(string name, int b, double p, color c, string t) {
@@ -210,15 +254,23 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeRequest r;
     MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
-    r.action=TRADE_ACTION_DEAL; r.symbol=s; r.volume=v; r.type=t; r.price=(t==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID); r.sl=sl; r.tp=tp; 
+    r.action=TRADE_ACTION_DEAL; r.symbol=s; r.volume=v; r.type=t; 
+    r.price=(t==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID); 
+    r.sl=sl; r.tp=tp; 
+    r.deviation = 10;
+    r.type_filling = ORDER_FILLING_IOC; 
     if(!OrderSend(r, res)) Print("Trade Fail: ", res.retcode);
 }
+
 void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
     MqlTradeRequest r;
     MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
     r.action=TRADE_ACTION_PENDING; r.symbol=s; r.volume=v; r.type=t; r.price=p; r.sl=sl; r.tp=tp; 
+    r.deviation = 10;
+    r.type_filling = ORDER_FILLING_IOC; 
     if(!OrderSend(r, res)) Print("Pending Fail: ", res.retcode);
 }
+
 void ClosePositions(string s, string m) {
     for(int i=PositionsTotal()-1; i>=0; i--) {
         if(PositionGetSymbol(i) == s) {
@@ -228,7 +280,11 @@ void ClosePositions(string s, string m) {
             r.action=TRADE_ACTION_DEAL; r.position=PositionGetTicket(i); r.symbol=s; r.volume=PositionGetDouble(POSITION_VOLUME);
             r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
             r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID);
-            OrderSend(r, res);
+            r.deviation = 10;
+            r.type_filling = ORDER_FILLING_IOC; 
+            
+            // Check return value to fix compiler warning
+            if(!OrderSend(r, res)) Print("Close Fail: ", res.retcode);
         }
     }
 }
