@@ -72,6 +72,8 @@ class TradingStrategy:
         self.last_log_time = 0           
         self.last_status_time = 0        # NEW: Timer for DASHBOARD logs
         self.last_crt_diag_time = 0      # NEW: Timer for CRT diagnostics
+        self.last_crt_draw = 0           # NEW: Timer for CRT MT5 visuals
+        self.last_hist_req = 0           # NEW: Timer for history requests
         self.trend = "NEUTRAL"
         self.active_session_name = "None"
         self.swing_highs = []  
@@ -129,7 +131,6 @@ class TradingStrategy:
 
         if not candles or len(candles) < min_needed:
             # Request more history if we haven't asked recently (every 5s)
-            if not hasattr(self, 'last_hist_req'): self.last_hist_req = 0
             if current_time - self.last_hist_req > 5:
                 # Ask for slightly more than we need
                 self.connector.request_history(symbol, min_needed + 50)
@@ -1065,19 +1066,22 @@ class TradingStrategy:
         is_sweep_active = has_swept_low or has_swept_high
 
         # -----------------------------------------------------------
-        # VISUAL UPDATE (FIXED)
+        # VISUAL UPDATE (Send to MT5)
         # -----------------------------------------------------------
-        if not hasattr(self, 'last_crt_draw'): self.last_crt_draw = 0
-        
-        if is_sweep_active and (time.time() - self.last_crt_draw > 5):
-            # 1. Draw Range Box
+        # Always draw the range box and status label to confirm bot is active
+        if time.time() - self.last_crt_draw > 5:
+            # 1. Draw Range Box (Turquoise)
+            # cmd: DRAW_RECT|Name|Top|Bot|StartBar|EndBar|Color
             self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
             
             # 2. Draw Status Label
-            lbl_text = f"CRT {htf_label} SWEEP | Secure: {candle_color}"
-            self.connector.send_label_command(f"CRT_STATUS_{symbol}", lbl_text, display_color, 50)
+            # cmd: DRAW_LABEL|Name|Text|Color|Y_Pos
+            status_tag = "SWEEP" if is_sweep_active else "MONITOR"
+            lbl_text = f"CRT {htf_label} {status_tag} | Secure: {candle_color}"
+            # Use Red for Red candles, Green for Green candles
+            lbl_color = "0,255,0" if candle_color == "GREEN" else "255,69,0"
+            self.connector.send_label_command(f"CRT_STATUS_{symbol}", lbl_text, lbl_color, 50)
             
-            self._log_skip(f"CRT Monitor | Sending Visuals to MT5 | Secure: {candle_color}")
             self.last_crt_draw = time.time()
 
         # 4. Prediction Engine

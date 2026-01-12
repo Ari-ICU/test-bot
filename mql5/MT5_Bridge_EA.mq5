@@ -130,7 +130,8 @@ void ProcessCommand(string cmd)
     // --- DRAWING COMMANDS ---
     if(action == "DRAW_RECT") {
         if(ArraySize(parts) < 7) return;
-        color c = StringToColorRGB(parts[6]); // Uses new robust helper
+        color c = StringToColorRGB(parts[6]); 
+        Print("[Py-Visual] DRAW_RECT: ", parts[1], " P1:", parts[2], " P2:", parts[3]);
         DrawRect(parts[1], StringToDouble(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), (int)StringToInteger(parts[5]), c);
         return;
     }
@@ -138,6 +139,7 @@ void ProcessCommand(string cmd)
     if(action == "DRAW_LABEL") {
         if(ArraySize(parts) < 5) return;
         color c = StringToColorRGB(parts[3]);
+        Print("[Py-Visual] DRAW_LABEL: ", parts[1], " Text:", parts[2]);
         DrawLabel(parts[1], parts[2], c, (int)StringToInteger(parts[4]));
         return;
     }
@@ -197,9 +199,14 @@ void ProcessCommand(string cmd)
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     string n = "Py_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_RECTANGLE, 0, 0, 0, 0, 0);
-    ObjectSetInteger(0, n, OBJPROP_TIME, 0, iTime(_Symbol, _Period, b1));
+    
+    datetime t1 = iTime(_Symbol, _Period, b1);
+    datetime t2 = iTime(_Symbol, _Period, b2);
+    if(t1 <= 0) t1 = iTime(_Symbol, _Period, iBars(_Symbol, _Period)-1);
+    
+    ObjectSetInteger(0, n, OBJPROP_TIME, 0, t1);
     ObjectSetDouble(0, n, OBJPROP_PRICE, 0, p1);
-    ObjectSetInteger(0, n, OBJPROP_TIME, 1, iTime(_Symbol, _Period, b2));
+    ObjectSetInteger(0, n, OBJPROP_TIME, 1, t2);
     ObjectSetDouble(0, n, OBJPROP_PRICE, 1, p2);
     ObjectSetInteger(0, n, OBJPROP_COLOR, c); 
     ObjectSetInteger(0, n, OBJPROP_FILL, true); 
@@ -216,7 +223,7 @@ void DrawLabel(string name, string text, color c, int y) {
     ObjectSetInteger(0, n, OBJPROP_YDISTANCE, y);
     ObjectSetInteger(0, n, OBJPROP_CORNER, CORNER_LEFT_UPPER);
     ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 10);
-    ObjectSetInteger(0, n, OBJPROP_BACK, false);
+    ObjectSetInteger(0, n, OBJPROP_BACK, false); // Keep labels on top
     ChartRedraw();
 }
 
