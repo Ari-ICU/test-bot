@@ -209,8 +209,20 @@ void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     ObjectSetInteger(0, n, OBJPROP_TIME, 1, t2);
     ObjectSetDouble(0, n, OBJPROP_PRICE, 1, p2);
     ObjectSetInteger(0, n, OBJPROP_COLOR, c); 
-    ObjectSetInteger(0, n, OBJPROP_FILL, true); 
+    ObjectSetInteger(0, n, OBJPROP_FILL, false); // Outline only for clarity
+    ObjectSetInteger(0, n, OBJPROP_WIDTH, 1);
     ObjectSetInteger(0, n, OBJPROP_BACK, true);
+    ChartRedraw();
+}
+
+void DrawHLine(string name, double price, color c, int style) {
+    string n = "Py_H_" + name;
+    if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_HLINE, 0, 0, price);
+    ObjectSetDouble(0, n, OBJPROP_PRICE, price);
+    ObjectSetInteger(0, n, OBJPROP_COLOR, c);
+    ObjectSetInteger(0, n, OBJPROP_STYLE, style);
+    ObjectSetInteger(0, n, OBJPROP_WIDTH, 2);
+    ObjectSetInteger(0, n, OBJPROP_BACK, false); 
     ChartRedraw();
 }
 
@@ -249,13 +261,6 @@ void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w
     ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, true);
 }
 
-void DrawHLine(string name, double price, color c, int style) {
-    string n = "Py_Ln_" + name;
-    if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_HLINE, 0, 0, 0);
-    ObjectSetDouble(0, n, OBJPROP_PRICE, price);
-    ObjectSetInteger(0, n, OBJPROP_COLOR, c);
-    ObjectSetInteger(0, n, OBJPROP_STYLE, style); 
-}
 
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeRequest r;

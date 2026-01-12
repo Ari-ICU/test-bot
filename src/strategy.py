@@ -45,8 +45,6 @@ class TradingStrategy:
         # --- PROFIT SETTINGS ---
         self.use_profit_management = True
         self.min_profit_target = 0.10    # Default if not in UI
-        self.trailing_activation = 0.80  
-        self.trailing_offset = 0.20      
         
         # Indicator Settings
         self.rsi_period = 14
@@ -65,7 +63,7 @@ class TradingStrategy:
 
         # CRT Settings
         self.crt_htf = 240
-        self.crt_zone_size = 0.25 # Entry zone is bottom/top 25% of the range
+        self.crt_zone_size = 0.50 # Expanded to 50% (Premium/Discount) for more entries
 
         # --- State ---
         self.last_trade_time = 0         
@@ -73,6 +71,7 @@ class TradingStrategy:
         self.last_status_time = 0        # NEW: Timer for DASHBOARD logs
         self.last_crt_diag_time = 0      # NEW: Timer for CRT diagnostics
         self.last_crt_draw = 0           # NEW: Timer for CRT MT5 visuals
+        self.last_crt_summary_time = 0   # NEW: Timer for CRT range summary logs
         self.last_hist_req = 0           # NEW: Timer for history requests
         self.trend = "NEUTRAL"
         self.active_session_name = "None"
@@ -120,6 +119,12 @@ class TradingStrategy:
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         current_time = time.time()
+        
+        # Determine MT5 Server Time for logging sync
+        server_time_str = "??:??:??"
+        if candles and len(candles) > 0:
+            server_time_str = datetime.fromtimestamp(candles[-1]['time']).strftime('%H:%M:%S')
+
         # 0. Data Validation & Automated History Fetching
         min_needed = 200 # Standard for indicators like 200 EMA
         if self.strategy_mode == "CRT":
@@ -179,32 +184,28 @@ class TradingStrategy:
                 elif self.strategy_mode == "CRT":
                     self.check_signals_crt(symbol, bid, ask, candles)
 
-        # 3. Manage Profit 
+        # 3. Status Dashboard (Every 10 seconds)
+        if current_time - self.last_status_time >= 10:
+            self.last_status_time = current_time
+            conf_score, conf_txt = self.get_prediction_score(symbol, bid, ask, candles)
+            
+            near_supp = self._get_nearest_zone(bid, is_support=True)
+            near_res = self._get_nearest_zone(bid, is_support=False)
+            s_val = f"{near_supp['top']:.2f}" if near_supp else "None"
+            r_val = f"{near_res['bottom']:.2f}" if near_res else "None"
+            
+            active_txt = "AUTO-ON" if self.active else "AUTO-OFF"
+            logger.info(f"📊 [MT5:{server_time_str}] {active_txt} | {symbol} | Mode: {self.strategy_mode} | S: {s_val} | R: {r_val} | Conf: {conf_score}% | PnL: {profit:.2f}")
+
+        # 4. Manage Profit 
         if positions > 0 and self.use_profit_management:
             self.check_and_close_profit(symbol)
 
-            # 4. Status Log (Once per 10 seconds)
-            if current_time - self.last_status_time >= 10:
-                self.last_status_time = current_time
-                
-                # Prediction/Confidence check
-                conf_score, conf_txt = self.get_prediction_score(symbol, bid, ask, candles)
-                
-                # Zone info
-                nearest_supp = self._get_nearest_zone(bid, is_support=True)
-                nearest_res = self._get_nearest_zone(bid, is_support=False)
-                s_txt = f"{nearest_supp['top']:.2f}" if nearest_supp else "None"
-                r_txt = f"{nearest_res['bottom']:.2f}" if nearest_res else "None"
-                zone_txt = f"S: {s_txt} | R: {r_txt}" if self.use_zone_filter else "Zone: OFF"
-                
-                active_txt = "AUTO-ON" if self.active else "AUTO-OFF"
-                tz_txt = f"[{self.active_session_name}]"
-                logger.info(f"📊 {active_txt} | {symbol} {tz_txt} | Mode: {self.strategy_mode} | {zone_txt} | Conf: {conf_score}% ({conf_txt}) | PnL: {profit:.2f}")
-
-    def get_prediction_score(self, symbol, bid, ask, candles):
+    def get_prediction_score(self, symbol, bid, ask, candles, is_reversal=False):
         """
         Synthesizes a confidence score (0-100%) for the current direction.
         This acts as the 'Prediction' engine.
+        If is_reversal=True, trend component is handled as potential turn, not continuation.
         """
         if not candles or len(candles) < 50: return 0, "No Data"
         
@@ -241,8 +242,15 @@ class TradingStrategy:
                 sell_strength += 10
         
         # 4. Trend Context (Weight 20%)
-        if "BULLISH" in self.trend: buy_strength += 20
-        elif "BEARISH" in self.trend: sell_strength += 20
+        if is_reversal:
+            # For Reversals, we don't strictly follow the 200 EMA trend as a filter,
+            # but we look for "Exhaustion" or "Turn" signals. 
+            # If RSI/MACD already support the move, we give the trend weight to the signal.
+            buy_strength += 10
+            sell_strength += 10
+        else:
+            if "BULLISH" in self.trend: buy_strength += 20
+            elif "BEARISH" in self.trend: sell_strength += 20
 
         # 5. DIVERGENCE BOOST (Weight +20%)
         divergence = self.calculate_divergence(candles)
@@ -400,6 +408,7 @@ class TradingStrategy:
             # --- AUTO SESSION ROTATION ---
             if self.time_zone == "Auto":
                 active_session = None
+                active_any = False # Initialize to False
                 for session_name, config in self.SESSIONS.items():
                     tz = ZoneInfo(config['tz'])
                     now = datetime.now(tz)
@@ -566,7 +575,7 @@ class TradingStrategy:
             not_broken = bid >= (nearest_supp['bottom'] - (atr * 0.5))
             
             if near_entry and not_broken:
-                conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
+                conf, dir = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
                 if conf >= 60 and dir == "BUY":
                     if self._check_filters("BUY", ask):
                         sl, tp = self.calculate_safe_risk("BUY", ask, candles)
@@ -582,7 +591,7 @@ class TradingStrategy:
             not_broken = bid <= (nearest_res['top'] + (atr * 0.5))
             
             if near_entry and not_broken:
-                conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
+                conf, dir = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
                 if conf >= 60 and dir == "SELL":
                     if self._check_filters("SELL", bid):
                         sl, tp = self.calculate_safe_risk("SELL", bid, candles)
@@ -927,8 +936,8 @@ class TradingStrategy:
         atr = self.calculate_atr(candles)
         current_price = (bid + ask) / 2
         
-        # Get machine learning/algo confidence score as confluence
-        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
+        # Get machine learning/algo confidence score as confluence (Reversal mode)
+        conf, direction = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
         
         # --- BUY LOGIC (BULLISH STRUCTURE) ---
         if structure == "BULLISH":
@@ -1036,6 +1045,7 @@ class TradingStrategy:
         crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
         if status != "OK": return
 
+
         # 3. Parameters
         lookback = getattr(self, 'crt_lookback', 10)
         range_width = crt_high - crt_low
@@ -1056,6 +1066,16 @@ class TradingStrategy:
         candle_color = "RED" if is_red else "GREEN"
         display_color = "255,69,0" if is_red else "0,255,0" 
 
+        # --- PERIODIC RANGE SUMMARY ---
+        if time.time() - self.last_crt_summary_time > 30:
+            # Calculate HTF Age (how many minutes passed in the current HTF candle)
+            last_time = candles[-1]['time']
+            elapsed_mins = (last_time % (htf_minutes * 60)) // 60
+            
+            clr_ansi = "\033[91m" if is_red else "\033[92m"
+            logger.info(f"📍 CRT {htf_label} [{int(elapsed_mins)}/{htf_minutes}m]: \033[91mHigh {crt_high:.2f}\033[0m | \033[92mLow {crt_low:.2f}\033[0m | Secure: {clr_ansi}{candle_color}\033[0m")
+            self.last_crt_summary_time = time.time()
+
         # Scan recent history for the Sweep
         recent_history = candles[-(lookback+1):-1] 
         recent_lows = [c['low'] for c in recent_history]
@@ -1068,32 +1088,41 @@ class TradingStrategy:
         # -----------------------------------------------------------
         # VISUAL UPDATE (Send to MT5)
         # -----------------------------------------------------------
-        # Always draw the range box and status label to confirm bot is active
         if time.time() - self.last_crt_draw > 5:
-            # 1. Draw Range Box (Turquoise)
-            # cmd: DRAW_RECT|Name|Top|Bot|StartBar|EndBar|Color
-            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
+            # 1. Determine Box Color based on Sweep Status
+            box_color = "64,224,208" # Turquoise (Default)
+            if has_swept_high: box_color = "255,69,0" # Red
+            elif has_swept_low: box_color = "0,255,0"  # Green
+
+            # 2. Draw Range Box (Outline)
+            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, box_color)
             
-            # 2. Draw Status Label
-            # cmd: DRAW_LABEL|Name|Text|Color|Y_Pos
+            # 3. Draw Level Lines (Red High, Green Low)
+            self.connector.send_hline_command(f"CRT_HI_{symbol}", crt_high, "255,0,0", 2) # Solid Red
+            self.connector.send_hline_command(f"CRT_LO_{symbol}", crt_low, "0,255,0", 2)  # Solid Green
+
+            # 4. Draw Status Label
             status_tag = "SWEEP" if is_sweep_active else "MONITOR"
             lbl_text = f"CRT {htf_label} {status_tag} | Secure: {candle_color}"
-            # Use Red for Red candles, Green for Green candles
             lbl_color = "0,255,0" if candle_color == "GREEN" else "255,69,0"
             self.connector.send_label_command(f"CRT_STATUS_{symbol}", lbl_text, lbl_color, 50)
             
             self.last_crt_draw = time.time()
 
-        # 4. Prediction Engine
-        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
-        if conf < 50: return 
+        # 4. Small TF Prediction (Confirmation)
+        # We pass is_reversal=True because CRT is a range reversal strategy.
+        conf, direction = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
+        if conf < 45: return # Slightly lower threshold allowed for HTF setups
 
-        # --- BULLISH SETUP ---
+        # --- BULLISH SETUP (Sweep Low -> Buy Reversal) ---
         if has_swept_low:
+            # High TF Setup: Sweep occurred
+            # Small TF Confirmation: Price reclaimed range AND LTF Prediction is Bullish AND candle is Green (Secure)
             is_reclaimed = close_price > crt_low
             in_range_buy = crt_low < ask < (crt_low + entry_threshold)
+            is_secure = (candle_color == "GREEN")
 
-            if is_reclaimed and in_range_buy and direction == "BUY":
+            if is_reclaimed and in_range_buy and direction == "BUY" and is_secure:
                 if self._check_filters("BUY", ask):
                     sweep_low = min(recent_lows)
                     sl = sweep_low - (atr * 0.2)
@@ -1106,15 +1135,19 @@ class TradingStrategy:
                         self._log_crt_diag(f"CRT Skip: RR ratio < 1 ({tp-ask:.5f} vs {ask-sl:.5f})")
             else:
                 if time.time() - self.last_crt_diag_time > 10:
-                    diag = f"Wait Bull: Recl={is_reclaimed}, InRange={in_range_buy}, ConfDir={direction}"
-                    self._log_crt_diag(diag)
+                    status = "Reclaimed" if is_reclaimed else "Below Range"
+                    zone = "In Entry Zone" if in_range_buy else "Outside Entry Zone"
+                    self._log_crt_diag(f"⏳ CRT BULLish Setup: {status} | {zone} | Conf: {conf}%")
 
-        # --- BEARISH SETUP ---
+        # --- BEARISH SETUP (Sweep High -> Sell Reversal) ---
         elif has_swept_high:
+            # High TF Setup: Sweep occurred
+            # Small TF Confirmation: Price reclaimed range AND LTF Prediction is Bearish AND candle is Red (Secure)
             is_reclaimed = close_price < crt_high
             in_range_sell = (crt_high - entry_threshold) < bid < crt_high
+            is_secure = (candle_color == "RED")
 
-            if is_reclaimed and in_range_sell and direction == "SELL":
+            if is_reclaimed and in_range_sell and direction == "SELL" and is_secure:
                 if self._check_filters("SELL", bid):
                     sweep_high = max(recent_highs)
                     sl = sweep_high + (atr * 0.2)
@@ -1127,13 +1160,21 @@ class TradingStrategy:
                         self._log_crt_diag(f"CRT Skip: RR ratio < 1 ({bid-tp:.5f} vs {sl-bid:.5f})")
             else:
                 if time.time() - self.last_crt_diag_time > 10:
-                    diag = f"Wait Bear: Recl={is_reclaimed}, InRange={in_range_sell}, ConfDir={direction}"
-                    self._log_crt_diag(diag)
+                    status = "Reclaimed" if is_reclaimed else "Above Range"
+                    zone = "In Entry Zone" if in_range_sell else "Outside Entry Zone"
+                    self._log_crt_diag(f"⏳ CRT BEARish Setup: {status} | {zone} | Conf: {conf}%")
+
+        # --- MONITORING (No active sweep) ---
+        else:
+            if time.time() - self.last_crt_diag_time > 20:
+                self._log_crt_diag(f"Monitoring... Range is safe. Waiting for High/Low Sweep.")
 
     def _log_crt_diag(self, message):
         """Dedicated throttled logger for CRT conditions to avoid flooding."""
         if time.time() - self.last_crt_diag_time > 12:
-            logger.info(f"🔍 {message}")
+            # We don't have server_time_str here easily, but we can pass it if needed. 
+            # For now, CRT H1 Range already has it.
+            logger.info(f"🔎 {message}")
             self.last_crt_diag_time = time.time()
 
     def get_session_times(self):
@@ -1218,16 +1259,8 @@ class TradingStrategy:
             # Note: Actual MT5 SL modification would happen here if we had position tickets.
             # For now, we logically mark it as 'safe'.
 
-        # 2. Trailing Stop Logic
-        if self.peak_profit >= self.trailing_activation:
-            if self.current_profit <= (self.peak_profit - self.trailing_offset):
-                logger.info(f"🔒 TRAILING STOP HIT: Peak {self.peak_profit:.2f} -> Current {self.current_profit:.2f}")
-                self.connector.close_profit(symbol)
-                self.break_even_active = False 
-                return
-
-        # 3. Take Profit Target
-        if self.current_profit >= self.min_profit_target and self.peak_profit < self.trailing_activation:
+        # 2. Take Profit Target
+        if self.current_profit >= self.min_profit_target:
             logger.info(f"💰 TARGET HIT: ${self.current_profit:.2f}. Closing...")
             self.connector.close_profit(symbol)
             self.break_even_active = False

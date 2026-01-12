@@ -2,6 +2,7 @@ import threading
 import time
 import logging
 import queue
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 import ttkbootstrap as tb
@@ -44,8 +45,6 @@ class TradingBotUI(tb.Window):
         # Profit Settings
         self.auto_close_sec_var = tk.DoubleVar(value=2.0)
         self.use_profit_mgmt_var = tk.BooleanVar(value=True)
-        self.trail_active_var = tk.DoubleVar(value=0.80)
-        self.trail_offset_var = tk.DoubleVar(value=0.20)
         self.rr_ratio_var = tk.DoubleVar(value=2.0)
 
         # Indicator Settings (Optimized for M5)
@@ -78,7 +77,7 @@ class TradingBotUI(tb.Window):
         # CRT Settings
         self.crt_htf_var = tk.IntVar(value=240)       # Big Timeframe (e.g. 4H)
         self.crt_lookback_var = tk.IntVar(value=10)   # Small Timeframe Lookback (Candles)
-        self.crt_zone_var = tk.DoubleVar(value=0.25)  # Entry Zone % of Range (e.g. 0.25 = 25%)
+        self.crt_zone_var = tk.DoubleVar(value=0.50)  # Entry Zone % of Range (e.g. 0.50 = 50%)
         
         self._bind_traces()
 
@@ -101,7 +100,7 @@ class TradingBotUI(tb.Window):
         vars_to_trace = [
             self.max_pos_var, self.lot_size_var, self.cooldown_var,
             self.strategy_mode_var, self.use_trend_filter_var, self.use_zone_filter_var,
-            self.auto_close_sec_var, self.use_profit_mgmt_var, self.trail_active_var, self.trail_offset_var, self.rr_ratio_var,
+            self.auto_close_sec_var, self.use_profit_mgmt_var, self.rr_ratio_var,
             self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
             self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
             self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var,
@@ -136,8 +135,6 @@ class TradingBotUI(tb.Window):
                 # Profit
                 self.strategy.profit_close_interval = self._safe_get(self.auto_close_sec_var, 2.0)
                 self.strategy.use_profit_management = self.use_profit_mgmt_var.get()
-                self.strategy.trailing_activation = self._safe_get(self.trail_active_var, 0.8)
-                self.strategy.trailing_offset = self._safe_get(self.trail_offset_var, 0.2)
                 self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 2.0)
 
                 # Indicators
@@ -240,6 +237,12 @@ class TradingBotUI(tb.Window):
             else:
                 self._update_card(self.lbl_sync, f"{count}/{min_needed}", "warning")
 
+            # --- Server Time Update ---
+            if count > 0:
+                last_time = candles[-1]['time']
+                st_str = datetime.fromtimestamp(last_time).strftime('%H:%M:%S')
+                self._update_card(self.lbl_server_time, st_str, "primary")
+
             if self.strategy and len(candles) > 20:
                 rsi, macd, signal = self.strategy.calculate_indicators(candles)
                 
@@ -248,6 +251,14 @@ class TradingBotUI(tb.Window):
                 
                 macd_color = "success" if macd > signal else "danger"
                 self.lbl_live_macd.config(text=f"MACD: {macd:.5f}", bootstyle=macd_color)
+
+                # --- CRT Progress Update ---
+                htf_mins = self.crt_htf_var.get()
+                if htf_mins > 0:
+                    last_time = candles[-1]['time']
+                    elapsed = (last_time % (htf_mins * 60)) // 60
+                    remaining = htf_mins - elapsed
+                    self.crt_progress_lbl.config(text=f"Range Age: {int(elapsed)}m / {htf_mins}m (Renew in {int(remaining)}m)")
 
                 # --- Zone Display (UPDATED for Tradeciety Zones) ---
                 if self.use_zone_filter_var.get():
@@ -319,7 +330,6 @@ class TradingBotUI(tb.Window):
             self.lbl_live_macd.config(text="MACD: Waiting...", bootstyle="secondary")
             self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
             
-            # Reset strategy state if available
             if self.strategy and hasattr(self.strategy, 'reset_state'):
                 self.strategy.reset_state()
 
@@ -338,6 +348,13 @@ class TradingBotUI(tb.Window):
             self.start_hour_var.set(start)
             self.end_hour_var.set(end)
             logging.info(f"Market Hours synced for {tz}: {start:02d}:00 - {end:02d}:00")
+
+    def _on_crt_htf_change(self, event=None):
+        selection = self.crt_htf_combo.get()
+        mapping = {"15 Min": 15, "30 Min": 30, "1 Hour (60m)": 60, "4 Hours (240m)": 240, "1 Day (1440m)": 1440}
+        minutes = mapping.get(selection, 60)
+        self.crt_htf_var.set(minutes)
+        self._on_setting_changed()
 
     def _set_combo_values(self, symbols_list):
         self.combo_symbol['values'] = symbols_list
@@ -434,6 +451,9 @@ class TradingBotUI(tb.Window):
         self.lbl_positions = left_frame.winfo_children()[-1].winfo_children()[0]
 
         # Sync Card
+        self._create_stat_card(left_frame, "🕒 Server Time", "Waiting...", "primary").pack(fill=X, pady=5)
+        self.lbl_server_time = left_frame.winfo_children()[-1].winfo_children()[0]
+
         self._create_stat_card(left_frame, "🔄 Data Sync", "Scanning...", "info").pack(fill=X, pady=5)
         self.lbl_sync = left_frame.winfo_children()[-1].winfo_children()[0]
 
@@ -577,8 +597,6 @@ class TradingBotUI(tb.Window):
         prof_settings = ttk.Frame(prof_frame)
         prof_settings.pack(fill=X)
         self._add_setting(prof_settings, "Auto Close (sec):", self.auto_close_sec_var, 1.0, 60.0, 0)
-        self._add_setting(prof_settings, "Trailing Activation ($):", self.trail_active_var, 0.50, 1000.0, 1)
-        self._add_setting(prof_settings, "Trailing Offset ($):", self.trail_offset_var, 0.10, 500.0, 2)
         
         # --- Column 2: Indicators ---
         col2_frame = ttk.Frame(scroll_frame)
@@ -607,10 +625,26 @@ class TradingBotUI(tb.Window):
         # NEW: CRT Settings
         crt_frame = ttk.LabelFrame(col2_frame, text="CRT Strategy Settings", padding=10, bootstyle="danger")
         crt_frame.pack(fill=X, pady=5)
-        self._add_setting(crt_frame, "Big TF (Range) Min:", self.crt_htf_var, 15, 1440, 0)
-        self._add_setting(crt_frame, "Small TF (Sweep) Lookback:", self.crt_lookback_var, 1, 50, 1)
-        self._add_setting(crt_frame, "Entry Zone (% of Range):", self.crt_zone_var, 0.05, 0.50, 2)
-        ttk.Label(crt_frame, text="(Range: 60=1H, 240=4H | Zone: 0.1-0.5)", font=("", 8), foreground="gray").grid(row=3, column=0, columnspan=2, sticky=W)
+        
+        # 1. Big TF Dropdown
+        ttk.Label(crt_frame, text="Big TF (Range):").grid(row=0, column=0, sticky=W, padx=5, pady=2)
+        self.crt_htf_combo = ttk.Combobox(crt_frame, values=["15 Min", "30 Min", "1 Hour (60m)", "4 Hours (240m)", "1 Day (1440m)"], state="readonly", width=15)
+        self.crt_htf_combo.grid(row=0, column=1, sticky=W, padx=5)
+        self.crt_htf_combo.bind("<<ComboboxSelected>>", self._on_crt_htf_change)
+        
+        # Set initial value based on current var
+        mapping_inv = {15: "15 Min", 30: "30 Min", 60: "1 Hour (60m)", 240: "4 Hours (240m)", 1440: "1 Day (1440m)"}
+        self.crt_htf_combo.set(mapping_inv.get(self.crt_htf_var.get(), "4 Hours (240m)"))
+
+        # 2. Sweep Lookback
+        self._add_setting(crt_frame, "Sweep Lookback:", self.crt_lookback_var, 1, 50, 1)
+        
+        # 3. Entry Zone
+        self._add_setting(crt_frame, "Entry Zone (%):", self.crt_zone_var, 0.05, 0.50, 2)
+        
+        # 4. Progress Label (Dynamic Update)
+        self.crt_progress_lbl = ttk.Label(crt_frame, text="Range Progress: Waiting...", font=("", 8, "italic"), foreground="#3498db")
+        self.crt_progress_lbl.grid(row=3, column=0, columnspan=2, sticky=W, padx=5, pady=(5,0))
         
         # Guide Frame for Time Conversion
         g_frame = ttk.Frame(crt_frame)
