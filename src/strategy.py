@@ -201,11 +201,10 @@ class TradingStrategy:
         if positions > 0 and self.use_profit_management:
             self.check_and_close_profit(symbol)
 
-    def get_prediction_score(self, symbol, bid, ask, candles, is_reversal=False):
+    def get_prediction_score(self, symbol, bid, ask, candles):
         """
         Synthesizes a confidence score (0-100%) for the current direction.
         This acts as the 'Prediction' engine.
-        If is_reversal=True, trend component is handled as potential turn, not continuation.
         """
         if not candles or len(candles) < 50: return 0, "No Data"
         
@@ -242,15 +241,8 @@ class TradingStrategy:
                 sell_strength += 10
         
         # 4. Trend Context (Weight 20%)
-        if is_reversal:
-            # For Reversals, we don't strictly follow the 200 EMA trend as a filter,
-            # but we look for "Exhaustion" or "Turn" signals. 
-            # If RSI/MACD already support the move, we give the trend weight to the signal.
-            buy_strength += 10
-            sell_strength += 10
-        else:
-            if "BULLISH" in self.trend: buy_strength += 20
-            elif "BEARISH" in self.trend: sell_strength += 20
+        if "BULLISH" in self.trend: buy_strength += 20
+        elif "BEARISH" in self.trend: sell_strength += 20
 
         # 5. DIVERGENCE BOOST (Weight +20%)
         divergence = self.calculate_divergence(candles)
@@ -575,7 +567,7 @@ class TradingStrategy:
             not_broken = bid >= (nearest_supp['bottom'] - (atr * 0.5))
             
             if near_entry and not_broken:
-                conf, dir = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
+                conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
                 if conf >= 60 and dir == "BUY":
                     if self._check_filters("BUY", ask):
                         sl, tp = self.calculate_safe_risk("BUY", ask, candles)
@@ -591,7 +583,7 @@ class TradingStrategy:
             not_broken = bid <= (nearest_res['top'] + (atr * 0.5))
             
             if near_entry and not_broken:
-                conf, dir = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
+                conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
                 if conf >= 60 and dir == "SELL":
                     if self._check_filters("SELL", bid):
                         sl, tp = self.calculate_safe_risk("SELL", bid, candles)
@@ -936,8 +928,8 @@ class TradingStrategy:
         atr = self.calculate_atr(candles)
         current_price = (bid + ask) / 2
         
-        # Get machine learning/algo confidence score as confluence (Reversal mode)
-        conf, direction = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
+        # Get machine learning/algo confidence score as confluence
+        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
         
         # --- BUY LOGIC (BULLISH STRUCTURE) ---
         if structure == "BULLISH":
@@ -1109,20 +1101,16 @@ class TradingStrategy:
             
             self.last_crt_draw = time.time()
 
-        # 4. Small TF Prediction (Confirmation)
-        # We pass is_reversal=True because CRT is a range reversal strategy.
-        conf, direction = self.get_prediction_score(symbol, bid, ask, candles, is_reversal=True)
-        if conf < 45: return # Slightly lower threshold allowed for HTF setups
+        # 4. Prediction Engine
+        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
+        if conf < 50: return 
 
-        # --- BULLISH SETUP (Sweep Low -> Buy Reversal) ---
+        # --- BULLISH SETUP ---
         if has_swept_low:
-            # High TF Setup: Sweep occurred
-            # Small TF Confirmation: Price reclaimed range AND LTF Prediction is Bullish AND candle is Green (Secure)
             is_reclaimed = close_price > crt_low
             in_range_buy = crt_low < ask < (crt_low + entry_threshold)
-            is_secure = (candle_color == "GREEN")
 
-            if is_reclaimed and in_range_buy and direction == "BUY" and is_secure:
+            if is_reclaimed and in_range_buy and direction == "BUY":
                 if self._check_filters("BUY", ask):
                     sweep_low = min(recent_lows)
                     sl = sweep_low - (atr * 0.2)
@@ -1139,15 +1127,12 @@ class TradingStrategy:
                     zone = "In Entry Zone" if in_range_buy else "Outside Entry Zone"
                     self._log_crt_diag(f"⏳ CRT BULLish Setup: {status} | {zone} | Conf: {conf}%")
 
-        # --- BEARISH SETUP (Sweep High -> Sell Reversal) ---
+        # --- BEARISH SETUP ---
         elif has_swept_high:
-            # High TF Setup: Sweep occurred
-            # Small TF Confirmation: Price reclaimed range AND LTF Prediction is Bearish AND candle is Red (Secure)
             is_reclaimed = close_price < crt_high
             in_range_sell = (crt_high - entry_threshold) < bid < crt_high
-            is_secure = (candle_color == "RED")
 
-            if is_reclaimed and in_range_sell and direction == "SELL" and is_secure:
+            if is_reclaimed and in_range_sell and direction == "SELL":
                 if self._check_filters("SELL", bid):
                     sweep_high = max(recent_highs)
                     sl = sweep_high + (atr * 0.2)
