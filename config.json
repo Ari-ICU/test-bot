@@ -25,7 +25,12 @@
     "enabled": true,
     "min_score": 0.2
   },
-  "update_interval_seconds": 15,
+  "telegram": {
+    "enabled": true,
+    "bot_token": "8591944783:AAFJ33zxoEZZlUN0zzUvdNKQK__D4_X3kP4",
+    "chat_id": "6287254880"
+  },
+  "update_interval_seconds": 10,
   "mt5": {
     "host": "127.0.0.1",
     "port": 8001,

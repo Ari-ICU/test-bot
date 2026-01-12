@@ -38,7 +38,8 @@ class TradingBotUI(tb.Window):
         self.cooldown_var = tk.DoubleVar(value=15.0)
 
         # Strategies & Toggles
-        self.strategy_mode_var = tk.StringVar(value="MACD_RSI")
+        # FIX: Changed default to MASTER_CONFLUENCE to "combine" all strategies by default
+        self.strategy_mode_var = tk.StringVar(value="MASTER_CONFLUENCE")
         self.use_trend_filter_var = tk.BooleanVar(value=True) 
         self.use_zone_filter_var = tk.BooleanVar(value=True) 
 
@@ -177,7 +178,11 @@ class TradingBotUI(tb.Window):
         rsi_b = self._safe_get(self.rsi_buy_var, 30)
         rsi_s = self._safe_get(self.rsi_sell_var, 70)
         
-        if mode == "MACD_RSI":
+        # FIX: Added logic text for all available modes
+        if mode == "MASTER_CONFLUENCE":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Score ≥ 4 (RSI+MACD+Stoch+Ichi+PA)")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Score ≥ 4 (RSI+MACD+Stoch+Ichi+PA)")
+        elif mode == "MACD_RSI":
             self.lbl_buy_logic.config(text=f"🟢 BUY: RSI < {rsi_b} & MACD > Sig")
             self.lbl_sell_logic.config(text=f"🔴 SELL: RSI > {rsi_s} & MACD < Sig")
         elif mode == "BOLLINGER":
@@ -196,6 +201,18 @@ class TradingBotUI(tb.Window):
             h_label = f"{htf//60}H" if htf % 60 == 0 else f"{htf}m"
             self.lbl_buy_logic.config(text=f"🟢 BUY: {h_label} Low Sweep & M5/M15 Reclaim")
             self.lbl_sell_logic.config(text=f"🔴 SELL: {h_label} High Sweep & M5/M15 Reclaim")
+        elif mode == "STOCHASTIC":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: K < 20 & D < 20 & K > D")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: K > 80 & D > 80 & K < D")
+        elif mode == "ICHIMOKU":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Price > Cloud & Tenkan > Kijun")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Price < Cloud & Tenkan < Kijun")
+        elif mode == "PRICE_ACTION":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Bullish Engulfing or Hammer")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Bearish Engulfing or Shooting Star")
+        elif mode == "ZONE_BOUNCE":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Bounce off Support Zone")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Reject off Resistance Zone")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         self.last_price_update = time.time() 
@@ -511,7 +528,13 @@ class TradingBotUI(tb.Window):
         strat_frame.pack(side=LEFT, padx=5, fill=X, expand=True)
         ttk.Label(strat_frame, text="Active Strategy:", font=("Segoe UI", 9)).pack(anchor=W)
         self.combo_strat = ttk.Combobox(strat_frame, textvariable=self.strategy_mode_var, state="readonly", width=15)
-        self.combo_strat['values'] = ["MACD_RSI", "BOLLINGER", "EMA_CROSS", "SMC", "CRT"]
+        
+        # FIX: Added MASTER_CONFLUENCE and missing strategies to values
+        self.combo_strat['values'] = [
+            "MASTER_CONFLUENCE", "MACD_RSI", "BOLLINGER", "EMA_CROSS", 
+            "SMC", "CRT", "ZONE_BOUNCE", "STOCHASTIC", "ICHIMOKU", "PRICE_ACTION"
+        ]
+        
         self.combo_strat.pack(fill=X)
         self.combo_strat.bind("<<ComboboxSelected>>", self._on_mode_change)
         

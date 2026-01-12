@@ -8,6 +8,7 @@ from datetime import datetime
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import nltk
 import threading
+from src.webhook import WebhookAlert
 
 # Initialize Logging
 logging.basicConfig(
@@ -27,6 +28,13 @@ class NewsEngine:
         self.trading_pause = False  
         self.last_pause_time = 0  
         self.is_starting = True # Skip pausing for old news on startup
+        
+        # Initialize Webhook
+        tg_config = self.config.get('telegram', {})
+        self.webhook = WebhookAlert(
+            bot_token=tg_config.get('bot_token'),
+            chat_id=tg_config.get('chat_id')
+        ) if tg_config.get('enabled') else None
         
         # Start periodic fetching in background thread
         self.thread = threading.Thread(target=self._periodic_fetch, daemon=True)
@@ -73,6 +81,8 @@ class NewsEngine:
                             self.trading_pause = True
                             self.last_pause_time = time.time()
                             logger.warning(f"Trading PAUSED: High-impact news - {entry.title}")
+                            if self.webhook:
+                                self.webhook.notify_news(entry.title, sentiment, score)
                         
                         news_item = {
                             'title': entry.title,
@@ -134,6 +144,8 @@ class NewsEngine:
                                     self.trading_pause = True
                                     self.last_pause_time = time.time()
                                     logger.warning(f"🕒 CALENDAR ALERT: {full_title}. Trading PAUSED.")
+                                    if self.webhook:
+                                        self.webhook.notify_news(full_title, "BEARISH", score)
 
                                 self.news_items.append({
                                     'title': full_title,

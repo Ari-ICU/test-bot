@@ -59,6 +59,24 @@ void OnTimer()
                           (i < candles_to_send - 1 ? "|" : "");
     }
 
+    // --- NEW: Capture detailed active trades for Telegram ---
+    string active_trades = "";
+    for(int i=0; i<total_pos; i++) {
+        ulong ticket = PositionGetTicket(i); // Select by index
+        if(ticket > 0) {
+            string p_symbol = PositionGetString(POSITION_SYMBOL);
+            long p_type = PositionGetInteger(POSITION_TYPE);
+            double p_vol = PositionGetDouble(POSITION_VOLUME);
+            double p_profit = PositionGetDouble(POSITION_PROFIT);
+            
+            string type_str = (p_type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            string trade_line = IntegerToString(ticket) + "," + p_symbol + "," + type_str + "," + DoubleToString(p_vol, 2) + "," + DoubleToString(p_profit, 2);
+            
+            if(active_trades != "") active_trades += "|";
+            active_trades += trade_line;
+        }
+    }
+
     string post_str = "symbol=" + _Symbol + 
                       "&bid=" + DoubleToString(bid, _Digits) + 
                       "&ask=" + DoubleToString(ask, _Digits) +
@@ -70,7 +88,8 @@ void OnTimer()
                       "&sell_count=" + IntegerToString(sell_count) +
                       "&avg_entry=" + DoubleToString(avg_entry, _Digits) +
                       "&all_symbols=" + symbols_list +
-                      "&candles=" + candle_history;
+                      "&candles=" + candle_history +
+                      "&active_trades=" + active_trades;
     
     SendRequest(post_str);
 }

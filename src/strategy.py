@@ -2,6 +2,7 @@ import logging
 import time
 import pandas as pd
 import numpy as np
+from src.webhook import WebhookAlert
 from datetime import datetime
 try:
     from zoneinfo import ZoneInfo
@@ -30,6 +31,19 @@ class TradingStrategy:
         self.strategy_mode = "MASTER_CONFLUENCE" 
         self.use_trend_filter = True
         self.use_zone_filter = True
+        
+        # Initialize Webhook
+        tg_config = config.get('telegram', {})
+        self.webhook = WebhookAlert(
+            bot_token=tg_config.get('bot_token'),
+            chat_id=tg_config.get('chat_id')
+        ) if tg_config.get('enabled') else None
+
+        if self.webhook:
+            # Wire up the command listener
+            self.webhook.on_status_command = self._handle_telegram_status_command
+            self.webhook.on_positions_command = self._handle_telegram_positions_command
+            self.webhook.on_trade_command = self._handle_telegram_trade
         
         # --- MARKET SESSIONS (Local Hours) ---
         self.SESSIONS = {
@@ -110,6 +124,7 @@ class TradingStrategy:
         self.peak_profit = 0.0        
         self.last_profit_close_time = 0
         self.profit_close_interval = 1 
+        self.last_positions_count = 0    # Tracks position changes for alerts
         
         # --- TRADE PROTECTION ---
         self.break_even_activation = 0.50  
@@ -134,6 +149,15 @@ class TradingStrategy:
         self.resistance_zones = []
         self.peak_profit = 0.0
         logging.info("Strategy state reset for new symbol.")
+
+    # --- FIX: Added Missing Method for UI ---
+    def get_session_times(self):
+        """Returns a string summary of session times for the UI"""
+        parts = []
+        for city, data in self.SESSIONS.items():
+            # Returns short format e.g. "Lon:08-17"
+            parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
+        return " | ".join(parts)
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         current_time = time.time()
@@ -216,7 +240,52 @@ class TradingStrategy:
             active_txt = "AUTO-ON" if self.active else "AUTO-OFF"
             logger.info(f"📊 [MT5:{server_time_str}] {active_txt} | {symbol} | Mode: {self.strategy_mode} | S: {s_val} | Conf: {conf_score}% | PnL: {profit:.2f}")
 
-        # 4. Manage Profit 
+        # 4. Position Change Detection (Detailed Close Reporting)
+        current_positions_list = getattr(self.connector, 'open_positions', [])
+        
+        # Initialize last_positions_list if first run
+        if not hasattr(self, 'last_positions_list'):
+            self.last_positions_list = current_positions_list
+
+        # Detect changes
+        if hasattr(self, 'last_balance'):
+             realized_pnl = balance - self.last_balance
+             
+             # Check for closed tickets
+             # Create sets of tickets for comparison
+             last_tickets = {p['ticket']: p for p in self.last_positions_list}
+             curr_tickets = {p['ticket']: p for p in current_positions_list}
+             
+             closed_tickets = []
+             for t_id, t_data in last_tickets.items():
+                 if t_id not in curr_tickets:
+                     closed_tickets.append(t_data)
+             
+             count_closed = len(closed_tickets)
+             
+             if count_closed > 0 and self.webhook:
+                 # We have closed positions
+                 # Use realized_pnl from balance change as the Truth
+                 # (If balance change is tiny/zero, use sum of 'profit' from last known floating as estimate? No, balance is better)
+                 
+                 # Logic:
+                 # If 1 closed: Show details
+                 if count_closed == 1:
+                     t = closed_tickets[0]
+                     msg_reason = f"Ticket #{t['ticket']}"
+                     # If realized pnl is near zero, maybe break even?
+                     self.webhook.notify_close(t['symbol'], realized_pnl, msg_reason)
+                 
+                 # If > 1 closed: Show Summary
+                 else:
+                     msg_reason = f"Batch Close ({count_closed} trades)"
+                     self.webhook.notify_close(symbol, realized_pnl, msg_reason)
+        
+        self.last_positions_list = current_positions_list
+        self.last_positions_count = positions
+        self.last_balance = balance
+
+        # 5. Manage Profit 
         if positions > 0 and self.use_profit_management:
             self.check_and_close_profit(symbol)
 
@@ -841,16 +910,69 @@ class TradingStrategy:
         self.last_trade_time = time.time()
         self.connector.send_command(direction, symbol, volume, sl, tp, 0)
         logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl:.4f} | TP: {tp:.4f}")
+        if self.webhook:
+            self.webhook.notify_trade(direction, symbol, volume, sl, tp, reason)
 
     def check_and_close_profit(self, symbol):
         if time.time() - self.last_profit_close_time < self.profit_close_interval: return
         self.last_profit_close_time = time.time()
         
         if not self.break_even_active and self.current_profit >= self.break_even_activation:
-            logger.info(f"🛡️ BREAK-EVEN ACTIVATED: Profit ${self.current_profit:.2f}. Locking in position.")
+            msg = f"🛡️ BREAK-EVEN ACTIVATED: Profit ${self.current_profit:.2f}. Locking in position."
+            logger.info(msg)
             self.break_even_active = True
+            if self.webhook:
+                self.webhook.notify_protection(symbol, msg)
 
         if self.current_profit >= self.min_profit_target:
             logger.info(f"💰 TARGET HIT: ${self.current_profit:.2f}. Closing...")
+            if self.webhook:
+                self.webhook.notify_close(symbol, self.current_profit, "Target Profit Hit")
             self.connector.close_profit(symbol)
             self.break_even_active = False
+
+    def _handle_telegram_status_command(self):
+        """Callback for when /status is received from Telegram."""
+        if hasattr(self, 'current_profit'):
+            pos_count = len(self.open_positions) if hasattr(self, 'open_positions') else 0
+            bal = getattr(self, 'last_balance', 0.0) 
+            self.webhook.notify_account_summary(bal, self.current_profit, pos_count, self.strategy_mode)
+
+    def _handle_telegram_positions_command(self):
+        """Callback for when /positions is received."""
+        # Use the list of positions parsed by the connector
+        
+        # Safe access to connector data
+        raw_positions = getattr(self.connector, 'open_positions', [])
+        
+        if raw_positions:
+            self.webhook.notify_active_positions(raw_positions)
+        else:
+             # Check if we have a count mismatch, meaning syncing issues
+            if self.last_positions_count > 0:
+                self.webhook.send_message(f"⚠️ Have {self.last_positions_count} positions, but details are syncing...")
+            else:
+                self.webhook.notify_active_positions([])
+
+    def _handle_telegram_trade(self, action, symbol=None, volume=None):
+        """Callback for /buy or /sell from Telegram."""
+        # 1. Determine Symbol
+        if not symbol:
+            self.webhook.send_message("⚠️ Please specify symbol. Example: `/buy XAUUSDm 0.01`")
+            return
+
+        # 2. Determine Volume
+        if not volume:
+            volume = self.lot_size
+        
+        sl = 0.0
+        tp = 0.0
+        
+        # Trigger Trade
+        success = self.connector.send_command(action, symbol, volume, sl, tp, 0)
+        
+        if success:
+            direction_emoji = "🟢" if action == "BUY" else "🔴"
+            self.webhook.send_message(f"{direction_emoji} *Sent {action}* for `{symbol}` (Lot: {volume})")
+        else:
+            self.webhook.send_message("❌ Failed to send command to MT5.")

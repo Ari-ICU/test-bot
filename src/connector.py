@@ -17,6 +17,7 @@ class MT5Connector:
         self.command_queue = []
         self.on_tick_received = None 
         self.on_symbols_received = None
+        self.open_positions = [] # Store detailed active positions
 
     def start(self):
         try:
@@ -121,15 +122,26 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             if 'symbol' in data and 'bid' in data:
                 if self.connector.on_tick_received:
                     clean_symbol = data['symbol'].replace('\x00', '').strip()
-                    bid = float(data.get('bid', 0))
-                    ask = float(data.get('ask', 0))
-                    balance = float(data.get('balance', 0))
-                    profit = float(data.get('profit', 0))
+                    
+                    def clean_float(val):
+                        if isinstance(val, str):
+                            return float(val.replace('\x00', '').strip())
+                        return float(val)
+
+                    try:
+                        bid = clean_float(data.get('bid', 0))
+                        ask = clean_float(data.get('ask', 0))
+                        balance = clean_float(data.get('balance', 0))
+                        profit = clean_float(data.get('profit', 0))
+                        avg_entry = clean_float(data.get('avg_entry', 0))
+                    except ValueError as e:
+                        logger.error(f"Float Parse Error: {e}")
+                        return
+
                     acct_name = data.get('acct_name', 'Unknown')
                     positions = int(data.get('positions', 0))
                     buy_count = int(data.get('buy_count', 0)) 
                     sell_count = int(data.get('sell_count', 0))
-                    avg_entry = float(data.get('avg_entry', 0))
 
                     candles = []
                     raw_candles = data.get('candles', '')
@@ -156,6 +168,29 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                         'time': 0
                                     })
                                 except ValueError: pass
+
+                    if 'active_trades' in data:
+                        raw_trades = data['active_trades']
+                        # Format: TICKET,SYMBOL,TYPE,VOLUME,PROFIT|...
+                        parsed_trades = []
+                        if raw_trades:
+                            # Clean entire string of null bytes first
+                            raw_trades = raw_trades.replace('\x00', '').strip()
+                            if raw_trades:
+                                for t_str in raw_trades.split('|'):
+                                    p = t_str.split(',')
+                                    if len(p) >= 5:
+                                        try:
+                                            parsed_trades.append({
+                                                'ticket': p[0].strip(),
+                                                'symbol': p[1].strip(),
+                                                'type': p[2].strip(), # BUY or SELL
+                                                'volume': float(p[3].strip()),
+                                                'profit': float(p[4].strip())
+                                            })
+                                        except ValueError:
+                                            logger.warning(f"Failed to parse trade: {p}")
+                        self.connector.open_positions = parsed_trades
 
                     self.connector.on_tick_received(
                         clean_symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles
