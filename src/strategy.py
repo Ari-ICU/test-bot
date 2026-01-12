@@ -494,33 +494,6 @@ class TradingStrategy:
         except Exception as e:
             return 50, 0, 0
 
-    def calculate_bollinger(self, candles):
-        try:
-            df = pd.DataFrame(candles)
-            df = df.iloc[::-1].reset_index(drop=True)
-            df['sma'] = df['close'].rolling(window=self.bb_period).mean()
-            df['std'] = df['close'].rolling(window=self.bb_period).std()
-            df['upper'] = df['sma'] + (df['std'] * self.bb_dev)
-            df['lower'] = df['sma'] - (df['std'] * self.bb_dev)
-            last = df.iloc[-2]
-            return last['upper'], last['lower'], last['close']
-        except: return 0,0,0
-
-    def calculate_ema_cross(self, candles):
-        try:
-            df = pd.DataFrame(candles)
-            df = df.iloc[::-1].reset_index(drop=True)
-            df['fast'] = df['close'].ewm(span=self.ema_fast, adjust=False).mean()
-            df['slow'] = df['close'].ewm(span=self.ema_slow, adjust=False).mean()
-            
-            curr = df.iloc[-2]
-            prev = df.iloc[-3]
-            
-            cross_up = prev['fast'] <= prev['slow'] and curr['fast'] > curr['slow']
-            cross_down = prev['fast'] >= prev['slow'] and curr['fast'] < curr['slow']
-            return cross_up, cross_down
-        except: return False, False
-
 
     def _check_filters(self, direction, current_price):
         """Returns True if trade is allowed, False if blocked by filters."""
@@ -630,38 +603,184 @@ class TradingStrategy:
                 logger.info(f"✅ SELL (MACD) | Conf: {conf}% | RSI: {rsi:.1f}")
                 self.execute_trade("SELL", symbol, self.lot_size, "MACD_RSI", sl, tp)
 
+    # =========================================================================
+    # --- UPDATED: BOLLINGER BANDS + RSI STRATEGY (PDF Page 6) ---
+    # =========================================================================
+
     def check_signals_bollinger(self, symbol, bid, ask, candles):
-        upper, lower, close = self.calculate_bollinger(candles)
-        rsi, _, _ = self.calculate_indicators(candles)
-        conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
+        """
+        Implementation of the Bollinger Bands + RSI Reversal Strategy.
+        Ref: Bollinger-Bands-Trading-Strategy.pdf
+        """
+        if len(candles) < 50: return
+
+        # 1. Prepare Dataframe for Lookback
+        df = pd.DataFrame(candles)
+        df['close'] = df['close'].astype(float)
         
-        if close < lower and rsi < self.rsi_buy_threshold and conf >= 50:
-            if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                logger.info(f"✅ BUY (BB) | Conf: {conf}% | Price < Lower | RSI: {rsi:.1f}")
-                self.execute_trade("BUY", symbol, self.lot_size, "BB_RSI", sl, tp)
+        # 2. Calculate Indicators on the whole series
+        # RSI (14)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
         
-        elif close > upper and rsi > self.rsi_sell_threshold and conf >= 50:
-            if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                logger.info(f"✅ SELL (BB) | Conf: {conf}% | Price > Upper | RSI: {rsi:.1f}")
-                self.execute_trade("SELL", symbol, self.lot_size, "BB_RSI", sl, tp)
+        # Bollinger Bands (20, 2)
+        df['sma'] = df['close'].rolling(window=20).mean() # Middle Band
+        df['std'] = df['close'].rolling(window=20).std()
+        df['upper'] = df['sma'] + (df['std'] * 2.0)
+        df['lower'] = df['sma'] - (df['std'] * 2.0)
+        
+        # Get Current and Previous Candle
+        # We use -1 (last completed candle) vs -2 for crossover checks
+        # Or -1 (forming) vs -2 (completed) depending on if you want confirmed close.
+        # Strategy usually requires a CLOSE past the middle band.
+        curr = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        atr = self.calculate_atr(candles)
+
+        # -----------------------------------------------------------
+        # BUY LOGIC: Setup (Oversold) -> Trigger (Cross Middle Band Up)
+        # -----------------------------------------------------------
+        
+        # TRIGGER: Price closes ABOVE Middle Band (Validation) 
+        cross_up = prev['close'] < prev['sma'] and curr['close'] > curr['sma']
+        
+        if cross_up:
+            # SETUP CHECK: Look back 20 candles for the "Setup"
+            # Condition: Price was < Lower Band AND RSI < 30 
+            lookback = df.iloc[-20:-1] 
+            setup_valid = False
+            swing_low = curr['low']
+            
+            for idx, row in lookback.iterrows():
+                if row['low'] < swing_low: swing_low = row['low'] # Track swing low
+                
+                # Check if we had the extreme condition recently
+                if row['close'] < row['lower'] and row['rsi'] < 30:
+                    setup_valid = True
+            
+            if setup_valid:
+                if self._check_filters("BUY", ask):
+                    # SL: Below Swing Low 
+                    sl = swing_low - (atr * 0.2)
+                    # TP: Target Upper Band or Next Overbought Area 
+                    tp = curr['upper'] 
+                    
+                    logger.info(f"✅ BUY (BB-RSI) | Reversal Confirmed | Cross Middle Band")
+                    self.execute_trade("BUY", symbol, self.lot_size, "BB_RSI_REV", sl, tp)
+                    return
+
+        # -----------------------------------------------------------
+        # SELL LOGIC: Setup (Overbought) -> Trigger (Cross Middle Band Down)
+        # -----------------------------------------------------------
+        
+        # TRIGGER: Price closes BELOW Middle Band (Validation)
+        cross_down = prev['close'] > prev['sma'] and curr['close'] < curr['sma']
+        
+        if cross_down:
+            # SETUP CHECK: Look back 20 candles
+            # Condition: Price was > Upper Band AND RSI > 70 
+            lookback = df.iloc[-20:-1]
+            setup_valid = False
+            swing_high = curr['high']
+            
+            for idx, row in lookback.iterrows():
+                if row['high'] > swing_high: swing_high = row['high']
+                
+                if row['close'] > row['upper'] and row['rsi'] > 70:
+                    setup_valid = True
+            
+            if setup_valid:
+                if self._check_filters("SELL", bid):
+                    # SL: Above Swing High
+                    sl = swing_high + (atr * 0.2)
+                    # TP: Target Lower Band
+                    tp = curr['lower']
+                    
+                    logger.info(f"✅ SELL (BB-RSI) | Reversal Confirmed | Cross Middle Band")
+                    self.execute_trade("SELL", symbol, self.lot_size, "BB_RSI_REV", sl, tp)
+
+    # =========================================================================
+    # --- UPDATED: 9/30 EMA TRADING STRATEGY (PDF Page 4) ---
+    # =========================================================================
 
     def check_signals_ema_cross(self, symbol, bid, ask, candles):
-        cross_up, cross_down = self.calculate_ema_cross(candles)
-        conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
+        # Ensure we have enough data for the Slow WMA
+        min_needed = self.ema_slow + 5
+        if len(candles) < min_needed: return
+
+        # 1. Prepare Data
+        df = pd.DataFrame(candles)
+        df['close'] = df['close'].astype(float)
         
-        if cross_up and conf >= 50:
-            if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                logger.info(f"✅ BUY (EMA CROSS) | Conf: {conf}%")
-                self.execute_trade("BUY", symbol, self.lot_size, "EMA_CROSS", sl, tp)
+        # 2. Calculate Indicators using UI Variables
+        fast_period = self.ema_fast
+        slow_period = self.ema_slow
+
+        # Fast EMA
+        df['fast_ema'] = df['close'].ewm(span=fast_period, adjust=False).mean()
         
-        elif cross_down and conf >= 50:
-            if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                logger.info(f"✅ SELL (EMA CROSS) | Conf: {conf}%")
-                self.execute_trade("SELL", symbol, self.lot_size, "EMA_CROSS", sl, tp)
+        # Slow WMA (Weighted Moving Average)
+        weights = np.arange(1, slow_period + 1)
+        wma_func = lambda x: np.dot(x, weights) / weights.sum()
+        df['slow_wma'] = df['close'].rolling(window=slow_period).apply(wma_func, raw=True)
+
+        curr = df.iloc[-1]
+        atr = self.calculate_atr(candles)
+
+        # -----------------------------------------------------------
+        # BUY SCENARIO (Bullish Trend)
+        # -----------------------------------------------------------
+        # Condition 1: Fast EMA > Slow WMA
+        if curr['fast_ema'] > curr['slow_wma']:
+            
+            # Condition 2: Spot Retracement (Pullback to Fast EMA)
+            pullback_candle = None
+            lookback_slice = df.iloc[-6:-1]
+            
+            for idx, row in lookback_slice.iterrows():
+                if row['low'] <= row['fast_ema']:
+                    pullback_candle = row
+            
+            # Condition 3: Trigger (Break of Structure)
+            if pullback_candle is not None:
+                trigger_price = pullback_candle['high']
+                
+                if ask > trigger_price and ask < (trigger_price + atr):
+                    if self._check_filters("BUY", ask):
+                        sl = pullback_candle['low'] - (atr * 0.2)
+                        tp = ask + ((ask - sl) * 2.0)
+                        
+                        logger.info(f"✅ BUY (EMA {fast_period}/{slow_period}) | Trend Pullback | Break {trigger_price:.2f}")
+                        self.execute_trade("BUY", symbol, self.lot_size, "EMA_RET_FLEX", sl, tp)
+                        return
+
+        # -----------------------------------------------------------
+        # SELL SCENARIO (Bearish Trend)
+        # -----------------------------------------------------------
+        # Condition 1: Fast EMA < Slow WMA
+        elif curr['fast_ema'] < curr['slow_wma']:
+            
+            pullback_candle = None
+            lookback_slice = df.iloc[-6:-1]
+            
+            for idx, row in lookback_slice.iterrows():
+                if row['high'] >= row['fast_ema']:
+                    pullback_candle = row
+            
+            if pullback_candle is not None:
+                trigger_price = pullback_candle['low']
+                
+                if bid < trigger_price and bid > (trigger_price - atr):
+                    if self._check_filters("SELL", bid):
+                        sl = pullback_candle['high'] + (atr * 0.2)
+                        tp = bid - ((sl - bid) * 2.0)
+                        
+                        logger.info(f"✅ SELL (EMA {fast_period}/{slow_period}) | Trend Pullback | Break {trigger_price:.2f}")
+                        self.execute_trade("SELL", symbol, self.lot_size, "EMA_RET_FLEX", sl, tp)
 
     # =========================================================================
     # --- UPDATED: SMART MONEY CONCEPTS (SMC) PER BLOG ---
