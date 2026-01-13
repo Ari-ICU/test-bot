@@ -21,6 +21,8 @@ class WebhookAlert:
         self.on_trade_command = None    # lambda action, symbol, volume: ...
         self.on_close_command = None    # lambda ticket_id: ...
         self.on_news_command = None     # lambda: ... (New Hook)
+        self.on_accounts_command = None # lambda: ... (Account List)
+        self.on_account_select = None   # lambda index: ... (Account Selection)
 
         if self.enabled:
             logger.info("Telegram Webhook Alert initialized.")
@@ -150,9 +152,24 @@ class WebhookAlert:
             f"{emoji} Floating P/L: `${floating_pnl:.2f}`\n"
             f"📦 Active Positions: `{position_count}`\n"
             f"🤖 Mode: `{active_mode}`\n"
+            f"👤 Account: `{acct_name}`\n"
             f"🕒 Time: `{time.strftime('%H:%M:%S')}`"
         )
         self.send_message(msg)
+
+    def notify_accounts_list(self, accounts, active_index):
+        """Displays list of configurable accounts with selection buttons."""
+        msg = "🔑 *SELECT ACCOUNT*\n\n"
+        buttons = []
+        
+        for i, acc in enumerate(accounts):
+            is_active = "✅ " if i == active_index else ""
+            msg += f"{is_active}*{acc['name']}*\n   └ Server: `{acc['server']}`\n\n"
+            btn_text = f"{'✅ ' if i == active_index else ''}{acc['name']}"
+            buttons.append([{"text": btn_text, "callback_data": f"account_select_{i}"}])
+        
+        buttons.append([{"text": "⬅️ Back to Menu", "callback_data": "cmd_menu"}])
+        self.send_keyboard(msg, buttons)
 
     def notify_close(self, symbol, profit, reason):
         emoji = "💰" if profit >= 0 else "❌"
@@ -205,7 +222,9 @@ class WebhookAlert:
             [{"text": "🟢 Buy XAU", "callback_data": "trade_buy_xau"}, {"text": "🔴 Sell XAU", "callback_data": "trade_sell_xau"}],
             # Row 3: Tools
             [{"text": "🔄 Active Mode", "callback_data": "cmd_mode"}, {"text": "📰 Market News", "callback_data": "cmd_news"}],
-            # Row 4: Emergency
+            # Row 4: Account Management
+            [{"text": "🔑 Accounts", "callback_data": "cmd_accounts"}],
+            # Row 5: Emergency
             [{"text": "❌ CLOSE ALL TRADES", "callback_data": "trade_close_all"}]
         ]
         self.send_keyboard("🎮 *Control Panel*", buttons)
@@ -268,6 +287,10 @@ class WebhookAlert:
                 if self.on_positions_command: self.on_positions_command()
             elif data == "cmd_news":
                 if self.on_news_command: self.on_news_command()
+            elif data == "cmd_accounts":
+                if self.on_accounts_command: self.on_accounts_command()
+            elif data == "cmd_menu":
+                self._show_main_menu()
             elif data == "cmd_mode":
                 if self.on_mode_command: self.on_mode_command()
             
@@ -276,6 +299,13 @@ class WebhookAlert:
                 # Handle single position close
                 ticket_id = data.split("_")[2]
                 if self.on_close_command: self.on_close_command(ticket_id)
+            
+            elif data.startswith("account_select_"):
+                # Handle account selection
+                try:
+                    account_index = int(data.split("_")[2])
+                    if self.on_account_select: self.on_account_select(account_index)
+                except: pass
             
             elif data == "trade_buy_xau":
                 if self.on_trade_command: self.on_trade_command("BUY", "XAUUSDm", 0.01)

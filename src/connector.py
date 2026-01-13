@@ -18,6 +18,7 @@ class MT5Connector:
         self.on_tick_received = None 
         self.on_symbols_received = None
         self.open_positions = [] # Store detailed active positions
+        self.account_info = {}   # Store MT5 account details
 
     def start(self):
         try:
@@ -141,10 +142,25 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         logger.error(f"Float Parse Error: {e}")
                         return
 
-                    acct_name = data.get('acct_name', 'Unknown')
+                    acct_name = data.get('acct_name', 'Unknown').replace('\x00', '').strip()
                     positions = int(data.get('positions', 0))
                     buy_count = int(data.get('buy_count', 0)) 
                     sell_count = int(data.get('sell_count', 0))
+                    
+                    # Parse extended account info
+                    self.connector.account_info = {
+                        'name': acct_name,
+                        'login': data.get('acct_login', '').replace('\x00', '').strip(),
+                        'server': data.get('acct_server', '').replace('\x00', '').strip(),
+                        'company': data.get('acct_company', '').replace('\x00', '').strip(),
+                        'leverage': data.get('acct_leverage', '0').replace('\x00', '').strip(),
+                        'equity': clean_float(data.get('acct_equity', 0)),
+                        'balance': balance,
+                        'profit': profit,
+                        'today': clean_float(data.get('prof_today', 0)),
+                        'week': clean_float(data.get('prof_week', 0)),
+                        'month': clean_float(data.get('prof_month', 0))
+                    }
 
                     candles = []
                     raw_candles = data.get('candles', '')

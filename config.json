@@ -34,8 +34,21 @@
   "mt5": {
     "host": "127.0.0.1",
     "port": 8001,
-    "enabled": true
+    "enabled": true,
+    "active_account": 0
   },
+  "mt5_accounts": [
+    {
+      "name": "Demo Account",
+      "login": "123456",
+      "server": "Demo-Server"
+    },
+    {
+      "name": "Live Account",
+      "login": "789012",
+      "server": "Live-Server"
+    }
+  ],
   "auto_trading": {
     "enabled": true,
     "max_positions": 1,

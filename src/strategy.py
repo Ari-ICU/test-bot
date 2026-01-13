@@ -34,6 +34,7 @@ class TradingStrategy:
         self.use_zone_filter = True
         
         # Initialize Webhook
+        self.config = config # Store for account management
         tg_config = config.get('telegram', {})
         self.webhook = WebhookAlert(
             bot_token=tg_config.get('bot_token'),
@@ -48,6 +49,8 @@ class TradingStrategy:
             self.webhook.on_trade_command = self._handle_telegram_trade
             self.webhook.on_close_command = self._handle_telegram_close_ticket
             self.webhook.on_news_command = self._handle_telegram_news_command
+            self.webhook.on_accounts_command = self._handle_telegram_accounts_command
+            self.webhook.on_account_select = self._handle_telegram_select_account
         
         # --- MARKET SESSIONS (Local Hours) ---
         self.SESSIONS = {
@@ -198,6 +201,7 @@ class TradingStrategy:
             candles = candles[::-1]
         
         self.current_profit = profit 
+        self.last_positions_count = positions # Track for Telegram
 
         if positions > 0:
             if profit > self.peak_profit: self.peak_profit = profit
@@ -212,7 +216,10 @@ class TradingStrategy:
             self.analyze_trend(candles)
 
         # --- 2. STRATEGY ROUTING ---
-        if self.active and positions < self.max_positions:
+        # Use both MT5 count AND local open_positions to ensure accuracy
+        actual_positions = max(positions, len(self.connector.open_positions))
+        
+        if self.active and actual_positions < self.max_positions:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
                 
                 mode = self.strategy_mode
@@ -1165,3 +1172,50 @@ class TradingStrategy:
                 self.webhook.send_message("📭 No relevant news found recently.")
         else:
             self.webhook.send_message("⚠️ News Engine not active.")
+
+    def _handle_telegram_accounts_command(self):
+        """Callback for /accounts - shows current MT5 account from live connection."""
+        acct = self.connector.account_info
+        
+        if acct and acct.get('login'):
+            msg = (
+                f"🔑 *ACTIVE MT5 ACCOUNT*\\n\\n"
+                f"👤 *{acct.get('name', 'Unknown')}*\\n"
+                f"🆔 Login: `{acct.get('login', 'N/A')}`\\n"
+                f"🖥️ Server: `{acct.get('server', 'N/A')}`\\n"
+                f"🏢 Broker: `{acct.get('company', 'N/A')}`\\n"
+                f"⚖️ Leverage: `1:{acct.get('leverage', 'N/A')}`\\n\\n"
+                f"💰 Balance: `${acct.get('balance', 0):.2f}`\\n"
+                f"📊 Equity: `${acct.get('equity', 0):.2f}`\\n"
+                f"📈 Floating P/L: `${acct.get('profit', 0):.2f}`"
+            )
+            self.webhook.send_message(msg)
+        else:
+            self.webhook.send_message("⚠️ No MT5 account connected. Waiting for data...")
+    
+    def _handle_telegram_select_account(self, account_index):
+        """Callback for account selection."""
+        import json
+        accounts = self.config.get('mt5_accounts', [])
+        
+        if 0 <= account_index < len(accounts):
+            selected = accounts[account_index]
+            
+            # Update config in memory
+            self.config['mt5']['active_account'] = account_index
+            
+            # Save to file
+            try:
+                with open('config.json', 'w') as f:
+                    json.dump(self.config, f, indent=2)
+                
+                self.webhook.send_message(
+                    f"✅ *Account Switched!*\\n\\n"
+                    f"👤 *{selected['name']}*\\n"
+                    f"🖥️ Server: `{selected['server']}`\\n\\n"
+                    f"⚠️ *Note:* You must manually switch accounts in MT5 Terminal."
+                )
+            except Exception as e:
+                self.webhook.send_message(f"❌ Failed to save: {e}")
+        else:
+            self.webhook.send_message("❌ Invalid account selection.")

@@ -8,6 +8,26 @@ input double DefaultLot = 0.01;
 int OnInit() { EventSetMillisecondTimer(500); return INIT_SUCCEEDED; }
 void OnDeinit(const int reason) { EventKillTimer(); ObjectsDeleteAll(0, "Py_"); }
 
+double CalculateHistoryProfit(datetime from_date)
+{
+    double profit = 0;
+    if(HistorySelect(from_date, TimeCurrent()))
+    {
+        int total = HistoryDealsTotal();
+        for(int i=0; i<total; i++)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(ticket > 0)
+            {
+                profit += HistoryDealGetDouble(ticket, DEAL_PROFIT);
+                profit += HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+                profit += HistoryDealGetDouble(ticket, DEAL_SWAP);
+            }
+        }
+    }
+    return profit;
+}
+
 void OnTimer()
 {
     if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)) {
@@ -77,12 +97,44 @@ void OnTimer()
         }
     }
 
+    // Account Details
+    long acct_login = AccountInfoInteger(ACCOUNT_LOGIN);
+    string acct_server = AccountInfoString(ACCOUNT_SERVER);
+    string acct_company = AccountInfoString(ACCOUNT_COMPANY);
+    long acct_leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
+    double acct_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+
+    // History Profits
+    MqlDateTime dt; TimeCurrent(dt);
+    dt.hour = 0; dt.min = 0; dt.sec = 0;
+    datetime day_start = StructToTime(dt);
+    
+    // Weekend/Weekly start (Monday)
+    int days_to_monday = (dt.day_of_week == 0) ? 6 : (dt.day_of_week - 1);
+    datetime week_start = day_start - (days_to_monday * 86400);
+    
+    // Month start
+    dt.day = 1;
+    datetime month_start = StructToTime(dt);
+
+    double prof_today = CalculateHistoryProfit(day_start);
+    double prof_week = CalculateHistoryProfit(week_start);
+    double prof_month = CalculateHistoryProfit(month_start);
+
     string post_str = "symbol=" + _Symbol + 
                       "&bid=" + DoubleToString(bid, _Digits) + 
                       "&ask=" + DoubleToString(ask, _Digits) +
                       "&balance=" + DoubleToString(balance, 2) +
                       "&profit=" + DoubleToString(profit, 2) +
+                      "&prof_today=" + DoubleToString(prof_today, 2) +
+                      "&prof_week=" + DoubleToString(prof_week, 2) +
+                      "&prof_month=" + DoubleToString(prof_month, 2) +
                       "&acct_name=" + acct_name +
+                      "&acct_login=" + IntegerToString(acct_login) +
+                      "&acct_server=" + acct_server +
+                      "&acct_company=" + acct_company +
+                      "&acct_leverage=" + IntegerToString(acct_leverage) +
+                      "&acct_equity=" + DoubleToString(acct_equity, 2) +
                       "&positions=" + IntegerToString(total_pos) +
                       "&buy_count=" + IntegerToString(buy_count) +
                       "&sell_count=" + IntegerToString(sell_count) +
