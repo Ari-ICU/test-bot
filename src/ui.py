@@ -26,6 +26,9 @@ class TradingBotUI(tb.Window):
         self.mt5_connector = mt5_connector
         self.strategy = None
         
+        # --- UI Callback Setup ---
+        self.strategy_ui_callback = None  # Will hold strategy.ui_callback
+        
         self.last_price_update = time.time()
         self.symbols_loaded = False
         self.open_positions = []  
@@ -201,6 +204,12 @@ class TradingBotUI(tb.Window):
         else:
              self.lbl_buy_logic.config(text=f"🟢 BUY: Logic for {mode}")
              self.lbl_sell_logic.config(text=f"🔴 SELL: Logic for {mode}")
+        
+        # Quick flash current pred (if available)
+        if self.strategy:
+            _, pred_dir = self.strategy.get_prediction_score("", 0, 0, [])  # Dummy call for demo
+            self.lbl_buy_logic.config(foreground="#2ecc71" if pred_dir == "BUY" else "#95a5a6")
+            self.lbl_sell_logic.config(foreground="#e74c3c" if pred_dir == "SELL" else "#95a5a6")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         self.last_price_update = time.time() 
@@ -210,6 +219,31 @@ class TradingBotUI(tb.Window):
              self.profit_history.append((time.strftime("%H:%M:%S"), profit))
              if len(self.profit_history) > 50: self.profit_history.pop(0)
 
+    def _on_strategy_callback(self, event_type, data):
+        """Handles callbacks from strategy (e.g., profit close, break-even)"""
+        try:
+            if event_type == "profit_update":
+                # Update profit label in real-time
+                profit = data.get("profit", 0)
+                positions = data.get("positions", 0)
+                pl_style = "success" if profit >= 0 else "danger"
+                self.lbl_profit.config(text=f"📈 P/L: ${profit:+,.2f}", bootstyle=pl_style)
+                self.lbl_positions.config(text=f"📦 Positions: {positions}/{self.max_pos_var.get()}")
+            elif event_type == "break_even":
+                # Flash a temporary alert (e.g., change profit label color briefly)
+                self.lbl_profit.config(bootstyle="warning")
+                Messagebox.show_info("Break-Even Activated", data["msg"])  # Popup for visibility
+                # Reset color after 2s
+                self.after(2000, lambda: self.lbl_profit.config(bootstyle="success" if data["profit"] >= 0 else "danger"))
+            elif event_type == "profit_closed":
+                # Success alert + reset
+                Messagebox.show_success("Profit Closed", f"Closed ${data['profit']:.2f} on {data['symbol']}")
+                self.lbl_profit.config(text="📈 P/L: $0.00", bootstyle="success")
+            elif event_type == "error":
+                Messagebox.show_error("Strategy Error", data["msg"])
+        except Exception as e:
+            logging.error(f"UI callback error: {e}")
+    
     def _on_symbols_received(self, symbols_list):
         if not self.symbols_loaded:
             self.after(0, lambda: self._set_combo_values(symbols_list))
@@ -271,10 +305,34 @@ class TradingBotUI(tb.Window):
             if self.strategy and len(candles) > 20:
                 rsi, macd, signal = self.strategy.calculate_indicators(candles)
                 
-                rsi_color = "success" if rsi < self.rsi_buy_var.get() else "danger" if rsi > self.rsi_sell_var.get() else "secondary"
+                # --- Current Signal Display (Fixes 'buy during sell' bug) ---
+                conf_score, pred_dir = self.strategy.get_prediction_score(symbol, bid, ask, candles)
+                
+                # Check active positions for override (if in SELL, bias to SELL)
+                is_in_sell = sell_count > 0 and buy_count == 0
+                is_in_buy = buy_count > 0 and sell_count == 0
+                if is_in_sell:
+                    pred_dir = "SELL"  # Override to match position
+                    conf_score = max(conf_score, 70)  # Boost confidence visually
+                elif is_in_buy:
+                    pred_dir = "BUY"
+                    conf_score = max(conf_score, 70)
+                
+                # Update label with color and text
+                dir_emoji = "🟢" if pred_dir == "BUY" else "🔴" if pred_dir == "SELL" else "⚪"
+                dir_style = "success" if pred_dir == "BUY" else "danger" if pred_dir == "SELL" else "secondary"
+                self.lbl_current_signal.config(
+                    text=f"{dir_emoji} {pred_dir} ({conf_score}%)",
+                    bootstyle=dir_style
+                )
+                
+                # Align RSI/MACD colors with predicted direction (prevents 'buy green during sell')
+                rsi_color = "success" if (pred_dir == "BUY" or rsi < self.rsi_buy_var.get()) else "danger"
+                if pred_dir == "SELL" and rsi > self.rsi_sell_var.get():
+                    rsi_color = "danger"
                 self.lbl_live_rsi.config(text=f"RSI: {rsi:.2f}", bootstyle=rsi_color)
                 
-                macd_color = "success" if macd > signal else "danger"
+                macd_color = "success" if (pred_dir == "BUY" and macd > signal) or (pred_dir == "SELL" and macd < signal) else "danger"
                 self.lbl_live_macd.config(text=f"MACD: {macd:.5f}", bootstyle=macd_color)
 
                 # --- CRT Progress Update ---
@@ -353,6 +411,7 @@ class TradingBotUI(tb.Window):
             self.lbl_live_rsi.config(text="RSI: Waiting...", bootstyle="secondary")
             self.lbl_live_macd.config(text="MACD: Waiting...", bootstyle="secondary")
             self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
+            self.lbl_current_signal.config(text="Signal: NEUTRAL (0%)", bootstyle="secondary")
             
             if self.strategy and hasattr(self.strategy, 'reset_state'):
                 self.strategy.reset_state()
@@ -508,6 +567,12 @@ class TradingBotUI(tb.Window):
         
         self.lbl_sync = ttk.Label(ind_frame, text="🔄 Sync: Waiting...", font=("Segoe UI", 9), foreground="#888")
         self.lbl_sync.pack(anchor=W, pady=2)
+
+        # Current Signal Frame (New: Fixes 'buy during sell' display issue)
+        signal_frame = ttk.LabelFrame(left_frame, text="🎯 Current Signal", padding=10, bootstyle="primary")
+        signal_frame.pack(fill=X, pady=5)
+        self.lbl_current_signal = ttk.Label(signal_frame, text="Signal: NEUTRAL (0%)", font=("Segoe UI", 11, "bold"))
+        self.lbl_current_signal.pack(anchor=W)
 
         right_frame = ttk.Frame(parent, padding=10)
         right_frame.grid(row=0, column=1, sticky="nsew")

@@ -9,6 +9,9 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo
 
+import warnings
+warnings.filterwarnings("ignore", message=".*'T' is deprecated.*")
+
 logger = logging.getLogger("Strategy")
 
 class TradingStrategy:
@@ -28,14 +31,16 @@ class TradingStrategy:
         # "ZONE_BOUNCE", "MACD_RSI", "BOLLINGER", "EMA_CROSS", "SMC", "CRT"
         # "STOCHASTIC", "ICHIMOKU", "PRICE_ACTION"
         # "ICT_FVG", "ICT_SILVER_BULLET"
+        # "U16_STRATEGY", "BREAKOUT", "SCALPING", "MEAN_REVERSION", "MOMENTUM"
         # "MASTER_CONFLUENCE" (Combines All)
-        # NEW ADDITIONS: "BREAKOUT", "SCALPING", "MEAN_REVERSION", "MOMENTUM"
         self.strategy_mode = "MASTER_CONFLUENCE" 
         self.use_trend_filter = True
         self.use_zone_filter = True
         
+        # Store config
+        self.config = config
+        
         # Initialize Webhook
-        self.config = config # Store for account management
         tg_config = config.get('telegram', {})
         self.webhook = WebhookAlert(
             bot_token=tg_config.get('bot_token'),
@@ -52,6 +57,9 @@ class TradingStrategy:
             self.webhook.on_news_command = self._handle_telegram_news_command
             self.webhook.on_accounts_command = self._handle_telegram_accounts_command
             self.webhook.on_account_select = self._handle_telegram_select_account
+        
+        # --- UI CALLBACK (for profit/protection updates) ---
+        self.ui_callback = None  # Will be set by UI to refresh dashboard
         
         # --- MARKET SESSIONS (Local Hours) ---
         self.SESSIONS = {
@@ -90,36 +98,32 @@ class TradingStrategy:
         self.ema_fast = 9
         self.ema_slow = 21
 
-        # NEW: Stochastic
+        # Stochastic
         self.stoch_k = 14
         self.stoch_d = 3
         self.stoch_overbought = 80
         self.stoch_oversold = 20
 
-        # NEW: Ichimoku
+        # Ichimoku
         self.ichi_tenkan = 9
         self.ichi_kijun = 26
         self.ichi_senkou_b = 52
 
-        # NEW: ADX (Trend Strength)
+        # ADX (Trend Strength)
         self.adx_period = 14
 
         # CRT Settings
         self.crt_htf = 240
         self.crt_zone_size = 0.50 
 
-        # NEW: Breakout Settings
-        self.breakout_period = 20  # Period for consolidation detection
-        self.breakout_threshold = 1.5  # ATR multiplier for breakout confirmation
-
-        # NEW: Scalping Settings
-        self.scalp_atr_mult = 0.5  # Tight SL for scalping
-        self.scalp_tp_mult = 1.0   # Quick TP for scalping
-
-        # NEW: Mean Reversion Settings
+        # New Strategy Settings
+        self.breakout_period = 20
+        self.breakout_threshold = 1.5
+        self.scalp_atr_mult = 0.5
+        self.scalp_tp_mult = 1.0
         self.mr_bb_period = 20
         self.mr_bb_dev = 2.0
-        self.mr_rsi_extreme = 70  # For overbought/oversold in reversion
+        self.mr_rsi_extreme = 70
 
         # --- State ---
         self.last_trade_time = 0           
@@ -145,7 +149,9 @@ class TradingStrategy:
         self.peak_profit = 0.0        
         self.last_profit_close_time = 0
         self.profit_close_interval = 1 
-        self.last_positions_count = 0    # Tracks position changes for alerts
+        self.last_positions_count = 0    
+        self.last_balance = 0.0
+        self.last_positions_list = []
         
         # --- TRADE PROTECTION ---
         self.break_even_activation = 0.50  
@@ -169,14 +175,13 @@ class TradingStrategy:
         self.support_zones = []
         self.resistance_zones = []
         self.peak_profit = 0.0
+        self.last_positions_list = []
         logging.info("Strategy state reset for new symbol.")
 
-    # --- FIX: Added Missing Method for UI ---
     def get_session_times(self):
         """Returns a string summary of session times for the UI"""
         parts = []
         for city, data in self.SESSIONS.items():
-            # Returns short format e.g. "Lon:08-17"
             parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
         return " | ".join(parts)
 
@@ -188,18 +193,15 @@ class TradingStrategy:
             server_time_str = datetime.fromtimestamp(candles[-1]['time']).strftime('%H:%M:%S')
 
         # 0. Data Validation & Automated History Fetching
-        # Detect timeframe from candle interval
-        tf_minutes = 5 # Default
+        tf_minutes = 5  # Default
         if candles and len(candles) > 2:
             diff = (candles[1]['time'] - candles[0]['time']) // 60
             if diff > 0: tf_minutes = diff
         
-        # Adjust min candles needed based on TF
-        # Lower TF = more candles, Higher TF = fewer needed
         if tf_minutes <= 5: min_needed = 300
         elif tf_minutes <= 30: min_needed = 150
         elif tf_minutes <= 60: min_needed = 100
-        else: min_needed = 50 # H4, D1
+        else: min_needed = 50
         
         if not candles or len(candles) < min_needed:
             if current_time - self.last_hist_req > 5:
@@ -215,7 +217,7 @@ class TradingStrategy:
             candles = candles[::-1]
         
         self.current_profit = profit 
-        self.last_positions_count = positions # Track for Telegram
+        self.last_positions_count = positions
 
         if positions > 0:
             if profit > self.peak_profit: self.peak_profit = profit
@@ -230,8 +232,7 @@ class TradingStrategy:
             self.analyze_trend(candles)
 
         # --- 2. STRATEGY ROUTING ---
-        # Use both MT5 count AND local open_positions to ensure accuracy
-        actual_positions = max(positions, len(self.connector.open_positions))
+        actual_positions = max(positions, len(getattr(self.connector, 'open_positions', [])))
         
         if self.active and actual_positions < self.max_positions:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
@@ -269,7 +270,7 @@ class TradingStrategy:
                 # --- U16 COMBINED MODE ---
                 elif mode == "U16_STRATEGY":
                     self.check_signals_u16(symbol, bid, ask, candles)
-
+                
                 # --- NEW ADDED STRATEGIES ---
                 elif mode == "BREAKOUT":
                     self.check_signals_breakout(symbol, bid, ask, candles)
@@ -294,40 +295,25 @@ class TradingStrategy:
         # 4. Position Change Detection (Detailed Close Reporting)
         current_positions_list = getattr(self.connector, 'open_positions', [])
         
-        # Initialize last_positions_list if first run
+        # Initialize if first run
         if not hasattr(self, 'last_positions_list'):
             self.last_positions_list = current_positions_list
 
         # Detect changes
-        if hasattr(self, 'last_balance'):
+        if hasattr(self, 'last_balance') and self.last_balance != 0:
              realized_pnl = balance - self.last_balance
              
-             # Check for closed tickets
-             # Create sets of tickets for comparison
              last_tickets = {p['ticket']: p for p in self.last_positions_list}
              curr_tickets = {p['ticket']: p for p in current_positions_list}
              
-             closed_tickets = []
-             for t_id, t_data in last_tickets.items():
-                 if t_id not in curr_tickets:
-                     closed_tickets.append(t_data)
-             
+             closed_tickets = [t_data for t_id, t_data in last_tickets.items() if t_id not in curr_tickets]
              count_closed = len(closed_tickets)
              
              if count_closed > 0 and self.webhook:
-                 # We have closed positions
-                 # Use realized_pnl from balance change as the Truth
-                 # (If balance change is tiny/zero, use sum of 'profit' from last known floating as estimate? No, balance is better)
-                 
-                 # Logic:
-                 # If 1 closed: Show details
                  if count_closed == 1:
                      t = closed_tickets[0]
                      msg_reason = f"Ticket #{t['ticket']}"
-                     # If realized pnl is near zero, maybe break even?
                      self.webhook.notify_close(t['symbol'], realized_pnl, msg_reason)
-                 
-                 # If > 1 closed: Show Summary
                  else:
                      msg_reason = f"Batch Close ({count_closed} trades)"
                      self.webhook.notify_close(symbol, realized_pnl, msg_reason)
@@ -336,9 +322,12 @@ class TradingStrategy:
         self.last_positions_count = positions
         self.last_balance = balance
 
-        # 5. Manage Profit 
+        # 5. Manage Profit
         if positions > 0 and self.use_profit_management:
             self.check_and_close_profit(symbol)
+            # Real-time UI update for profit (even if no close)
+            if self.ui_callback:
+                self.ui_callback("profit_update", {"profit": self.current_profit, "positions": positions})
 
     # =========================================================================
     # --- HELPER CALCULATIONS ---
@@ -460,7 +449,6 @@ class TradingStrategy:
 
         return "NONE"
 
-    # NEW: Bollinger Bands Calculation for Mean Reversion and Breakout
     def calculate_bollinger_bands(self, candles, period=20, dev=2.0):
         try:
             df = pd.DataFrame(candles)
@@ -470,12 +458,13 @@ class TradingStrategy:
             df['lower'] = df['sma'] - (df['std'] * dev)
             last = df.iloc[-1]
             prev = df.iloc[-2]
-            return last['upper'], last['lower'], last['sma'], (last['upper'] - last['lower']) / last['sma'] * 100  # Bandwidth %
+            bandwidth = (last['upper'] - last['lower']) / last['sma'] * 100
+            return last['upper'], last['lower'], last['sma'], bandwidth
         except:
             return 0, 0, 0, 0
 
     # =========================================================================
-    # --- NEW STRATEGIES ---
+    # --- STRATEGY CHECK METHODS ---
     # =========================================================================
 
     def check_signals_stochastic(self, symbol, bid, ask, candles):
@@ -516,77 +505,57 @@ class TradingStrategy:
     def check_signals_price_action(self, symbol, bid, ask, candles):
         pattern = self.detect_candle_patterns(candles)
         
-        if pattern == "BULLISH_ENGULFING" or pattern == "HAMMER":
+        if pattern in ["BULLISH_ENGULFING", "HAMMER"]:
             if self._check_filters("BUY", ask):
                 sl, tp = self.calculate_safe_risk("BUY", ask, candles)
                 logger.info(f"✅ BUY (PRICE ACTION) | Pattern: {pattern}")
                 self.execute_trade("BUY", symbol, self.lot_size, "PA_" + pattern, sl, tp)
                 
-        elif pattern == "BEARISH_ENGULFING" or pattern == "SHOOTING_STAR":
+        elif pattern in ["BEARISH_ENGULFING", "SHOOTING_STAR"]:
             if self._check_filters("SELL", bid):
                 sl, tp = self.calculate_safe_risk("SELL", bid, candles)
                 logger.info(f"✅ SELL (PRICE ACTION) | Pattern: {pattern}")
                 self.execute_trade("SELL", symbol, self.lot_size, "PA_" + pattern, sl, tp)
 
     def check_signals_ict_fvg(self, symbol, bid, ask, candles):
-        """
-        ICT Fair Value Gap Strategy:
-        Entries taken when price retraces into a fresh FVG.
-        """
         fvg_type, top, bottom = self._detect_recent_fvg(candles)
         
-        if fvg_type == "BULLISH":
-            # Entry: Price dips into the gap (below top, above bottom)
-            if bottom < ask < top:
-                if self._check_filters("BUY", ask):
-                    sl = bottom - (self.calculate_atr(candles) * 0.2)
-                    tp = ask + ((ask - sl) * 2.0) # ICT aims for 2R+
-                    logger.info(f"✅ BUY (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
-                    self.execute_trade("BUY", symbol, self.lot_size, "ICT_FVG", sl, tp)
+        if fvg_type == "BULLISH" and bottom < ask < top:
+            if self._check_filters("BUY", ask):
+                atr = self.calculate_atr(candles)
+                sl = bottom - (atr * 0.2)
+                tp = ask + ((ask - sl) * 2.0)
+                logger.info(f"✅ BUY (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
+                self.execute_trade("BUY", symbol, self.lot_size, "ICT_FVG", sl, tp)
 
-        elif fvg_type == "BEARISH":
-            # Entry: Price rallies into the gap (above bottom, below top)
-            if bottom < bid < top:
-                if self._check_filters("SELL", bid):
-                    sl = top + (self.calculate_atr(candles) * 0.2)
-                    tp = bid - ((sl - bid) * 2.0)
-                    logger.info(f"✅ SELL (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
-                    self.execute_trade("SELL", symbol, self.lot_size, "ICT_FVG", sl, tp)
+        elif fvg_type == "BEARISH" and bottom < bid < top:
+            if self._check_filters("SELL", bid):
+                atr = self.calculate_atr(candles)
+                sl = top + (atr * 0.2)
+                tp = bid - ((sl - bid) * 2.0)
+                logger.info(f"✅ SELL (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
+                self.execute_trade("SELL", symbol, self.lot_size, "ICT_FVG", sl, tp)
 
     def check_signals_ict_silver_bullet(self, symbol, bid, ask, candles):
-        """
-        ICT Silver Bullet:
-        Specific time window (10-11 AM NY, 2-3 PM NY) + FVG Setup.
-        """
-        # 1. Check Time
         if not self._is_silver_bullet_time():
             return
-            
-        # 2. Check FVG (Same mechanism, just restricted by time)
-        # Note: We reuse the FVG logic but because we are inside the Silver Bullet function,
-        # we implicitly rely on the time check. 
-        # *Self-Correction*: The trade reason should ideally reflect Silver Bullet.
-        # Let's copy logic to be precise.
         
         fvg_type, top, bottom = self._detect_recent_fvg(candles)
         if fvg_type == "NONE": return
         
         if fvg_type == "BULLISH" and bottom < ask < top and self._check_filters("BUY", ask):
-             sl = bottom - (self.calculate_atr(candles) * 0.1)
+             atr = self.calculate_atr(candles)
+             sl = bottom - (atr * 0.1)
              tp = ask + ((ask - sl) * 2.0)
              self.execute_trade("BUY", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
              
         elif fvg_type == "BEARISH" and bottom < bid < top and self._check_filters("SELL", bid):
-             sl = top + (self.calculate_atr(candles) * 0.1)
+             atr = self.calculate_atr(candles)
+             sl = top + (atr * 0.1)
              tp = bid - ((sl - bid) * 2.0)
              self.execute_trade("SELL", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
 
-    # NEW: Breakout Strategy
     def check_signals_breakout(self, symbol, bid, ask, candles):
-        """
-        Breakout Trading: Detects consolidation (low volatility) followed by a strong break.
-        Uses Bollinger Band squeeze (low bandwidth) + price close outside bands.
-        """
         if len(candles) < self.breakout_period + 1:
             return
         upper, lower, sma, bandwidth = self.calculate_bollinger_bands(candles, self.breakout_period, self.bb_dev)
@@ -594,38 +563,31 @@ class TradingStrategy:
         current_close = candles[-1]['close']
         prev_close = candles[-2]['close']
 
-        # Detect squeeze: Bandwidth < threshold (e.g., 0.5% of price)
-        squeeze_threshold = sma * 0.005  # 0.5%
+        squeeze_threshold = sma * 0.005
         if bandwidth < squeeze_threshold:
-            # Breakout up: Close > upper band + ATR confirmation
             if current_close > upper and current_close > prev_close + (atr * self.breakout_threshold):
                 if self._check_filters("BUY", ask):
-                    sl = lower  # SL below lower band
+                    sl = lower
                     tp = ask + ((ask - sl) * self.risk_reward_ratio)
                     logger.info(f"✅ BUY (BREAKOUT) | Upper Break: {upper:.2f} | Bandwidth: {bandwidth:.2f}%")
                     self.execute_trade("BUY", symbol, self.lot_size, "BREAKOUT", sl, tp)
             
-            # Breakout down: Close < lower band + ATR confirmation
             elif current_close < lower and current_close < prev_close - (atr * self.breakout_threshold):
                 if self._check_filters("SELL", bid):
-                    sl = upper  # SL above upper band
+                    sl = upper
                     tp = bid - ((sl - bid) * self.risk_reward_ratio)
                     logger.info(f"✅ SELL (BREAKOUT) | Lower Break: {lower:.2f} | Bandwidth: {bandwidth:.2f}%")
                     self.execute_trade("SELL", symbol, self.lot_size, "BREAKOUT", sl, tp)
 
-    # NEW: Scalping Strategy
     def check_signals_scalping(self, symbol, bid, ask, candles):
-        """
-        Scalping: High-frequency, short-term trades on momentum bursts.
-        Uses Stochastic crossover in extremes + tight ATR-based SL/TP.
-        Best on low-spread pairs during high liquidity.
-        """
-        k, d = self.calculate_stochastic(candles)
+        df = pd.DataFrame(candles)
+        k = self.calculate_stochastic(candles)[0]
+        d_prev = self.calculate_stochastic(candles[:-1])[1] if len(candles) > 1 else 50
         rsi, _, _ = self.calculate_indicators(candles)
         atr = self.calculate_atr(candles)
 
         # Buy: K crosses above D in oversold + RSI rising
-        if k > d and k[1] <= d[1] and k < self.stoch_oversold and rsi > 30:
+        if k > d_prev and k < self.stoch_oversold and rsi > 30:
             if self._check_filters("BUY", ask):
                 sl_dist = atr * self.scalp_atr_mult
                 sl = ask - sl_dist
@@ -634,7 +596,7 @@ class TradingStrategy:
                 self.execute_trade("BUY", symbol, self.lot_size, "SCALPING", sl, tp)
 
         # Sell: K crosses below D in overbought + RSI falling
-        elif k < d and k[1] >= d[1] and k > self.stoch_overbought and rsi < 70:
+        elif k < d_prev and k > self.stoch_overbought and rsi < 70:
             if self._check_filters("SELL", bid):
                 sl_dist = atr * self.scalp_atr_mult
                 sl = bid + sl_dist
@@ -642,13 +604,7 @@ class TradingStrategy:
                 logger.info(f"✅ SELL (SCALP) | Stoch Cross Down: {k:.1f} | RSI: {rsi:.1f}")
                 self.execute_trade("SELL", symbol, self.lot_size, "SCALPING", sl, tp)
 
-    # NEW: Mean Reversion Strategy
     def check_signals_mean_reversion(self, symbol, bid, ask, candles):
-        """
-        Mean Reversion: Trades pullbacks to the mean in ranging markets.
-        Uses Bollinger Bands (price touching outer bands) + RSI extremes.
-        Avoids trending markets (ADX < 25).
-        """
         if len(candles) < self.mr_bb_period + 1:
             return
         upper, lower, sma, _ = self.calculate_bollinger_bands(candles, self.mr_bb_period, self.mr_bb_dev)
@@ -656,60 +612,47 @@ class TradingStrategy:
         adx = self.calculate_adx(candles)
         current_close = candles[-1]['close']
 
-        # Range filter: Low ADX
         if adx > 25:
             return  # Trending, skip
 
-        # Buy: Price at lower band + RSI oversold
         if current_close <= lower and rsi < (100 - self.mr_rsi_extreme):
             if self._check_filters("BUY", ask):
-                sl = lower - (self.calculate_atr(candles) * 0.5)
-                tp = sma  # Revert to mean
+                atr = self.calculate_atr(candles)
+                sl = lower - (atr * 0.5)
+                tp = sma
                 logger.info(f"✅ BUY (MEAN REV) | Lower Band: {lower:.2f} | RSI: {rsi:.1f}")
                 self.execute_trade("BUY", symbol, self.lot_size, "MEAN_REVERSION", sl, tp)
 
-        # Sell: Price at upper band + RSI overbought
         elif current_close >= upper and rsi > self.mr_rsi_extreme:
             if self._check_filters("SELL", bid):
-                sl = upper + (self.calculate_atr(candles) * 0.5)
-                tp = sma  # Revert to mean
+                atr = self.calculate_atr(candles)
+                sl = upper + (atr * 0.5)
+                tp = sma
                 logger.info(f"✅ SELL (MEAN REV) | Upper Band: {upper:.2f} | RSI: {rsi:.1f}")
                 self.execute_trade("SELL", symbol, self.lot_size, "MEAN_REVERSION", sl, tp)
 
-    # NEW: Momentum Strategy
     def check_signals_momentum(self, symbol, bid, ask, candles):
-        """
-        Momentum Trading: Rides accelerating trends using MACD histogram expansion + ADX.
-        Enters on pullback to EMA in strong trend.
-        """
         rsi, macd, macd_sig = self.calculate_indicators(candles)
         adx = self.calculate_adx(candles)
         df = pd.DataFrame(candles)
         df['ema_20'] = df['close'].ewm(span=20).mean()
         current_close = df.iloc[-1]['close']
-        prev_macd = df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']
+        prev_macd_hist = (df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']) if len(df) > 1 else 0
         curr_macd_hist = macd - macd_sig
 
-        # Strong momentum: ADX > 25 + expanding MACD hist
         if adx > 25:
-            # Bullish: Price above EMA + MACD hist increasing
-            if current_close > df.iloc[-1]['ema_20'] and curr_macd_hist > prev_macd:
+            if current_close > df.iloc[-1]['ema_20'] and curr_macd_hist > prev_macd_hist:
                 if self._check_filters("BUY", ask):
                     sl, tp = self.calculate_safe_risk("BUY", ask, candles)
                     logger.info(f"✅ BUY (MOMENTUM) | ADX: {adx:.1f} | MACD Hist: {curr_macd_hist:.4f}")
                     self.execute_trade("BUY", symbol, self.lot_size, "MOMENTUM", sl, tp)
 
-            # Bearish: Price below EMA + MACD hist decreasing (more negative)
-            elif current_close < df.iloc[-1]['ema_20'] and curr_macd_hist < prev_macd:
+            elif current_close < df.iloc[-1]['ema_20'] and curr_macd_hist < prev_macd_hist:
                 if self._check_filters("SELL", bid):
                     sl, tp = self.calculate_safe_risk("SELL", bid, candles)
                     logger.info(f"✅ SELL (MOMENTUM) | ADX: {adx:.1f} | MACD Hist: {curr_macd_hist:.4f}")
                     self.execute_trade("SELL", symbol, self.lot_size, "MOMENTUM", sl, tp)
 
-    # =========================================================================
-    # --- U16 STRATEGY (Combines Everything) ---
-    # =========================================================================
-    
     def check_signals_u16(self, symbol, bid, ask, candles):
         buy_score = 0
         sell_score = 0
@@ -788,195 +731,6 @@ class TradingStrategy:
                 logger.info(f"🌟 SELL (U16) | Score: {sell_score} | Reasons: {reason_str}")
                 self.execute_trade("SELL", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
 
-    # =========================================================================
-    # --- STRUCTURE / ZONES / CRT HELPERS ---
-    # =========================================================================
-
-    def analyze_structure_zones(self, symbol, candles):
-        if not candles: return
-        ts_candles = candles
-        current_price = ts_candles[-1]['close']
-        self.zone_tolerance = current_price * 0.0005 
-
-        highs, lows = self._get_fractals(ts_candles)
-        all_swings = highs + lows
-        zones = self._cluster_levels(all_swings, threshold=self.zone_tolerance)
-        
-        self.support_zones = []
-        self.resistance_zones = []
-        
-        for zone in zones:
-            if zone['count'] >= self.zone_min_touches:
-                if zone['top'] < current_price:
-                    self.support_zones.append(zone)
-                elif zone['bottom'] > current_price:
-                    self.resistance_zones.append(zone)
-        
-        self.support_zones.sort(key=lambda x: x['top'], reverse=True)
-        self.resistance_zones.sort(key=lambda x: x['bottom'])
-
-        # VISUALIZE ZONES (RESTORED)
-        if time.time() - self.last_draw_time > 5.0:
-            self._draw_zones(symbol)
-            self.last_draw_time = time.time()
-
-    def _draw_zones(self, symbol):
-        # Sends draw commands to MT5 for visual debugging
-        for i, zone in enumerate(self.support_zones[:3]):
-            name = f"Supp_{i}"
-            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x008000") 
-
-        for i, zone in enumerate(self.resistance_zones[:3]):
-            name = f"Res_{i}"
-            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x000080") 
-
-    def _get_fractals(self, candles, window=2):
-        highs = []
-        lows = []
-        if len(candles) < (window * 2 + 1): return [], []
-        for i in range(window, len(candles) - window - 1):
-            curr = candles[i]
-            is_high = True
-            for j in range(1, window + 1):
-                if candles[i-j]['high'] > curr['high'] or candles[i+j]['high'] > curr['high']:
-                    is_high = False; break
-            if is_high: highs.append(curr['high'])
-
-            is_low = True
-            for j in range(1, window + 1):
-                if candles[i-j]['low'] < curr['low'] or candles[i+j]['low'] < curr['low']:
-                    is_low = False; break
-            if is_low: lows.append(curr['low'])
-        return highs, lows
-
-    def _cluster_levels(self, levels, threshold):
-        if not levels: return []
-        levels.sort()
-        zones = []
-        current_cluster = [levels[0]]
-        for i in range(1, len(levels)):
-            price = levels[i]
-            if price - current_cluster[-1] <= threshold:
-                current_cluster.append(price)
-            else:
-                zones.append(self._make_zone_dict(current_cluster))
-                current_cluster = [price]
-        if current_cluster: zones.append(self._make_zone_dict(current_cluster))
-        return zones
-
-    def _make_zone_dict(self, cluster):
-        return {'top': max(cluster), 'bottom': min(cluster), 'center': sum(cluster)/len(cluster), 'count': len(cluster)}
-
-    def _get_nearest_zone(self, price, is_support):
-        zones = self.support_zones if is_support else self.resistance_zones
-        if not zones: return None
-        return zones[0]
-
-    def analyze_trend(self, candles):
-        try:
-            df = pd.DataFrame(candles)
-            ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
-            current = df['close'].iloc[-1]
-            if current > ema200:
-                self.trend = "BULLISH_STRONG" if current > (ema200 * 1.001) else "BULLISH_WEAK"
-            else:
-                self.trend = "BEARISH_STRONG" if current < (ema200 * 0.999) else "BEARISH_WEAK"
-        except: self.trend = "NEUTRAL"
-
-    # =========================================================================
-    # --- ORIGINAL STRATEGIES (RESTORED FULLY) ---
-    # =========================================================================
-
-    def get_htf_structure(self, candles, timeframe_minutes=240):
-        """Restored CRT Helper"""
-        if not candles or len(candles) < 20: 
-            return None, None, "NO_DATA"
-        df = pd.DataFrame(candles)
-        df['dt'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('dt', inplace=True)
-        htf_rule = f"{timeframe_minutes}min"
-        htf_candles = df.resample(htf_rule).agg({
-            'high': 'max', 'low': 'min', 'close': 'last', 'open': 'first'
-        }).dropna()
-        if len(htf_candles) < 2: return None, None, "INSUFFICIENT_DATA"
-        prev_htf = htf_candles.iloc[-2]
-        return prev_htf['high'], prev_htf['low'], "OK"
-
-    
-    def _detect_crt_signal(self, candles, bid, ask):
-        """Helper to detect CRT Sweep & Reclaim signals without executing."""
-        if len(candles) < 20: return "NONE"
-        
-        # 1. Get HTF Structure
-        ltf_mins = (candles[1]['time'] - candles[0]['time']) // 60
-        if ltf_mins <= 0: ltf_mins = 5
-        htf_minutes = getattr(self, 'crt_htf', 240)
-        needed = (htf_minutes // ltf_mins) * 2
-        if len(candles) < needed: return "NONE"
-
-        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
-        if status != "OK": return "NONE"
-        
-        # 2. Check Logic
-        range_width = crt_high - crt_low
-        entry_threshold = range_width * getattr(self, 'crt_zone_size', 0.25)
-        last_closed = candles[-2]
-        close_price = last_closed['close']
-        
-        lookback = 10
-        recent_history = candles[-(lookback+1):-1]
-        recent_lows = [c['low'] for c in recent_history]
-        recent_highs = [c['high'] for c in recent_history]
-        
-        has_swept_low = min(recent_lows) < crt_low
-        has_swept_high = max(recent_highs) > crt_high
-        
-        if has_swept_low:
-            is_reclaimed = close_price > crt_low
-            in_range = crt_low < ask < (crt_low + entry_threshold)
-            if is_reclaimed and in_range:
-                return "BUY"
-
-        elif has_swept_high:
-            is_reclaimed = close_price < crt_high
-            in_range = (crt_high - entry_threshold) < bid < crt_high
-            if is_reclaimed and in_range:
-                return "SELL"
-                
-        return "NONE"
-
-    def check_signals_crt(self, symbol, bid, ask, candles):
-        """Restored Full CRT Logic"""
-        # Drawing Logic (Keep here as it is visual)
-        if len(candles) < 20: return
-        htf_minutes = getattr(self, 'crt_htf', 240)
-        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
-        
-        if status == "OK" and time.time() - self.last_crt_draw > 5:
-            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
-            self.connector.send_hline_command(f"CRT_HI_{symbol}", crt_high, "255,0,0", 2) 
-            self.connector.send_hline_command(f"CRT_LO_{symbol}", crt_low, "0,255,0", 2)
-            self.last_crt_draw = time.time()
-            
-        # Execution Logic (Now uses helper)
-        signal = self._detect_crt_signal(candles, bid, ask)
-        atr = self.calculate_atr(candles)
-        
-        if signal == "BUY" and self._check_filters("BUY", ask):
-             # Need to recalc SL/TP here as helper doesn't provide it
-             recent_history = candles[-11:-1]
-             recent_lows = [c['low'] for c in recent_history]
-             sl = min(recent_lows) - (atr * 0.2)
-             tp = crt_high - (atr * 0.10)
-             self.execute_trade("BUY", symbol, self.lot_size, "CRT_RANGE", sl, tp)
-             
-        elif signal == "SELL" and self._check_filters("SELL", bid):
-             recent_history = candles[-11:-1]
-             recent_highs = [c['high'] for c in recent_history]
-             sl = max(recent_highs) + (atr * 0.2)
-             tp = crt_low + (atr * 0.10)
-             self.execute_trade("SELL", symbol, self.lot_size, "CRT_RANGE", sl, tp)
-
     def check_signals_zone_bounce(self, symbol, bid, ask, candles):
         atr = self.calculate_atr(candles)
         if atr == 0: return
@@ -1048,6 +802,173 @@ class TradingStrategy:
                 sl, tp = self.calculate_safe_risk("SELL", bid, candles)
                 self.execute_trade("SELL", symbol, self.lot_size, "SMC_OB", sl, tp)
 
+    def check_signals_crt(self, symbol, bid, ask, candles):
+        if len(candles) < 20: return
+        htf_minutes = self.crt_htf
+        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
+        
+        if status == "OK" and time.time() - self.last_crt_draw > 5:
+            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
+            self.connector.send_hline_command(f"CRT_HI_{symbol}", crt_high, "255,0,0", 2) 
+            self.connector.send_hline_command(f"CRT_LO_{symbol}", crt_low, "0,255,0", 2)
+            self.last_crt_draw = time.time()
+            
+        signal = self._detect_crt_signal(candles, bid, ask)
+        atr = self.calculate_atr(candles)
+        
+        if signal == "BUY" and self._check_filters("BUY", ask):
+             recent_history = candles[-11:-1]
+             recent_lows = [c['low'] for c in recent_history]
+             sl = min(recent_lows) - (atr * 0.2)
+             tp = crt_high - (atr * 0.10)
+             self.execute_trade("BUY", symbol, self.lot_size, "CRT_RANGE", sl, tp)
+             
+        elif signal == "SELL" and self._check_filters("SELL", bid):
+             recent_history = candles[-11:-1]
+             recent_highs = [c['high'] for c in recent_history]
+             sl = max(recent_highs) + (atr * 0.2)
+             tp = crt_low + (atr * 0.10)
+             self.execute_trade("SELL", symbol, self.lot_size, "CRT_RANGE", sl, tp)
+
+    # =========================================================================
+    # --- STRUCTURE / ZONES / CRT HELPERS ---
+    # =========================================================================
+
+    def analyze_structure_zones(self, symbol, candles):
+        if not candles: return
+        ts_candles = candles
+        current_price = ts_candles[-1]['close']
+        self.zone_tolerance = current_price * 0.0005 
+
+        highs, lows = self._get_fractals(ts_candles)
+        all_swings = highs + lows
+        zones = self._cluster_levels(all_swings, threshold=self.zone_tolerance)
+        
+        self.support_zones = []
+        self.resistance_zones = []
+        
+        for zone in zones:
+            if zone['count'] >= self.zone_min_touches:
+                if zone['top'] < current_price:
+                    self.support_zones.append(zone)
+                elif zone['bottom'] > current_price:
+                    self.resistance_zones.append(zone)
+        
+        self.support_zones.sort(key=lambda x: x['top'], reverse=True)
+        self.resistance_zones.sort(key=lambda x: x['bottom'])
+
+        if time.time() - self.last_draw_time > 5.0:
+            self._draw_zones(symbol)
+            self.last_draw_time = time.time()
+
+    def _draw_zones(self, symbol):
+        for i, zone in enumerate(self.support_zones[:3]):
+            name = f"Supp_{i}"
+            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x008000") 
+
+        for i, zone in enumerate(self.resistance_zones[:3]):
+            name = f"Res_{i}"
+            self.connector.send_draw_command(name, zone['top'], zone['bottom'], 100, 0, "0x000080") 
+
+    def _get_fractals(self, candles, window=2):
+        highs = []
+        lows = []
+        if len(candles) < (window * 2 + 1): return [], []
+        for i in range(window, len(candles) - window):
+            curr = candles[i]
+            is_high = all(candles[i-j]['high'] <= curr['high'] and candles[i+j]['high'] <= curr['high'] for j in range(1, window + 1))
+            if is_high: highs.append(curr['high'])
+
+            is_low = all(candles[i-j]['low'] >= curr['low'] and candles[i+j]['low'] >= curr['low'] for j in range(1, window + 1))
+            if is_low: lows.append(curr['low'])
+        return highs, lows
+
+    def _cluster_levels(self, levels, threshold):
+        if not levels: return []
+        levels.sort()
+        zones = []
+        current_cluster = [levels[0]]
+        for i in range(1, len(levels)):
+            price = levels[i]
+            if price - current_cluster[-1] <= threshold:
+                current_cluster.append(price)
+            else:
+                zones.append(self._make_zone_dict(current_cluster))
+                current_cluster = [price]
+        if current_cluster: zones.append(self._make_zone_dict(current_cluster))
+        return zones
+
+    def _make_zone_dict(self, cluster):
+        return {'top': max(cluster), 'bottom': min(cluster), 'center': sum(cluster)/len(cluster), 'count': len(cluster)}
+
+    def _get_nearest_zone(self, price, is_support):
+        zones = self.support_zones if is_support else self.resistance_zones
+        if not zones: return None
+        return min(zones, key=lambda z: abs(price - z['center']))
+
+    def analyze_trend(self, candles):
+        try:
+            df = pd.DataFrame(candles)
+            ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            current = df['close'].iloc[-1]
+            if current > ema200:
+                self.trend = "BULLISH_STRONG" if current > (ema200 * 1.001) else "BULLISH_WEAK"
+            else:
+                self.trend = "BEARISH_STRONG" if current < (ema200 * 0.999) else "BEARISH_WEAK"
+        except: self.trend = "NEUTRAL"
+
+    def get_htf_structure(self, candles, timeframe_minutes=240):
+        if not candles or len(candles) < 20: 
+            return None, None, "NO_DATA"
+        df = pd.DataFrame(candles)
+        df['dt'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('dt', inplace=True)
+        htf_rule = f"{timeframe_minutes}T"
+        htf_candles = df.resample(htf_rule).agg({
+            'high': 'max', 'low': 'min', 'close': 'last', 'open': 'first'
+        }).dropna()
+        if len(htf_candles) < 2: return None, None, "INSUFFICIENT_DATA"
+        prev_htf = htf_candles.iloc[-2]
+        return prev_htf['high'], prev_htf['low'], "OK"
+
+    def _detect_crt_signal(self, candles, bid, ask):
+        if len(candles) < 20: return "NONE"
+        
+        ltf_mins = (candles[1]['time'] - candles[0]['time']) // 60 or 5
+        htf_minutes = self.crt_htf
+        needed = (htf_minutes // ltf_mins) * 2
+        if len(candles) < needed: return "NONE"
+
+        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
+        if status != "OK": return "NONE"
+        
+        range_width = crt_high - crt_low
+        entry_threshold = range_width * self.crt_zone_size
+        last_closed = candles[-2]
+        close_price = last_closed['close']
+        
+        lookback = 10
+        recent_history = candles[-(lookback+1):-1]
+        recent_lows = [c['low'] for c in recent_history]
+        recent_highs = [c['high'] for c in recent_history]
+        
+        has_swept_low = min(recent_lows) < crt_low
+        has_swept_high = max(recent_highs) > crt_high
+        
+        if has_swept_low:
+            is_reclaimed = close_price > crt_low
+            in_range = crt_low < ask < (crt_low + entry_threshold)
+            if is_reclaimed and in_range:
+                return "BUY"
+
+        elif has_swept_high:
+            is_reclaimed = close_price < crt_high
+            in_range = (crt_high - entry_threshold) < bid < crt_high
+            if is_reclaimed and in_range:
+                return "SELL"
+                
+        return "NONE"
+
     def detect_market_structure(self, candles):
         if len(candles) < 50: return "NEUTRAL"
         highs, lows = self._get_fractals(candles, window=3)
@@ -1062,111 +983,85 @@ class TradingStrategy:
         bullish_ob, bearish_ob = None, None
         for i in range(len(candles) - 3, len(candles) - 30, -1):
             curr = candles[i]
-            if curr['close'] < curr['open']: # Red
-                if candles[i+1]['close'] > curr['high']:
-                    bullish_ob = {'top': curr['high'], 'bottom': curr['low']}
-                    break
+            if curr['close'] < curr['open'] and i + 1 < len(candles) and candles[i+1]['close'] > curr['high']:
+                bullish_ob = {'top': curr['high'], 'bottom': curr['low']}
+                break
         for i in range(len(candles) - 3, len(candles) - 30, -1):
             curr = candles[i]
-            if curr['close'] > curr['open']: # Green
-                if candles[i+1]['close'] < curr['low']:
-                    bearish_ob = {'top': curr['high'], 'bottom': curr['low']}
-                    break
-    # =========================================================================
-    # --- ICT HELPERS ---
-    # =========================================================================
+            if curr['close'] > curr['open'] and i + 1 < len(candles) and candles[i+1]['close'] < curr['low']:
+                bearish_ob = {'top': curr['high'], 'bottom': curr['low']}
+                break
+        return bullish_ob, bearish_ob
 
     def _detect_recent_fvg(self, candles):
-        """
-        Finds the most recent valid Fair Value Gap in the last 15 candles.
-        Returns: Type (BULLISH/BEARISH/NONE), TopPrice, BottomPrice
-        """
         if len(candles) < 5: return "NONE", 0, 0
         
-        # We iterate backwards to find the freshest FVG
         for i in range(len(candles) - 1, 2, -1):
-            curr = candles[i]     # Candle i
-            prev = candles[i-1]   # Candle i-1 (The displacement candle usually)
-            prev2 = candles[i-2]  # Candle i-2
+            curr = candles[i]
+            prev2 = candles[i-2]
             
-            # Note: A proper FVG is formed by the gap between i and i-2
-            
-            # BULLISH FVG: Low of candle i > High of candle i-2
-            # Implies strong move UP in candle i-1
             if curr['low'] > prev2['high']:
                 gap = curr['low'] - prev2['high']
-                # Filter small gaps?
                 if gap > 0:
-                    return "BULLISH", curr['low'], prev2['high'] # Top, Bottom (of the gap)
+                    return "BULLISH", curr['low'], prev2['high']
             
-            # BEARISH FVG: High of candle i < Low of candle i-2
-            # Implies strong move DOWN in candle i-1
             if curr['high'] < prev2['low']:
                 gap = prev2['low'] - curr['high']
                 if gap > 0:
-                    return "BEARISH", prev2['low'], curr['high'] # Top, Bottom (of the gap)
+                    return "BEARISH", prev2['low'], curr['high']
                     
         return "NONE", 0, 0
 
     def _is_silver_bullet_time(self):
-        """Checks if we are in the 10-11 AM or 2-3 PM NY Session Window"""
         try:
             ny_tz = ZoneInfo("America/New_York")
             now_ny = datetime.now(ny_tz)
             h = now_ny.hour
-            # AM Session: 10:00 - 11:00
-            # PM Session: 14:00 - 15:00
-            if h == 10 or h == 14:
-                return True
-            return False
+            return h in [10, 14]
         except:
             return False
-
 
     # =========================================================================
     # --- FILTERS & UTILS ---
     # =========================================================================
 
     def get_prediction_score(self, symbol, bid, ask, candles):
-        if not candles or len(candles) < 50: return 0, "No Data"
+        if not candles or len(candles) < 50:
+            return 0, "NEUTRAL"
+        
         rsi, macd, macd_sig = self.calculate_indicators(candles)
         buy_strength = 0
         sell_strength = 0
         
         if rsi < 50: buy_strength += 20
         else: sell_strength += 20
-        
         if macd > macd_sig: buy_strength += 20
         else: sell_strength += 20
-        
         if "BULLISH" in self.trend: buy_strength += 20
         elif "BEARISH" in self.trend: sell_strength += 20
-
-        if buy_strength >= sell_strength: return buy_strength, "BUY"
-        else: return sell_strength, "SELL"
+        
+        if buy_strength > sell_strength:
+            return buy_strength, "BUY"
+        elif sell_strength > buy_strength:
+            return sell_strength, "SELL"
+        else:
+            return 50, "NEUTRAL"  # Tie -> Neutral
 
     def _is_trading_time(self):
         if not self.use_time_filter: return True
         try:
             if self.time_zone == "Auto":
-                active_session = None
-                active_any = False
                 for session_name, config in self.SESSIONS.items():
                     tz = ZoneInfo(config['tz'])
                     now = datetime.now(tz)
                     hour = now.hour
                     start, end = config['start'], config['end']
-                    is_active = False
-                    if start <= end:
-                        if start <= hour < end: is_active = True
-                    else: 
-                        if hour >= start or hour < end: is_active = True
+                    is_active = (start <= hour < end) if start <= end else (hour >= start or hour < end)
                     if is_active:
-                        active_session = session_name
-                        active_any = True
-                        break
-                self.active_session_name = active_session if active_session else "Closed"
-                return active_any
+                        self.active_session_name = session_name
+                        return True
+                self.active_session_name = "Closed"
+                return False
 
             tz_map = {"London": "Europe/London", "New York": "America/New_York", "Tokyo": "Asia/Tokyo", "Sydney": "Australia/Sydney"}
             if self.time_zone in tz_map:
@@ -1175,10 +1070,7 @@ class TradingStrategy:
                 now = datetime.now()
             
             curr_hour = now.hour
-            if self.start_hour <= self.end_hour:
-                return self.start_hour <= curr_hour < self.end_hour
-            else:
-                return curr_hour >= self.start_hour or curr_hour < self.end_hour
+            return (self.start_hour <= curr_hour < self.end_hour) if self.start_hour <= self.end_hour else (curr_hour >= self.start_hour or curr_hour < self.end_hour)
         except: return True
 
     def _check_filters(self, direction, current_price):
@@ -1219,9 +1111,7 @@ class TradingStrategy:
             else:
                 sl = entry_price - sl_dist
             
-            # Raw TP based on R:R
             raw_tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
-            # TP Safety Buffer: Pull back by 5% of ATR to ensure hit
             tp = raw_tp - (atr * 0.05)
 
         elif direction == "SELL":
@@ -1231,83 +1121,98 @@ class TradingStrategy:
             else:
                 sl = entry_price + sl_dist
             
-            # Raw TP based on R:R
             raw_tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
-            # TP Safety Buffer: Pull back by 5% of ATR to ensure hit
             tp = raw_tp + (atr * 0.05)
 
         return float(sl), float(tp)
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
         self.last_trade_time = time.time()
-        self.connector.send_command(direction, symbol, volume, sl, tp, 0)
-        logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl:.4f} | TP: {tp:.4f}")
-        if self.webhook:
-            self.webhook.notify_trade(direction, symbol, volume, sl, tp, reason)
+        success = self.connector.send_command(direction, symbol, volume, sl, tp, 0)
+        if success:
+            logger.info(f"🚀 EXECUTED {direction} {symbol} | Vol: {volume} | SL: {sl:.4f} | TP: {tp:.4f} | Reason: {reason}")
+            if self.webhook:
+                self.webhook.notify_trade(direction, symbol, volume, sl, tp, reason)
+        else:
+            logger.error(f"❌ FAILED to execute {direction} {symbol}")
 
     def check_and_close_profit(self, symbol):
-        if time.time() - self.last_profit_close_time < self.profit_close_interval: return
+        if time.time() - self.last_profit_close_time < self.profit_close_interval:
+            return
         self.last_profit_close_time = time.time()
         
-        if not self.break_even_active and self.current_profit >= self.break_even_activation:
-            msg = f"🛡️ BREAK-EVEN ACTIVATED: Profit ${self.current_profit:.2f}. Locking in position."
-            logger.info(msg)
-            self.break_even_active = True
-            if self.webhook:
-                self.webhook.notify_protection(symbol, msg)
+        try:
+            # Break-even activation (only once)
+            if not self.break_even_active and self.current_profit >= self.break_even_activation:
+                msg = f"🛡️ BREAK-EVEN ACTIVATED: Profit ${self.current_profit:.2f}. Locking in position."
+                logger.info(msg)
+                self.break_even_active = True
+                if self.webhook:
+                    self.webhook.notify_protection(symbol, msg)
+                # Notify UI to flash a warning or update
+                if self.ui_callback:
+                    self.ui_callback("break_even", {"profit": self.current_profit, "msg": msg})
+            
+            # Target profit close
+            if self.current_profit >= self.min_profit_target:
+                logger.info(f"💰 TARGET HIT: ${self.current_profit:.2f}. Closing...")
+                close_msg = "Target Profit Hit"
+                if self.webhook:
+                    self.webhook.notify_close(symbol, self.current_profit, close_msg)
+                
+                # Attempt close (with retry logic if needed)
+                success = self.connector.close_profit(symbol)
+                if success:
+                    self.break_even_active = False
+                    self.peak_profit = 0.0  # Reset peak
+                    # Notify UI of successful close
+                    if self.ui_callback:
+                        self.ui_callback("profit_closed", {"profit": self.current_profit, "symbol": symbol})
+                else:
+                    logger.warning(f"⚠️ Failed to close profit for {symbol}. Retrying next tick...")
+                    # Optional: Retry after short delay (don't set last_profit_close_time to allow quick retry)
+        except Exception as e:
+            logger.error(f"❌ Error in check_and_close_profit: {e}")
+            if self.ui_callback:
+                self.ui_callback("error", {"msg": str(e)})
 
-        if self.current_profit >= self.min_profit_target:
-            logger.info(f"💰 TARGET HIT: ${self.current_profit:.2f}. Closing...")
-            if self.webhook:
-                self.webhook.notify_close(symbol, self.current_profit, "Target Profit Hit")
-            self.connector.close_profit(symbol)
-            self.break_even_active = False
+    # =========================================================================
+    # --- TELEGRAM HANDLERS ---
+    # =========================================================================
 
     def _handle_telegram_status_command(self):
-        """Callback for when /status is received from Telegram."""
-        if hasattr(self, 'current_profit'):
-            pos_count = len(self.open_positions) if hasattr(self, 'open_positions') else 0
-            bal = getattr(self, 'last_balance', 0.0) 
-            self.webhook.notify_account_summary(bal, self.current_profit, pos_count, self.strategy_mode)
+        pos_count = self.last_positions_count
+        bal = self.last_balance 
+        self.webhook.notify_account_summary(bal, self.current_profit, pos_count, self.strategy_mode)
 
     def _handle_telegram_positions_command(self):
-        """Callback for when /positions is received."""
-        # Use the list of positions parsed by the connector
-        
-        # Safe access to connector data
         raw_positions = getattr(self.connector, 'open_positions', [])
         
         if raw_positions:
             self.webhook.notify_active_positions(raw_positions)
         else:
-             # Check if we have a count mismatch, meaning syncing issues
             if self.last_positions_count > 0:
                 self.webhook.send_message(f"⚠️ Have {self.last_positions_count} positions, but details are syncing...")
             else:
                 self.webhook.notify_active_positions([])
 
     def _handle_telegram_mode_command(self):
-        """Callback for toggling Active/Pause mode via Telegram."""
         self.active = not self.active
         state = "ACTIVE (AUTO-TRADING)" if self.active else "PAUSED"
         self.webhook.send_message(f"🔄 **Strategy Updated**\nNew State: **{state}**")
         logger.info(f"Telegram Request: Strategy set to {state}")
 
     def _handle_telegram_trade(self, action, symbol=None, volume=None):
-        """Callback for /buy or /sell from Telegram."""
-        # 1. Determine Symbol
         if not symbol:
             self.webhook.send_message("⚠️ Please specify symbol. Example: `/buy XAUUSDm 0.01`")
             return
 
-        # 2. Determine Volume
         if not volume:
             volume = self.lot_size
         
         sl = 0.0
         tp = 0.0
         
-        # Trigger Trade
         success = self.connector.send_command(action, symbol, volume, sl, tp, 0)
         
         if success:
@@ -1317,16 +1222,14 @@ class TradingStrategy:
             self.webhook.send_message("❌ Failed to send command to MT5.")
 
     def _handle_telegram_close_ticket(self, ticket_id):
-        """Callback to close a specific ticket."""
         self.webhook.send_message(f"⏳ Attempting to close Ticket #{ticket_id}...")
         self.connector.close_ticket(ticket_id)
 
     def _handle_telegram_news_command(self):
-        """Callback for /news."""
         if self.news_engine:
             self.webhook.send_message("🔎 *Fetching live updates...*")
-            self.news_engine.fetch_latest() # Force refresh
-            news_str = self.news_engine.get_latest_news(5) # Get top 5
+            self.news_engine.fetch_latest()
+            news_str = self.news_engine.get_latest_news(5)
             if news_str:
                 self.webhook.send_message(f"📰 *Latest News*\n{news_str}")
             else:
@@ -1335,19 +1238,18 @@ class TradingStrategy:
             self.webhook.send_message("⚠️ News Engine not active.")
 
     def _handle_telegram_accounts_command(self):
-        """Callback for /accounts - shows current MT5 account from live connection."""
         acct = self.connector.account_info
         
         if acct and acct.get('login'):
             msg = (
-                f"🔑 *ACTIVE MT5 ACCOUNT*\\n\\n"
-                f"👤 *{acct.get('name', 'Unknown')}*\\n"
-                f"🆔 Login: `{acct.get('login', 'N/A')}`\\n"
-                f"🖥️ Server: `{acct.get('server', 'N/A')}`\\n"
-                f"🏢 Broker: `{acct.get('company', 'N/A')}`\\n"
-                f"⚖️ Leverage: `1:{acct.get('leverage', 'N/A')}`\\n\\n"
-                f"💰 Balance: `${acct.get('balance', 0):.2f}`\\n"
-                f"📊 Equity: `${acct.get('equity', 0):.2f}`\\n"
+                f"🔑 *ACTIVE MT5 ACCOUNT*\n\n"
+                f"👤 *{acct.get('name', 'Unknown')}*\n"
+                f"🆔 Login: `{acct.get('login', 'N/A')}`\n"
+                f"🖥️ Server: `{acct.get('server', 'N/A')}`\n"
+                f"🏢 Broker: `{acct.get('company', 'N/A')}`\n"
+                f"⚖️ Leverage: `1:{acct.get('leverage', 'N/A')}`\n\n"
+                f"💰 Balance: `${acct.get('balance', 0):.2f}`\n"
+                f"📊 Equity: `${acct.get('equity', 0):.2f}`\n"
                 f"📈 Floating P/L: `${acct.get('profit', 0):.2f}`"
             )
             self.webhook.send_message(msg)
@@ -1355,25 +1257,21 @@ class TradingStrategy:
             self.webhook.send_message("⚠️ No MT5 account connected. Waiting for data...")
     
     def _handle_telegram_select_account(self, account_index):
-        """Callback for account selection."""
         import json
         accounts = self.config.get('mt5_accounts', [])
         
         if 0 <= account_index < len(accounts):
             selected = accounts[account_index]
-            
-            # Update config in memory
             self.config['mt5']['active_account'] = account_index
             
-            # Save to file
             try:
                 with open('config.json', 'w') as f:
                     json.dump(self.config, f, indent=2)
                 
                 self.webhook.send_message(
-                    f"✅ *Account Switched!*\\n\\n"
-                    f"👤 *{selected['name']}*\\n"
-                    f"🖥️ Server: `{selected['server']}`\\n\\n"
+                    f"✅ *Account Switched!*\n\n"
+                    f"👤 *{selected['name']}*\n"
+                    f"🖥️ Server: `{selected['server']}`\n\n"
                     f"⚠️ *Note:* You must manually switch accounts in MT5 Terminal."
                 )
             except Exception as e:
