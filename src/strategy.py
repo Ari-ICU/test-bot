@@ -715,7 +715,7 @@ class TradingStrategy:
         elif crt_signal == "SELL": sell_score += 3; reasons.append("CRT_Sweep")
 
         # --- EXECUTION LOGIC ---
-        THRESHOLD = 4 
+        THRESHOLD = 5 
         
         if buy_score >= THRESHOLD and buy_score > sell_score:
             if self._check_filters("BUY", ask):
