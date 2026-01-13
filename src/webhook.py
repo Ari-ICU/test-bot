@@ -11,28 +11,30 @@ logger = logging.getLogger("WebhookAlert")
 class WebhookAlert:
     def __init__(self, bot_token=None, chat_id=None):
         self.bot_token = bot_token
-        self.chat_id = chat_id
+        self.chat_id = str(chat_id) if chat_id else None
         self.enabled = bool(bot_token and chat_id)
         
         # --- Hooks for Strategy (External Logic) ---
         self.on_status_command = None
         self.on_positions_command = None
-        self.on_mode_command = None
-        self.on_trade_command = None    # lambda action, symbol, volume: ...
-        self.on_close_command = None    # lambda ticket_id: ...
-        self.on_news_command = None     # lambda: ... (New Hook)
-        self.on_accounts_command = None # lambda: ... (Account List)
-        self.on_account_select = None   # lambda index: ... (Account Selection)
+        self.on_mode_command = None         # Toggle Active/Pause
+        self.on_trade_command = None        # Manual Trade
+        self.on_close_command = None        # Close Ticket
+        self.on_news_command = None         
+        self.on_accounts_command = None     
+        self.on_account_select = None       
+        # -- New Hooks --
+        self.on_analysis_command = None     # Request Technical Analysis
+        self.on_strategy_select = None      # Change Strategy Mode (name)
+        self.on_lot_change = None           # Change Lot Size (delta)
 
         if self.enabled:
             logger.info("Telegram Webhook Alert initialized.")
-            # Start Polling for commands
             self.stop_event = threading.Event()
             self.poll_thread = threading.Thread(target=self._poll_updates, daemon=True)
             self.poll_thread.start()
-            
-            # Register Commands
             self._register_commands()
+            self.send_message("🤖 **Trading Bot Online**\nSystem initialized and ready.")
         else:
             logger.warning("Telegram Webhook Alert: Missing bot_token or chat_id. Alerts disabled.")
 
@@ -41,7 +43,6 @@ class WebhookAlert:
     # ---------------------------------------------------------
 
     def send_message(self, message):
-        """Sends a message to Telegram in a non-blocking thread."""
         if not self.enabled: return
         threading.Thread(target=self._send_sync, args=(message,), daemon=True).start()
 
@@ -55,13 +56,11 @@ class WebhookAlert:
             }).encode('utf-8')
             
             req = urllib.request.Request(url, data=data)
-            with urllib.request.urlopen(req, timeout=10) as response:
-                pass
+            with urllib.request.urlopen(req, timeout=10): pass
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")
 
     def send_keyboard(self, message, buttons):
-        """Sends a message with an inline keyboard."""
         if not self.enabled: return
         threading.Thread(target=self._send_keyboard_sync, args=(message, buttons), daemon=True).start()
 
@@ -99,10 +98,6 @@ class WebhookAlert:
         self.send_message(msg)
 
     def notify_active_positions(self, positions_list):
-        """
-        Sends a detailed list of all open positions.
-        Each position gets a specific 'Close' button for single selection closing.
-        """
         if not positions_list:
             self.send_message("📭 *No Active Positions*")
             return
@@ -113,12 +108,8 @@ class WebhookAlert:
         for p in positions_list:
             emoji = "🟢" if p['type'] == 'BUY' else "🔴"
             pl_emoji = "💵" if p['profit'] >= 0 else "🔻"
-            
-            # Button Text: "❌ Close BUY XAUUSD (+$10.50)"
             btn_text = f"❌ Close {p['type']} {p['symbol']} ({pl_emoji}{p['profit']:.2f})"
-            # Data: close_ticket_12345678
             callback_data = f"close_ticket_{p['ticket']}"
-            
             buttons.append([{"text": btn_text, "callback_data": callback_data}])
             
             msg += (
@@ -127,10 +118,33 @@ class WebhookAlert:
                 f"   └ Ticket: `{p['ticket']}`"
             )
             
-        # Add a "Refresh" button at the bottom
         buttons.append([{"text": "🔄 Refresh List", "callback_data": "cmd_positions"}])
-        
         self.send_keyboard(msg, buttons)
+
+    def notify_account_summary(self, balance, floating_pnl, position_count, active_mode, lot_size=0.01):
+        emoji = "📈" if floating_pnl >= 0 else "📉"
+        msg = (
+            f"📊 *ACCOUNT SUMMARY*\n\n"
+            f"🏦 Balance: `${balance:.2f}`\n"
+            f"{emoji} Floating P/L: `${floating_pnl:.2f}`\n"
+            f"📦 Active Positions: `{position_count}`\n"
+            f"⚙️ Mode: `{active_mode}`\n"
+            f"🎲 Lot Size: `{lot_size}`\n"
+            f"🕒 Time: `{time.strftime('%H:%M:%S')}`"
+        )
+        self.send_message(msg)
+
+    def notify_analysis(self, symbol, trend, rsi, macd, score, signal):
+        """Displays technical analysis summary."""
+        msg = (
+            f"🔬 *MARKET ANALYSIS* ({symbol})\n\n"
+            f"📈 Trend: `{trend}`\n"
+            f"📊 RSI: `{rsi:.1f}`\n"
+            f"📉 MACD: `{macd:.5f}`\n"
+            f"🎯 Signal Score: `{score}`\n"
+            f"🤖 Recommendation: *{signal}*"
+        )
+        self.send_message(msg)
 
     def notify_news(self, title, sentiment, score, impact="Medium"):
         """Specifically formatted notification for news."""
@@ -143,33 +157,6 @@ class WebhookAlert:
             f"🕒 Time: `{time.strftime('%H:%M:%S')}`"
         )
         self.send_message(msg)
-
-    def notify_account_summary(self, balance, floating_pnl, position_count, active_mode):
-        emoji = "📈" if floating_pnl >= 0 else "📉"
-        msg = (
-            f"📊 *ACCOUNT SUMMARY*\n\n"
-            f"🏦 Balance: `${balance:.2f}`\n"
-            f"{emoji} Floating P/L: `${floating_pnl:.2f}`\n"
-            f"📦 Active Positions: `{position_count}`\n"
-            f"🤖 Mode: `{active_mode}`\n"
-            f"👤 Account: `{acct_name}`\n"
-            f"🕒 Time: `{time.strftime('%H:%M:%S')}`"
-        )
-        self.send_message(msg)
-
-    def notify_accounts_list(self, accounts, active_index):
-        """Displays list of configurable accounts with selection buttons."""
-        msg = "🔑 *SELECT ACCOUNT*\n\n"
-        buttons = []
-        
-        for i, acc in enumerate(accounts):
-            is_active = "✅ " if i == active_index else ""
-            msg += f"{is_active}*{acc['name']}*\n   └ Server: `{acc['server']}`\n\n"
-            btn_text = f"{'✅ ' if i == active_index else ''}{acc['name']}"
-            buttons.append([{"text": btn_text, "callback_data": f"account_select_{i}"}])
-        
-        buttons.append([{"text": "⬅️ Back to Menu", "callback_data": "cmd_menu"}])
-        self.send_keyboard(msg, buttons)
 
     def notify_close(self, symbol, profit, reason):
         emoji = "💰" if profit >= 0 else "❌"
@@ -185,12 +172,7 @@ class WebhookAlert:
         self.send_message(msg)
 
     def notify_protection(self, symbol, message):
-        msg = (
-            f"🛡️ *TRADE PROTECTION*\n\n"
-            f"📦 `{symbol}`\n"
-            f"📝 {message}\n"
-            f"🕒 Time: `{time.strftime('%H:%M:%S')}`"
-        )
+        msg = f"🛡️ *TRADE PROTECTION*\n\n📦 `{symbol}`\n📝 {message}\n🕒 Time: `{time.strftime('%H:%M:%S')}`"
         self.send_message(msg)
 
     # ---------------------------------------------------------
@@ -201,11 +183,11 @@ class WebhookAlert:
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/setMyCommands"
             commands = [
-                {"command": "menu", "description": "Show Main Control Panel"},
-                {"command": "status", "description": "Account Balance & P/L"},
-                {"command": "positions", "description": "Manage Open Trades"},
-                {"command": "news", "description": "Check Market News"},
-                {"command": "help", "description": "Show available commands"}
+                {"command": "menu", "description": "Main Control Panel"},
+                {"command": "status", "description": "Account Balance & Config"},
+                {"command": "positions", "description": "Manage Trades"},
+                {"command": "analysis", "description": "Technical Analysis"},
+                {"command": "settings", "description": "Strategy & Risk"},
             ]
             data = json.dumps({"commands": commands}).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
@@ -214,20 +196,38 @@ class WebhookAlert:
             logger.warning(f"Failed to register Telegram commands: {e}")
 
     def _show_main_menu(self):
-        """Displays the main interactive menu with Close Single and News options."""
         buttons = [
-            # Row 1: Info
-            [{"text": "📊 Status", "callback_data": "cmd_status"}, {"text": "📋 Positions / Close", "callback_data": "cmd_positions"}],
-            # Row 2: Manual Trade
+            [{"text": "📊 Status", "callback_data": "cmd_status"}, {"text": "🔬 Analysis", "callback_data": "cmd_analysis"}],
+            [{"text": "📋 Positions", "callback_data": "cmd_positions"}, {"text": "⚙️ Settings", "callback_data": "menu_settings"}],
             [{"text": "🟢 Buy XAU", "callback_data": "trade_buy_xau"}, {"text": "🔴 Sell XAU", "callback_data": "trade_sell_xau"}],
-            # Row 3: Tools
-            [{"text": "🔄 Active Mode", "callback_data": "cmd_mode"}, {"text": "📰 Market News", "callback_data": "cmd_news"}],
-            # Row 4: Account Management
-            [{"text": "🔑 Accounts", "callback_data": "cmd_accounts"}],
-            # Row 5: Emergency
+            [{"text": "📰 News", "callback_data": "cmd_news"}, {"text": "⏯️ Pause/Resume", "callback_data": "cmd_mode"}],
             [{"text": "❌ CLOSE ALL TRADES", "callback_data": "trade_close_all"}]
         ]
         self.send_keyboard("🎮 *Control Panel*", buttons)
+
+    def _show_settings_menu(self):
+        buttons = [
+            [{"text": "🧠 Change Strategy", "callback_data": "menu_strategies"}],
+            [{"text": "🎲 Lot Size -0.01", "callback_data": "lot_dec"}, {"text": "🎲 Lot Size +0.01", "callback_data": "lot_inc"}],
+            [{"text": "🔑 Switch Accounts", "callback_data": "cmd_accounts"}],
+            [{"text": "⬅️ Back to Menu", "callback_data": "cmd_menu"}]
+        ]
+        self.send_keyboard("⚙️ *Bot Settings*", buttons)
+
+    def _show_strategy_menu(self):
+        # Common strategies list
+        strategies = ["MASTER_CONFLUENCE", "U16_STRATEGY", "SCALPING", "BREAKOUT", "ZONE_BOUNCE", "ICT_FVG"]
+        buttons = []
+        # Create rows of 2
+        for i in range(0, len(strategies), 2):
+            row = []
+            row.append({"text": strategies[i], "callback_data": f"set_strat_{strategies[i]}"})
+            if i+1 < len(strategies):
+                row.append({"text": strategies[i+1], "callback_data": f"set_strat_{strategies[i+1]}"})
+            buttons.append(row)
+        
+        buttons.append([{"text": "⬅️ Back to Settings", "callback_data": "menu_settings"}])
+        self.send_keyboard("🧠 *Select Strategy Mode*", buttons)
 
     def _poll_updates(self):
         last_update_id = 0
@@ -249,23 +249,23 @@ class WebhookAlert:
                             text = message.get('text', '')
                             chat_id = str(message.get('chat', {}).get('id'))
                             
+                            # Simple Auth Check
                             if chat_id == self.chat_id:
                                 cmd = text.strip().lower()
                                 
                                 if cmd in ["/menu", "/start"]:
                                     self._show_main_menu()
+                                elif cmd == "/settings":
+                                    self._show_settings_menu()
                                 elif cmd == "/status":
-                                    self.send_message("🤖 Fetching Account Summary...")
                                     if self.on_status_command: self.on_status_command()
-                                elif cmd in ["/positions", "/position"]:
-                                    self.send_message("🤖 Fetching Open Positions...")
+                                elif cmd == "/positions":
                                     if self.on_positions_command: self.on_positions_command()
-                                elif cmd == "/news":
-                                    self.send_message("🤖 Checking Market News...")
-                                    if self.on_news_command: self.on_news_command()
+                                elif cmd == "/analysis":
+                                    self.send_message("🔍 Analyzing market...")
+                                    if self.on_analysis_command: self.on_analysis_command()
                                 elif cmd.startswith("/buy") or cmd.startswith("/sell"):
                                     self._handle_text_trade(text)
-
             except Exception as e:
                 time.sleep(5)
             time.sleep(1)
@@ -279,32 +279,43 @@ class WebhookAlert:
             if chat_id != self.chat_id: return
             self._answer_callback(callback_id)
             
-            # --- Status & Info ---
-            if data == "cmd_status":
+            # --- Navigation ---
+            if data == "cmd_menu": self._show_main_menu()
+            elif data == "menu_settings": self._show_settings_menu()
+            elif data == "menu_strategies": self._show_strategy_menu()
+            
+            # --- Commands ---
+            elif data == "cmd_status":
                 if self.on_status_command: self.on_status_command()
             elif data == "cmd_positions":
-                # Triggers notify_active_positions logic in strategy
                 if self.on_positions_command: self.on_positions_command()
+            elif data == "cmd_analysis":
+                if self.on_analysis_command: self.on_analysis_command()
             elif data == "cmd_news":
                 if self.on_news_command: self.on_news_command()
             elif data == "cmd_accounts":
                 if self.on_accounts_command: self.on_accounts_command()
-            elif data == "cmd_menu":
-                self._show_main_menu()
             elif data == "cmd_mode":
                 if self.on_mode_command: self.on_mode_command()
+
+            # --- Settings Changes ---
+            elif data.startswith("set_strat_"):
+                strat_name = data.replace("set_strat_", "")
+                if self.on_strategy_select: self.on_strategy_select(strat_name)
             
+            elif data == "lot_inc":
+                if self.on_lot_change: self.on_lot_change(0.01)
+            elif data == "lot_dec":
+                if self.on_lot_change: self.on_lot_change(-0.01)
+
             # --- Trading ---
             elif data.startswith("close_ticket_"):
-                # Handle single position close
                 ticket_id = data.split("_")[2]
                 if self.on_close_command: self.on_close_command(ticket_id)
-            
             elif data.startswith("account_select_"):
-                # Handle account selection
                 try:
-                    account_index = int(data.split("_")[2])
-                    if self.on_account_select: self.on_account_select(account_index)
+                    idx = int(data.split("_")[2])
+                    if self.on_account_select: self.on_account_select(idx)
                 except: pass
             
             elif data == "trade_buy_xau":
@@ -327,12 +338,10 @@ class WebhookAlert:
          parts = text.strip().split()
          action = "BUY" if "buy" in parts[0].lower() else "SELL"
          symbol = None
-         volume = None
+         volume = 0
          if len(parts) > 1: symbol = parts[1].upper()
          if len(parts) > 2: 
              try: volume = float(parts[2])
              except: pass
          if self.on_trade_command:
              self.on_trade_command(action, symbol, volume)
-         else:
-             self.send_message("⚠️ Strategy not linked.")

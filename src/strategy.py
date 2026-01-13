@@ -48,7 +48,7 @@ class TradingStrategy:
         ) if tg_config.get('enabled') else None
 
         if self.webhook:
-            # Wire up the command listener
+            # Existing hooks...
             self.webhook.on_status_command = self._handle_telegram_status_command
             self.webhook.on_positions_command = self._handle_telegram_positions_command
             self.webhook.on_mode_command = self._handle_telegram_mode_command
@@ -57,6 +57,11 @@ class TradingStrategy:
             self.webhook.on_news_command = self._handle_telegram_news_command
             self.webhook.on_accounts_command = self._handle_telegram_accounts_command
             self.webhook.on_account_select = self._handle_telegram_select_account
+            
+            # NEW HOOKS
+            self.webhook.on_analysis_command = self._handle_telegram_analysis
+            self.webhook.on_strategy_select = self._handle_telegram_strategy_select
+            self.webhook.on_lot_change = self._handle_telegram_lot_change
         
         # --- UI CALLBACK (for profit/protection updates) ---
         self.ui_callback = None  # Will be set by UI to refresh dashboard
@@ -192,6 +197,10 @@ class TradingStrategy:
         if candles and len(candles) > 0:
             server_time_str = datetime.fromtimestamp(candles[-1]['time']).strftime('%H:%M:%S')
 
+        # Save for async analysis access
+        self.last_candles = candles
+        self.last_symbol = symbol
+        
         # 0. Data Validation & Automated History Fetching
         tf_minutes = 5  # Default
         if candles and len(candles) > 2:
@@ -1180,11 +1189,6 @@ class TradingStrategy:
     # --- TELEGRAM HANDLERS ---
     # =========================================================================
 
-    def _handle_telegram_status_command(self):
-        pos_count = self.last_positions_count
-        bal = self.last_balance 
-        self.webhook.notify_account_summary(bal, self.current_profit, pos_count, self.strategy_mode)
-
     def _handle_telegram_positions_command(self):
         raw_positions = getattr(self.connector, 'open_positions', [])
         
@@ -1278,3 +1282,42 @@ class TradingStrategy:
                 self.webhook.send_message(f"❌ Failed to save: {e}")
         else:
             self.webhook.send_message("❌ Invalid account selection.")
+    def _handle_telegram_status_command(self):
+        """Updated status handler including Lot Size"""
+        pos_count = self.last_positions_count
+        bal = self.last_balance 
+        self.webhook.notify_account_summary(bal, self.current_profit, pos_count, self.strategy_mode, self.lot_size)
+
+    def _handle_telegram_analysis(self):
+        """Performs analysis on the current symbol and sends report"""
+        # We need a reference to the current symbol/candles. 
+        # Using the last stored data if available.
+        # Note: In a real scenario, you might want to store 'last_candles' and 'last_symbol' in on_tick
+        
+        # NOTE: You need to ensure self.last_candles and self.last_symbol are saved in on_tick()
+        if hasattr(self, 'last_candles') and hasattr(self, 'last_symbol') and self.last_candles:
+            rsi, macd, macd_sig = self.calculate_indicators(self.last_candles)
+            score, signal = self.get_prediction_score(self.last_symbol, 0, 0, self.last_candles)
+            
+            self.webhook.notify_analysis(
+                self.last_symbol,
+                self.trend,
+                rsi,
+                macd,
+                score,
+                signal
+            )
+        else:
+            self.webhook.send_message("⚠️ No market data available yet. Wait for a tick.")
+
+    def _handle_telegram_strategy_select(self, mode_name):
+        self.strategy_mode = mode_name
+        self.webhook.send_message(f"🧠 Strategy switched to: **{mode_name}**")
+        logger.info(f"Telegram: Strategy changed to {mode_name}")
+
+    def _handle_telegram_lot_change(self, delta):
+        new_lot = round(self.lot_size + delta, 2)
+        if new_lot < 0.01: new_lot = 0.01
+        self.lot_size = new_lot
+        self.webhook.send_message(f"🎲 Lot size updated to: **{self.lot_size}**")
+        logger.info(f"Telegram: Lot size changed to {self.lot_size}")
