@@ -8,7 +8,8 @@ from datetime import datetime
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import nltk
 import threading
-from src.webhook import WebhookAlert
+# Note: We no longer need to import WebhookAlert here for instantiation, 
+# but we keep it if you use type hinting, otherwise it's fine to remove.
 
 # Initialize Logging
 logging.basicConfig(
@@ -19,7 +20,8 @@ logging.basicConfig(
 logger = logging.getLogger("NewsEngine")
 
 class NewsEngine:
-    def __init__(self, config_path="config.json"):
+    # UPDATED INIT: Accepts webhook as an argument
+    def __init__(self, config_path="config.json", webhook=None):
         self.load_config(config_path)
         self.sia = self.init_analyzer()
         self.seen_news = set()
@@ -27,14 +29,10 @@ class NewsEngine:
         self.update_interval = self.config.get('update_interval_seconds', 60)
         self.trading_pause = False  
         self.last_pause_time = 0  
-        self.is_starting = True # Skip pausing for old news on startup
+        self.is_starting = True 
         
-        # Initialize Webhook
-        tg_config = self.config.get('telegram', {})
-        self.webhook = WebhookAlert(
-            bot_token=tg_config.get('bot_token'),
-            chat_id=tg_config.get('chat_id')
-        ) if tg_config.get('enabled') else None
+        # USE THE SHARED WEBHOOK
+        self.webhook = webhook
         
         # Start periodic fetching in background thread
         self.thread = threading.Thread(target=self._periodic_fetch, daemon=True)
@@ -76,7 +74,6 @@ class NewsEngine:
                     if entry.title not in self.seen_news:
                         sentiment, score = self.analyze_sentiment(entry.title)
                         
-                        # High-impact bearish news pause (skip on startup)
                         if self.config['sentiment']['enabled'] and sentiment == "BEARISH" and abs(score) > 0.4 and not self.is_starting:
                             self.trading_pause = True
                             self.last_pause_time = time.time()
@@ -84,7 +81,6 @@ class NewsEngine:
                             if self.webhook:
                                 self.webhook.notify_news(entry.title, sentiment, score)
                         
-                        # Parse actual publish time
                         pub_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         if 'published_parsed' in entry and entry.published_parsed:
                              pub_time = time.strftime('%Y-%m-%d %H:%M:%S', entry.published_parsed)
@@ -114,9 +110,7 @@ class NewsEngine:
         self.is_starting = False
 
     def _fetch_ff_calendar(self, source):
-        """Specially parses the Forex Factory Calendar XML feed with robust fallbacks."""
         new_count = 0
-        # Try multiple variations to bypass DNS, SSL, or 403 errors
         urls_to_try = [
             "https://www.forexfactory.com/ffcal_week_this.xml",
             "http://www.forexfactory.com/ffcal_week_this.xml",
@@ -165,12 +159,10 @@ class NewsEngine:
                                 })
                                 self.seen_news.add(full_title)
                                 new_count += 1
-                    return new_count # Success!
+                    return new_count
             except Exception:
-                # Silently try next fallback
                 continue
         
-        # If all failed, don't spam the UI, just log a debug message
         logger.debug("Automatic Calendar fetch skipped (Network/DNS Timeout)")
         return 0
 
@@ -190,7 +182,6 @@ class NewsEngine:
         recent = self.news_items[-count:]
         formatted = []
         for item in recent:
-            # Use 'link' if available, otherwise just Title
             link_part = f"\n🔗 {item['link']}" if item.get('link') else ""
             formatted.append(f"📰 *{item['title']}*\nScore: {item['score']} | {item['source']}{link_part}")
         return "\n\n".join(formatted) if formatted else "No recent news."
