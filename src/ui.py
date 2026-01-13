@@ -38,7 +38,6 @@ class TradingBotUI(tb.Window):
         self.cooldown_var = tk.DoubleVar(value=15.0)
 
         # Strategies & Toggles
-        # FIX: Changed default to U16_STRATEGY as the new Combined Strategy
         self.strategy_mode_var = tk.StringVar(value="U16_STRATEGY")
         self.use_trend_filter_var = tk.BooleanVar(value=True) 
         self.use_zone_filter_var = tk.BooleanVar(value=True) 
@@ -129,7 +128,6 @@ class TradingBotUI(tb.Window):
             var.trace_add("write", self._on_setting_changed)
 
     def _safe_get(self, var, default=0):
-        """Safely get a value from a Tkinter variable, returning default if empty."""
         try:
             val = var.get()
             return val if val != "" else default
@@ -139,24 +137,19 @@ class TradingBotUI(tb.Window):
     def _sync_ui_to_strategy(self):
         if self.strategy:
             try:
-                # Basic Settings
-                # self.strategy.set_active(self.auto_trade_var.get()) <-- REMOVED to prevent overwriting Telegram changes
                 self.strategy.max_positions = self._safe_get(self.max_pos_var, 1)
                 self.strategy.lot_size = self._safe_get(self.lot_size_var, 0.01)
                 self.strategy.trade_cooldown = self._safe_get(self.cooldown_var, 15.0)
                 
-                # Logic & Filters
                 self.strategy.strategy_mode = self.strategy_mode_var.get()
                 self.strategy.use_trend_filter = self.use_trend_filter_var.get()
                 self.strategy.use_zone_filter = self.use_zone_filter_var.get()
 
-                # Profit
                 self.strategy.profit_close_interval = self._safe_get(self.auto_close_sec_var, 2.0)
                 self.strategy.use_profit_management = self.use_profit_mgmt_var.get()
                 self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 1.5)
                 self.strategy.min_profit_target = self._safe_get(self.min_profit_var, 0.10)
 
-                # Indicators
                 self.strategy.rsi_period = self._safe_get(self.rsi_period_var, 14)
                 self.strategy.rsi_buy_threshold = self._safe_get(self.rsi_buy_var, 30)
                 self.strategy.rsi_sell_threshold = self._safe_get(self.rsi_sell_var, 70)
@@ -183,20 +176,17 @@ class TradingBotUI(tb.Window):
                 self.strategy.ichi_kijun = self._safe_get(self.ichi_kijun_var, 26)
                 self.strategy.ichi_senkou_b = self._safe_get(self.ichi_senkou_var, 52)
 
-                # Time Filter Sync
                 self.strategy.use_time_filter = self.use_time_filter_var.get()
                 self.strategy.time_zone = self.time_zone_var.get()
                 self.strategy.start_hour = self._safe_get(self.start_hour_var, 8)
                 self.strategy.end_hour = self._safe_get(self.end_hour_var, 20)
 
-                # CRT Sync
                 self.strategy.crt_htf = self._safe_get(self.crt_htf_var, 240)
                 self.strategy.crt_lookback = self._safe_get(self.crt_lookback_var, 10)
                 self.strategy.crt_zone_size = self._safe_get(self.crt_zone_var, 0.25)
 
                 logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode} | Trend={self.strategy.use_trend_filter} | Zone={self.strategy.use_zone_filter}")
             except (tk.TclError, ValueError, TypeError):
-                # Silently catch errors while user is typing in boxes
                 pass
             except Exception as e:
                 logging.debug(f"Sync error: {e}")
@@ -205,15 +195,10 @@ class TradingBotUI(tb.Window):
         if not hasattr(self, 'lbl_buy_logic'): return
         
         mode = self.strategy_mode_var.get()
-        rsi_b = self._safe_get(self.rsi_buy_var, 30)
-        rsi_s = self._safe_get(self.rsi_sell_var, 70)
-        
-        # FIX: Added logic text for all available modes
         if mode == "U16_STRATEGY":
             self.lbl_buy_logic.config(text=f"🟢 BUY: Score ≥ 4 (Indics + PA + SMC/ICT + CRT)")
             self.lbl_sell_logic.config(text=f"🔴 SELL: Score ≥ 4 (Indics + PA + SMC/ICT + CRT)")
         else:
-             # Fallback or if user manually changes config outside UI
              self.lbl_buy_logic.config(text=f"🟢 BUY: Logic for {mode}")
              self.lbl_sell_logic.config(text=f"🔴 SELL: Logic for {mode}")
 
@@ -232,7 +217,7 @@ class TradingBotUI(tb.Window):
 
     def _update_ui_data(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, candles):
         try:
-            # Sync UI Checkbox with Strategy State (in case Telegram changed it)
+            # Sync UI Checkbox with Strategy State
             if self.strategy and self.auto_trade_var.get() != self.strategy.active:
                 self.auto_trade_var.set(self.strategy.active)
 
@@ -255,7 +240,20 @@ class TradingBotUI(tb.Window):
             
             self.lbl_positions.config(text=f"📦 Positions: {positions}/{self.max_pos_var.get()}")
             self.lbl_buysell.config(text=f"🟢 {buy_count} | 🔴 {sell_count}")
+
+            # [FIX START] ========================================================
+            # Retrieve profit stats from connector
+            info = self.mt5_connector.account_info
             
+            p_today = info.get('today', 0.0)
+            p_week = info.get('week', 0.0)
+            p_month = info.get('month', 0.0)
+            
+            self.lbl_prof_today.config(text=f"Today: ${p_today:+,.2f}", bootstyle="success" if p_today >= 0 else "danger")
+            self.lbl_prof_week.config(text=f"Week: ${p_week:+,.2f}", bootstyle="success" if p_week >= 0 else "danger")
+            self.lbl_prof_month.config(text=f"Month: ${p_month:+,.2f}", bootstyle="success" if p_month >= 0 else "danger")
+            # [FIX END] ==========================================================
+
             # --- Sync Status ---
             min_needed = 200
             count = len(candles)
@@ -287,16 +285,13 @@ class TradingBotUI(tb.Window):
                     remaining = htf_mins - elapsed
                     self.crt_progress_lbl.config(text=f"Range Age: {int(elapsed)}m / {htf_mins}m (Renew in {int(remaining)}m)")
 
-                # --- Zone Display (UPDATED for Tradeciety Zones) ---
+                # --- Zone Display ---
                 if self.use_zone_filter_var.get():
-                    # Support Zone Display
                     supp_txt = "None"
                     if hasattr(self.strategy, 'support_zones') and self.strategy.support_zones:
-                        # zones sorted by proximity, index 0 is nearest
                         zone = self.strategy.support_zones[0]
                         supp_txt = f"{zone['top']:.2f}"
                     
-                    # Resistance Zone Display
                     res_txt = "None"
                     if hasattr(self.strategy, 'resistance_zones') and self.strategy.resistance_zones:
                         zone = self.strategy.resistance_zones[0]
@@ -331,12 +326,10 @@ class TradingBotUI(tb.Window):
         if s: self.mt5_connector.close_position(s)
 
     def _on_close_profit(self):
-        """Close all positions with profit > 0."""
-        self.mt5_connector.close_profit()
+        self.mt5_connector.close_profit(self.symbol_var.get())
     
     def _on_close_loss(self):
-        """Close all positions with profit < 0."""
-        self.mt5_connector.close_loss()
+        self.mt5_connector.close_loss(self.symbol_var.get())
 
     def _on_auto_toggle(self):
         if self.strategy: self.strategy.set_active(self.auto_trade_var.get())
@@ -352,14 +345,11 @@ class TradingBotUI(tb.Window):
             self.mt5_connector.change_timeframe(symbol, tf)
             logging.info(f"Requested Timeframe change: {symbol} -> {tf}")
     
-
-
     def _on_symbol_change(self, event=None):
         symbol = self.symbol_var.get()
         if symbol:
             self.mt5_connector.change_symbol(symbol)
             logging.info(f"Requested Symbol change to: {symbol}")
-            # Reset UI labels to show we're waiting for new data
             self.lbl_live_rsi.config(text="RSI: Waiting...", bootstyle="secondary")
             self.lbl_live_macd.config(text="MACD: Waiting...", bootstyle="secondary")
             self.lbl_detected_zone.config(text="Zone: Detecting...", bootstyle="secondary")
@@ -369,13 +359,12 @@ class TradingBotUI(tb.Window):
 
     def _on_tz_change(self, event=None):
         tz = self.time_zone_var.get()
-        # Official Session Hours (Local Time)
         session_hours = {
             "London": (8, 17),
             "New York": (8, 17),
             "Tokyo": (9, 18),
             "Sydney": (7, 16),
-            "Auto": (0, 23) # Open wide for auto-rotation
+            "Auto": (0, 23)
         }
         if tz in session_hours:
             start, end = session_hours[tz]
@@ -471,11 +460,9 @@ class TradingBotUI(tb.Window):
         parent.grid_columnconfigure(1, weight=1)
         parent.grid_rowconfigure(0, weight=1)
 
-        # Left Column - Account Info
         left_frame = ttk.Frame(parent, padding=10)
         left_frame.grid(row=0, column=0, sticky="nsew")
         
-        # Account Stats
         stats_frame = ttk.LabelFrame(left_frame, text="📊 Account", padding=10)
         stats_frame.pack(fill=X, pady=5)
         
@@ -485,7 +472,6 @@ class TradingBotUI(tb.Window):
         self.lbl_profit = ttk.Label(stats_frame, text="📈 P/L: $0.00", font=("Segoe UI", 12), bootstyle="info")
         self.lbl_profit.pack(anchor=W, pady=2)
         
-        # Position counts row
         pos_row = ttk.Frame(stats_frame)
         pos_row.pack(fill=X, pady=2)
         self.lbl_positions = ttk.Label(pos_row, text="📦 Positions: 0/1", font=("Segoe UI", 10))
@@ -496,7 +482,18 @@ class TradingBotUI(tb.Window):
         self.lbl_server_time = ttk.Label(stats_frame, text="🕒 MT5: --:--:--", font=("Segoe UI", 9), foreground="#888")
         self.lbl_server_time.pack(anchor=W, pady=2)
 
-        # Live Indicators
+        perf_frame = ttk.LabelFrame(left_frame, text="📈 Performance", padding=10, bootstyle="secondary")
+        perf_frame.pack(fill=X, pady=5)
+
+        self.lbl_prof_today = ttk.Label(perf_frame, text="Today: $0.00", font=("Segoe UI", 10, "bold"))
+        self.lbl_prof_today.pack(anchor=W, pady=2)
+
+        self.lbl_prof_week = ttk.Label(perf_frame, text="Week: $0.00", font=("Segoe UI", 10))
+        self.lbl_prof_week.pack(anchor=W, pady=2)
+
+        self.lbl_prof_month = ttk.Label(perf_frame, text="Month: $0.00", font=("Segoe UI", 10))
+        self.lbl_prof_month.pack(anchor=W, pady=2)
+
         ind_frame = ttk.LabelFrame(left_frame, text="📉 Indicators", padding=10, bootstyle="info")
         ind_frame.pack(fill=X, pady=5)
         
@@ -512,11 +509,9 @@ class TradingBotUI(tb.Window):
         self.lbl_sync = ttk.Label(ind_frame, text="🔄 Sync: Waiting...", font=("Segoe UI", 9), foreground="#888")
         self.lbl_sync.pack(anchor=W, pady=2)
 
-        # Right Column - Trading Controls
         right_frame = ttk.Frame(parent, padding=10)
         right_frame.grid(row=0, column=1, sticky="nsew")
         
-        # Strategy Status
         strat_frame = ttk.LabelFrame(right_frame, text="🎯 U16 Strategy", padding=10, bootstyle="primary")
         strat_frame.pack(fill=X, pady=5)
         
@@ -527,11 +522,9 @@ class TradingBotUI(tb.Window):
         
         ttk.Checkbutton(strat_frame, text="Auto Trade", variable=self.auto_trade_var, command=self._on_auto_toggle, bootstyle="success-round-toggle").pack(pady=(10, 0))
 
-        # Trading Panel
         ctl_box = ttk.LabelFrame(right_frame, text="⚡ Quick Trade", padding=10)
         ctl_box.pack(fill=X, pady=5)
         
-        # Symbol + TF Row
         sel_frame = ttk.Frame(ctl_box)
         sel_frame.pack(fill=X, pady=5)
 
@@ -546,10 +539,8 @@ class TradingBotUI(tb.Window):
         self.combo_tf.pack(side=LEFT, padx=5)
         self.combo_tf.bind("<<ComboboxSelected>>", self._on_tf_change)
         
-        # Hidden strategy var setup
         self.strategy_mode_var.set("U16_STRATEGY")
         
-        # Price Display
         prices_frame = ttk.Frame(ctl_box)
         prices_frame.pack(fill=X, pady=10)
         self.lbl_bid = ttk.Label(prices_frame, text="BID: 0.00", bootstyle="info", font=("Segoe UI", 14))
@@ -557,13 +548,11 @@ class TradingBotUI(tb.Window):
         self.lbl_ask = ttk.Label(prices_frame, text="ASK: 0.00", bootstyle="success", font=("Segoe UI", 14))
         self.lbl_ask.pack(side=RIGHT, padx=10)
 
-        # Action Buttons Row 1: Buy/Sell
         btn_grid = ttk.Frame(ctl_box)
         btn_grid.pack(fill=X, pady=5)
         ttk.Button(btn_grid, text="🟢 BUY", command=self._on_buy, bootstyle="success").pack(side=LEFT, fill=X, expand=True, padx=2)
         ttk.Button(btn_grid, text="🔴 SELL", command=self._on_sell, bootstyle="danger").pack(side=LEFT, fill=X, expand=True, padx=2)
         
-        # Action Buttons Row 2: Close Profit/Loss
         close_grid = ttk.Frame(ctl_box)
         close_grid.pack(fill=X, pady=5)
         ttk.Button(close_grid, text="💰 Close Profit", command=self._on_close_profit, bootstyle="success-outline").pack(side=LEFT, fill=X, expand=True, padx=2)
@@ -585,11 +574,9 @@ class TradingBotUI(tb.Window):
         scroll_frame.columnconfigure(0, weight=1)
         scroll_frame.columnconfigure(1, weight=1)
 
-        # === Column 0: Trading Settings ===
         col0 = ttk.Frame(scroll_frame)
         col0.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         
-        # Trade Settings
         trade_frame = ttk.LabelFrame(col0, text="📈 Trade Settings", padding=15)
         trade_frame.pack(fill=X, pady=5)
         
@@ -602,7 +589,6 @@ class TradingBotUI(tb.Window):
         ttk.Label(trade_frame, text="Cooldown (sec):").grid(row=2, column=0, sticky=W, pady=5)
         ttk.Spinbox(trade_frame, from_=5, to=300, textvariable=self.cooldown_var, width=8).grid(row=2, column=1, sticky=W, padx=10)
 
-        # Filters
         filter_frame = ttk.LabelFrame(col0, text="🎯 Filters", padding=15, bootstyle="info")
         filter_frame.pack(fill=X, pady=5)
         
@@ -610,7 +596,6 @@ class TradingBotUI(tb.Window):
         ttk.Checkbutton(filter_frame, text="Zone Filter (S/R)", variable=self.use_zone_filter_var, bootstyle="success-round-toggle").pack(anchor=W, pady=3)
         ttk.Checkbutton(filter_frame, text="Time Filter", variable=self.use_time_filter_var, bootstyle="success-round-toggle").pack(anchor=W, pady=3)
         
-        # Time Settings (compact)
         time_row = ttk.Frame(filter_frame)
         time_row.pack(fill=X, pady=(5, 0))
         ttk.Label(time_row, text="Hours:").pack(side=LEFT)
@@ -618,36 +603,30 @@ class TradingBotUI(tb.Window):
         ttk.Label(time_row, text="to").pack(side=LEFT)
         ttk.Spinbox(time_row, from_=0, to=23, textvariable=self.end_hour_var, width=4).pack(side=LEFT, padx=5)
 
-        # Risk
         risk_frame = ttk.LabelFrame(col0, text="🛡️ Risk", padding=15, bootstyle="success")
         risk_frame.pack(fill=X, pady=5)
         
         ttk.Label(risk_frame, text="R:R Ratio (1:X):").grid(row=0, column=0, sticky=W, pady=5)
         ttk.Spinbox(risk_frame, from_=1.0, to=10.0, increment=0.5, textvariable=self.rr_ratio_var, width=8).grid(row=0, column=1, sticky=W, padx=10)
 
-        # === Column 1: Profit & Strategy Info ===
         col1 = ttk.Frame(scroll_frame)
         col1.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
 
-        # Profit Management
         profit_frame = ttk.LabelFrame(col1, text="💰 Profit Management", padding=15, bootstyle="warning")
         profit_frame.pack(fill=X, pady=5)
         
         ttk.Checkbutton(profit_frame, text="Enable Auto Profit Close", variable=self.use_profit_mgmt_var, bootstyle="warning-round-toggle").pack(anchor=W, pady=3)
         
-        # Settings row 1
         row1 = ttk.Frame(profit_frame)
         row1.pack(fill=X, pady=3)
         ttk.Label(row1, text="Check Every (sec):").pack(side=LEFT)
         ttk.Spinbox(row1, from_=1, to=60, textvariable=self.auto_close_sec_var, width=8).pack(side=RIGHT)
         
-        # Settings row 2
         row2 = ttk.Frame(profit_frame)
         row2.pack(fill=X, pady=3)
         ttk.Label(row2, text="Min Profit ($):").pack(side=LEFT)
         ttk.Spinbox(row2, from_=0.05, to=10.0, increment=0.05, textvariable=self.min_profit_var, width=8).pack(side=RIGHT)
 
-        # CRT Settings
         crt_frame = ttk.LabelFrame(col1, text="📊 CRT Range Settings", padding=15, bootstyle="danger")
         crt_frame.pack(fill=X, pady=5)
         
@@ -663,7 +642,6 @@ class TradingBotUI(tb.Window):
         self.crt_progress_lbl = ttk.Label(crt_frame, text="Range: Waiting...", font=("", 9), foreground="#3498db")
         self.crt_progress_lbl.grid(row=2, column=0, columnspan=2, sticky=W, pady=(10, 0))
 
-        # Strategy Info
         info_frame = ttk.LabelFrame(col1, text="ℹ️ U16 Strategy", padding=15, bootstyle="primary")
         info_frame.pack(fill=X, pady=5)
         
