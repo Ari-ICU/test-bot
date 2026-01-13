@@ -30,6 +30,10 @@ class WebhookAlert:
 
         if self.enabled:
             logger.info("Telegram Webhook Alert initialized.")
+            
+            # --- FIX: Ensure no webhook is blocking polling ---
+            self._delete_webhook() 
+
             self.stop_event = threading.Event()
             self.poll_thread = threading.Thread(target=self._poll_updates, daemon=True)
             self.poll_thread.start()
@@ -37,6 +41,16 @@ class WebhookAlert:
             self.send_message("🤖 **Trading Bot Online**\nSystem initialized and ready.")
         else:
             logger.warning("Telegram Webhook Alert: Missing bot_token or chat_id. Alerts disabled.")
+
+    def _delete_webhook(self):
+        """Removes any existing webhook to allow getUpdates polling."""
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/deleteWebhook"
+            with urllib.request.urlopen(url, timeout=5):
+                pass
+            logger.info("Existing webhook deleted (if any) to enable polling.")
+        except Exception as e:
+            logger.warning(f"Warning: Could not delete webhook: {e}")
 
     # ---------------------------------------------------------
     # SENDING METHODS
@@ -258,6 +272,7 @@ class WebhookAlert:
                                 elif cmd == "/settings":
                                     self._show_settings_menu()
                                 elif cmd == "/status":
+                                    logger.info("Received /status command")
                                     if self.on_status_command: self.on_status_command()
                                 elif cmd == "/positions":
                                     if self.on_positions_command: self.on_positions_command()
@@ -267,6 +282,7 @@ class WebhookAlert:
                                 elif cmd.startswith("/buy") or cmd.startswith("/sell"):
                                     self._handle_text_trade(text)
             except Exception as e:
+                logger.error(f"Poll Error: {e}")
                 time.sleep(5)
             time.sleep(1)
 
