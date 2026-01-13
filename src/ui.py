@@ -38,8 +38,8 @@ class TradingBotUI(tb.Window):
         self.cooldown_var = tk.DoubleVar(value=15.0)
 
         # Strategies & Toggles
-        # FIX: Changed default to MASTER_CONFLUENCE to "combine" all strategies by default
-        self.strategy_mode_var = tk.StringVar(value="MASTER_CONFLUENCE")
+        # FIX: Changed default to U16_STRATEGY as the new Combined Strategy
+        self.strategy_mode_var = tk.StringVar(value="U16_STRATEGY")
         self.use_trend_filter_var = tk.BooleanVar(value=True) 
         self.use_zone_filter_var = tk.BooleanVar(value=True) 
 
@@ -49,11 +49,23 @@ class TradingBotUI(tb.Window):
         self.rr_ratio_var = tk.DoubleVar(value=1.5)
         self.min_profit_var = tk.DoubleVar(value=0.10)
 
-        # Indicator Settings (Optimized for M5)
+        # Indicators
         self.rsi_period_var = tk.IntVar(value=9)
         self.rsi_buy_var = tk.IntVar(value=35)
         self.rsi_sell_var = tk.IntVar(value=65)
         
+        self.stoch_k_var = tk.IntVar(value=14)
+        self.stoch_d_var = tk.IntVar(value=3)
+        self.stoch_ob_var = tk.IntVar(value=80)
+        self.stoch_os_var = tk.IntVar(value=20)
+
+        self.adx_period_var = tk.IntVar(value=14)
+        self.adx_threshold_var = tk.IntVar(value=25)
+
+        self.ichi_tenkan_var = tk.IntVar(value=9)
+        self.ichi_kijun_var = tk.IntVar(value=26)
+        self.ichi_senkou_var = tk.IntVar(value=52)
+
         self.macd_fast_var = tk.IntVar(value=8)
         self.macd_slow_var = tk.IntVar(value=21)
         self.macd_signal_var = tk.IntVar(value=5)
@@ -107,6 +119,9 @@ class TradingBotUI(tb.Window):
             self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
             self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
             self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var,
+            self.stoch_k_var, self.stoch_d_var, self.stoch_ob_var, self.stoch_os_var,
+            self.adx_period_var, self.adx_threshold_var,
+            self.ichi_tenkan_var, self.ichi_kijun_var, self.ichi_senkou_var,
             self.use_time_filter_var, self.time_zone_var, self.start_hour_var, self.end_hour_var,
             self.crt_htf_var, self.crt_lookback_var, self.crt_zone_var
         ]
@@ -156,6 +171,18 @@ class TradingBotUI(tb.Window):
                 self.strategy.ema_fast = self._safe_get(self.ema_fast_var, 9)
                 self.strategy.ema_slow = self._safe_get(self.ema_slow_var, 21)
 
+                self.strategy.stoch_k = self._safe_get(self.stoch_k_var, 14)
+                self.strategy.stoch_d = self._safe_get(self.stoch_d_var, 3)
+                self.strategy.stoch_overbought = self._safe_get(self.stoch_ob_var, 80)
+                self.strategy.stoch_oversold = self._safe_get(self.stoch_os_var, 20)
+                
+                self.strategy.adx_period = self._safe_get(self.adx_period_var, 14)
+                self.strategy.adx_threshold = self._safe_get(self.adx_threshold_var, 25)
+
+                self.strategy.ichi_tenkan = self._safe_get(self.ichi_tenkan_var, 9)
+                self.strategy.ichi_kijun = self._safe_get(self.ichi_kijun_var, 26)
+                self.strategy.ichi_senkou_b = self._safe_get(self.ichi_senkou_var, 52)
+
                 # Time Filter Sync
                 self.strategy.use_time_filter = self.use_time_filter_var.get()
                 self.strategy.time_zone = self.time_zone_var.get()
@@ -182,40 +209,13 @@ class TradingBotUI(tb.Window):
         rsi_s = self._safe_get(self.rsi_sell_var, 70)
         
         # FIX: Added logic text for all available modes
-        if mode == "MASTER_CONFLUENCE":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Score ≥ 4 (RSI+MACD+Stoch+Ichi+PA)")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Score ≥ 4 (RSI+MACD+Stoch+Ichi+PA)")
-        elif mode == "MACD_RSI":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: RSI < {rsi_b} & MACD > Sig")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: RSI > {rsi_s} & MACD < Sig")
-        elif mode == "BOLLINGER":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Price < Lower BB & RSI < {rsi_b}")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Price > Upper BB & RSI > {rsi_s}")
-        elif mode == "EMA_CROSS":
-            ema_f = self._safe_get(self.ema_fast_var, 9)
-            ema_s = self._safe_get(self.ema_slow_var, 21)
-            self.lbl_buy_logic.config(text=f"🟢 BUY: EMA {ema_f} Crosses Above {ema_s}")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: EMA {ema_f} Crosses Below {ema_s}")
-        elif mode == "SMC":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Retrace into Bullish FVG (Gap)")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Retrace into Bearish FVG (Gap)")
-        elif mode == "CRT":
-            htf = self._safe_get(self.crt_htf_var, 240)
-            h_label = f"{htf//60}H" if htf % 60 == 0 else f"{htf}m"
-            self.lbl_buy_logic.config(text=f"🟢 BUY: {h_label} Low Sweep & M5/M15 Reclaim")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: {h_label} High Sweep & M5/M15 Reclaim")
-        elif mode == "STOCHASTIC":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: K < 20 & D < 20 & K > D")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: K > 80 & D > 80 & K < D")
-        elif mode == "ICHIMOKU":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Price > Cloud & Tenkan > Kijun")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Price < Cloud & Tenkan < Kijun")
-        elif mode == "PRICE_ACTION":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Bullish Engulfing or Hammer")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Bearish Engulfing or Shooting Star")
-        elif mode == "ZONE_BOUNCE":
-            self.lbl_buy_logic.config(text=f"🟢 BUY: Bounce off Support Zone")
-            self.lbl_sell_logic.config(text=f"🔴 SELL: Reject off Resistance Zone")
+        if mode == "U16_STRATEGY":
+            self.lbl_buy_logic.config(text=f"🟢 BUY: Score ≥ 4 (Indics + PA + SMC/ICT + CRT)")
+            self.lbl_sell_logic.config(text=f"🔴 SELL: Score ≥ 4 (Indics + PA + SMC/ICT + CRT)")
+        else:
+             # Fallback or if user manually changes config outside UI
+             self.lbl_buy_logic.config(text=f"🟢 BUY: Logic for {mode}")
+             self.lbl_sell_logic.config(text=f"🔴 SELL: Logic for {mode}")
 
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         self.last_price_update = time.time() 
@@ -341,8 +341,7 @@ class TradingBotUI(tb.Window):
             self.mt5_connector.change_timeframe(symbol, tf)
             logging.info(f"Requested Timeframe change: {symbol} -> {tf}")
     
-    def _on_mode_change(self, event=None):
-        self._on_setting_changed()
+
 
     def _on_symbol_change(self, event=None):
         symbol = self.symbol_var.get()
@@ -530,20 +529,17 @@ class TradingBotUI(tb.Window):
         self.combo_tf.pack(fill=X)
         self.combo_tf.bind("<<ComboboxSelected>>", self._on_tf_change)
 
-        # Strategy
+        # Strategy (Fixed to Combined)
         strat_frame = ttk.Frame(sel_frame)
         strat_frame.pack(side=LEFT, padx=5, fill=X, expand=True)
         ttk.Label(strat_frame, text="Active Strategy:", font=("Segoe UI", 9)).pack(anchor=W)
-        self.combo_strat = ttk.Combobox(strat_frame, textvariable=self.strategy_mode_var, state="readonly", width=15)
         
-        # FIX: Added MASTER_CONFLUENCE and missing strategies to values
-        self.combo_strat['values'] = [
-            "MASTER_CONFLUENCE", "MACD_RSI", "BOLLINGER", "EMA_CROSS", 
-            "SMC", "CRT", "ZONE_BOUNCE", "STOCHASTIC", "ICHIMOKU", "PRICE_ACTION"
-        ]
+        # Replaced Combobox with static Label
+        lbl_strat = ttk.Label(strat_frame, text="✨ U16 Combined Strategy", font=("Segoe UI", 9, "bold"), bootstyle="info")
+        lbl_strat.pack(fill=X, pady=2)
         
-        self.combo_strat.pack(fill=X)
-        self.combo_strat.bind("<<ComboboxSelected>>", self._on_mode_change)
+        # Force set the variable to U16_STRATEGY just in case
+        self.strategy_mode_var.set("U16_STRATEGY")
         
         prices_frame = ttk.Frame(ctl_box)
         prices_frame.pack(fill=X, pady=5)
@@ -652,6 +648,25 @@ class TradingBotUI(tb.Window):
         self._add_setting(other_ind_frame, "BB Deviation:", self.bb_dev_var, 0.5, 4.0, 1)
         self._add_setting(other_ind_frame, "EMA Fast:", self.ema_fast_var, 2, 50, 2)
         self._add_setting(other_ind_frame, "EMA Slow:", self.ema_slow_var, 5, 200, 3)
+
+        # NEW: Stochastic & ADX & Ichimoku
+        misc_ind_frame = ttk.LabelFrame(col2_frame, text="Stoch / ADX / Ichimoku", padding=10, bootstyle="warning")
+        misc_ind_frame.pack(fill=X, pady=5)
+        self._add_setting(misc_ind_frame, "Stoch K:", self.stoch_k_var, 5, 50, 0)
+        self._add_setting(misc_ind_frame, "Stoch D:", self.stoch_d_var, 2, 20, 1)
+        self._add_setting(misc_ind_frame, "Stoch OB:", self.stoch_ob_var, 70, 90, 2)
+        self._add_setting(misc_ind_frame, "Stoch OS:", self.stoch_os_var, 10, 30, 3)
+        
+        self._add_setting(misc_ind_frame, "ADX Period:", self.adx_period_var, 5, 30, 4)
+        self._add_setting(misc_ind_frame, "ADX Thresh:", self.adx_threshold_var, 10, 50, 5)
+        
+        # New Row for Ichimoku
+        ichi_frame = ttk.Frame(misc_ind_frame)
+        ichi_frame.grid(row=6, column=0, columnspan=2, pady=5, sticky=W)
+        ttk.Label(ichi_frame, text="Ichi (T-K-S):").pack(side=LEFT)
+        ttk.Spinbox(ichi_frame, from_=5, to=50, textvariable=self.ichi_tenkan_var, width=3).pack(side=LEFT)
+        ttk.Spinbox(ichi_frame, from_=10, to=100, textvariable=self.ichi_kijun_var, width=3).pack(side=LEFT)
+        ttk.Spinbox(ichi_frame, from_=20, to=200, textvariable=self.ichi_senkou_var, width=3).pack(side=LEFT)
 
         # NEW: CRT Settings
         crt_frame = ttk.LabelFrame(col2_frame, text="CRT Strategy Settings", padding=10, bootstyle="danger")

@@ -27,6 +27,7 @@ class TradingStrategy:
         # Available Modes: 
         # "ZONE_BOUNCE", "MACD_RSI", "BOLLINGER", "EMA_CROSS", "SMC", "CRT"
         # "STOCHASTIC", "ICHIMOKU", "PRICE_ACTION"
+        # "ICT_FVG", "ICT_SILVER_BULLET"
         # "MASTER_CONFLUENCE" (Combines All)
         self.strategy_mode = "MASTER_CONFLUENCE" 
         self.use_trend_filter = True
@@ -46,6 +47,7 @@ class TradingStrategy:
             self.webhook.on_mode_command = self._handle_telegram_mode_command
             self.webhook.on_trade_command = self._handle_telegram_trade
             self.webhook.on_close_command = self._handle_telegram_close_ticket
+            self.webhook.on_news_command = self._handle_telegram_news_command
         
         # --- MARKET SESSIONS (Local Hours) ---
         self.SESSIONS = {
@@ -103,7 +105,7 @@ class TradingStrategy:
         self.crt_zone_size = 0.50 
 
         # --- State ---
-        self.last_trade_time = 0         
+        self.last_trade_time = 0           
         self.last_log_time = 0           
         self.last_status_time = 0        
         self.last_crt_diag_time = 0      
@@ -227,9 +229,15 @@ class TradingStrategy:
                 elif mode == "PRICE_ACTION":
                     self.check_signals_price_action(symbol, bid, ask, candles)
                 
-                # --- MASTER COMBINED MODE ---
-                elif mode == "MASTER_CONFLUENCE":
-                    self.check_signals_master_confluence(symbol, bid, ask, candles)
+                # --- ICT MODES ---
+                elif mode == "ICT_FVG":
+                    self.check_signals_ict_fvg(symbol, bid, ask, candles)
+                elif mode == "ICT_SILVER_BULLET":
+                    self.check_signals_ict_silver_bullet(symbol, bid, ask, candles)
+                
+                # --- U16 COMBINED MODE ---
+                elif mode == "U16_STRATEGY":
+                    self.check_signals_u16(symbol, bid, ask, candles)
 
         # 3. Status Dashboard (Every 10 seconds)
         if current_time - self.last_status_time >= 10:
@@ -465,11 +473,65 @@ class TradingStrategy:
                 logger.info(f"✅ SELL (PRICE ACTION) | Pattern: {pattern}")
                 self.execute_trade("SELL", symbol, self.lot_size, "PA_" + pattern, sl, tp)
 
+    def check_signals_ict_fvg(self, symbol, bid, ask, candles):
+        """
+        ICT Fair Value Gap Strategy:
+        Entries taken when price retraces into a fresh FVG.
+        """
+        fvg_type, top, bottom = self._detect_recent_fvg(candles)
+        
+        if fvg_type == "BULLISH":
+            # Entry: Price dips into the gap (below top, above bottom)
+            if bottom < ask < top:
+                if self._check_filters("BUY", ask):
+                    sl = bottom - (self.calculate_atr(candles) * 0.2)
+                    tp = ask + ((ask - sl) * 2.0) # ICT aims for 2R+
+                    logger.info(f"✅ BUY (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
+                    self.execute_trade("BUY", symbol, self.lot_size, "ICT_FVG", sl, tp)
+
+        elif fvg_type == "BEARISH":
+            # Entry: Price rallies into the gap (above bottom, below top)
+            if bottom < bid < top:
+                if self._check_filters("SELL", bid):
+                    sl = top + (self.calculate_atr(candles) * 0.2)
+                    tp = bid - ((sl - bid) * 2.0)
+                    logger.info(f"✅ SELL (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
+                    self.execute_trade("SELL", symbol, self.lot_size, "ICT_FVG", sl, tp)
+
+    def check_signals_ict_silver_bullet(self, symbol, bid, ask, candles):
+        """
+        ICT Silver Bullet:
+        Specific time window (10-11 AM NY, 2-3 PM NY) + FVG Setup.
+        """
+        # 1. Check Time
+        if not self._is_silver_bullet_time():
+            return
+            
+        # 2. Check FVG (Same mechanism, just restricted by time)
+        self.check_signals_ict_fvg(symbol, bid, ask, candles) 
+        # Note: We reuse the FVG logic but because we are inside the Silver Bullet function,
+        # we implicitly rely on the time check. 
+        # *Self-Correction*: The trade reason should ideally reflect Silver Bullet.
+        # Let's copy logic to be precise.
+        
+        fvg_type, top, bottom = self._detect_recent_fvg(candles)
+        if fvg_type == "NONE": return
+        
+        if fvg_type == "BULLISH" and bottom < ask < top and self._check_filters("BUY", ask):
+             sl = bottom - (self.calculate_atr(candles) * 0.1)
+             tp = ask + ((ask - sl) * 2.0)
+             self.execute_trade("BUY", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
+             
+        elif fvg_type == "BEARISH" and bottom < bid < top and self._check_filters("SELL", bid):
+             sl = top + (self.calculate_atr(candles) * 0.1)
+             tp = bid - ((sl - bid) * 2.0)
+             self.execute_trade("SELL", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
+
     # =========================================================================
-    # --- MASTER CONFLUENCE STRATEGY (Combines Everything) ---
+    # --- U16 STRATEGY (Combines Everything) ---
     # =========================================================================
     
-    def check_signals_master_confluence(self, symbol, bid, ask, candles):
+    def check_signals_u16(self, symbol, bid, ask, candles):
         buy_score = 0
         sell_score = 0
         reasons = []
@@ -479,6 +541,7 @@ class TradingStrategy:
         k, d = self.calculate_stochastic(candles)
         adx = self.calculate_adx(candles)
         tenkan, kijun, span_a, span_b, price = self.calculate_ichimoku(candles)
+        fvg_type, fvg_top, fvg_bot = self._detect_recent_fvg(candles)
         
         # RSI Votes
         if rsi < 40: buy_score += 1
@@ -517,6 +580,18 @@ class TradingStrategy:
         
         if nearest_supp and (bid - nearest_supp['top']) < atr: buy_score += 2; reasons.append("SuppBounce")
         if nearest_res and (nearest_res['bottom'] - bid) < atr: sell_score += 2; reasons.append("ResReject")
+        
+        # 5. ICT FVG Confluence
+        # 5. ICT FVG Confluence
+        if fvg_type == "BULLISH" and fvg_bot < ask < fvg_top:
+            buy_score += 3; reasons.append("FVG_Retrace")
+        elif fvg_type == "BEARISH" and fvg_bot < bid < fvg_top:
+            sell_score += 3; reasons.append("FVG_Retrace")
+            
+        # 6. CRT Sweep Confluence
+        crt_signal = self._detect_crt_signal(candles, bid, ask)
+        if crt_signal == "BUY": buy_score += 3; reasons.append("CRT_Sweep")
+        elif crt_signal == "SELL": sell_score += 3; reasons.append("CRT_Sweep")
 
         # --- EXECUTION LOGIC ---
         THRESHOLD = 4 
@@ -525,11 +600,15 @@ class TradingStrategy:
             if self._check_filters("BUY", ask):
                 sl, tp = self.calculate_safe_risk("BUY", ask, candles)
                 reason_str = ",".join(reasons)
-                logger.info(f"🌟 BUY (MASTER) | Score: {buy_score} | Reasons: {reason_str}")
-                self.execute_trade("BUY", symbol, self.lot_size, "MASTER_CONFLUENCE", sl, tp)
+                logger.info(f"🌟 BUY (U16) | Score: {buy_score} | Reasons: {reason_str}")
+                self.execute_trade("BUY", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
 
         elif sell_score >= THRESHOLD and sell_score > buy_score:
             if self._check_filters("SELL", bid):
+                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
+                reason_str = ",".join(reasons)
+                logger.info(f"🌟 SELL (U16) | Score: {sell_score} | Reasons: {reason_str}")
+                self.execute_trade("SELL", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
                 sl, tp = self.calculate_safe_risk("SELL", bid, candles)
                 reason_str = ",".join(reasons)
                 logger.info(f"🌟 SELL (MASTER) | Score: {sell_score} | Reasons: {reason_str}")
@@ -649,60 +728,80 @@ class TradingStrategy:
         prev_htf = htf_candles.iloc[-2]
         return prev_htf['high'], prev_htf['low'], "OK"
 
-    def check_signals_crt(self, symbol, bid, ask, candles):
-        """Restored Full CRT Logic"""
-        if len(candles) < 10: return
+    
+    def _detect_crt_signal(self, candles, bid, ask):
+        """Helper to detect CRT Sweep & Reclaim signals without executing."""
+        if len(candles) < 20: return "NONE"
+        
+        # 1. Get HTF Structure
         ltf_mins = (candles[1]['time'] - candles[0]['time']) // 60
         if ltf_mins <= 0: ltf_mins = 5
         htf_minutes = getattr(self, 'crt_htf', 240)
-        htf_label = "H4" if htf_minutes == 240 else f"{htf_minutes}m"
         needed = (htf_minutes // ltf_mins) * 2
-        if len(candles) < needed: return
+        if len(candles) < needed: return "NONE"
 
         crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
-        if status != "OK": return
-
-        lookback = 10
+        if status != "OK": return "NONE"
+        
+        # 2. Check Logic
         range_width = crt_high - crt_low
         entry_threshold = range_width * getattr(self, 'crt_zone_size', 0.25)
-        atr = self.calculate_atr(candles)
         last_closed = candles[-2]
         close_price = last_closed['close']
-        open_price = last_closed['open']
-        is_red = close_price < open_price
-        candle_color = "RED" if is_red else "GREEN"
-
-        # CRT Drawing Logic
-        if time.time() - self.last_crt_draw > 5:
-            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
-            self.connector.send_hline_command(f"CRT_HI_{symbol}", crt_high, "255,0,0", 2) 
-            self.connector.send_hline_command(f"CRT_LO_{symbol}", crt_low, "0,255,0", 2)
-            self.last_crt_draw = time.time()
-
+        
+        lookback = 10
         recent_history = candles[-(lookback+1):-1]
         recent_lows = [c['low'] for c in recent_history]
         recent_highs = [c['high'] for c in recent_history]
+        
         has_swept_low = min(recent_lows) < crt_low
         has_swept_high = max(recent_highs) > crt_high
         
-        conf, direction = self.get_prediction_score(symbol, bid, ask, candles)
-        if conf < 50: return
-
         if has_swept_low:
             is_reclaimed = close_price > crt_low
             in_range = crt_low < ask < (crt_low + entry_threshold)
-            if is_reclaimed and in_range and direction == "BUY" and self._check_filters("BUY", ask):
-                sl = min(recent_lows) - (atr * 0.2)
-                tp = crt_high
-                self.execute_trade("BUY", symbol, self.lot_size, f"CRT_RANGE_{htf_label}", sl, tp)
+            if is_reclaimed and in_range:
+                return "BUY"
 
         elif has_swept_high:
             is_reclaimed = close_price < crt_high
             in_range = (crt_high - entry_threshold) < bid < crt_high
-            if is_reclaimed and in_range and direction == "SELL" and self._check_filters("SELL", bid):
-                sl = max(recent_highs) + (atr * 0.2)
-                tp = crt_low
-                self.execute_trade("SELL", symbol, self.lot_size, f"CRT_RANGE_{htf_label}", sl, tp)
+            if is_reclaimed and in_range:
+                return "SELL"
+                
+        return "NONE"
+
+    def check_signals_crt(self, symbol, bid, ask, candles):
+        """Restored Full CRT Logic"""
+        # Drawing Logic (Keep here as it is visual)
+        if len(candles) < 20: return
+        htf_minutes = getattr(self, 'crt_htf', 240)
+        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
+        
+        if status == "OK" and time.time() - self.last_crt_draw > 5:
+            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
+            self.connector.send_hline_command(f"CRT_HI_{symbol}", crt_high, "255,0,0", 2) 
+            self.connector.send_hline_command(f"CRT_LO_{symbol}", crt_low, "0,255,0", 2)
+            self.last_crt_draw = time.time()
+            
+        # Execution Logic (Now uses helper)
+        signal = self._detect_crt_signal(candles, bid, ask)
+        atr = self.calculate_atr(candles)
+        
+        if signal == "BUY" and self._check_filters("BUY", ask):
+             # Need to recalc SL/TP here as helper doesn't provide it
+             recent_history = candles[-11:-1]
+             recent_lows = [c['low'] for c in recent_history]
+             sl = min(recent_lows) - (atr * 0.2)
+             tp = crt_high - (atr * 0.10)
+             self.execute_trade("BUY", symbol, self.lot_size, "CRT_RANGE", sl, tp)
+             
+        elif signal == "SELL" and self._check_filters("SELL", bid):
+             recent_history = candles[-11:-1]
+             recent_highs = [c['high'] for c in recent_history]
+             sl = max(recent_highs) + (atr * 0.2)
+             tp = crt_low + (atr * 0.10)
+             self.execute_trade("SELL", symbol, self.lot_size, "CRT_RANGE", sl, tp)
 
     def check_signals_zone_bounce(self, symbol, bid, ask, candles):
         atr = self.calculate_atr(candles)
@@ -799,7 +898,56 @@ class TradingStrategy:
                 if candles[i+1]['close'] < curr['low']:
                     bearish_ob = {'top': curr['high'], 'bottom': curr['low']}
                     break
-        return bullish_ob, bearish_ob
+    # =========================================================================
+    # --- ICT HELPERS ---
+    # =========================================================================
+
+    def _detect_recent_fvg(self, candles):
+        """
+        Finds the most recent valid Fair Value Gap in the last 15 candles.
+        Returns: Type (BULLISH/BEARISH/NONE), TopPrice, BottomPrice
+        """
+        if len(candles) < 5: return "NONE", 0, 0
+        
+        # We iterate backwards to find the freshest FVG
+        for i in range(len(candles) - 1, 2, -1):
+            curr = candles[i]     # Candle i
+            prev = candles[i-1]   # Candle i-1 (The displacement candle usually)
+            prev2 = candles[i-2]  # Candle i-2
+            
+            # Note: A proper FVG is formed by the gap between i and i-2
+            
+            # BULLISH FVG: Low of candle i > High of candle i-2
+            # Implies strong move UP in candle i-1
+            if curr['low'] > prev2['high']:
+                gap = curr['low'] - prev2['high']
+                # Filter small gaps?
+                if gap > 0:
+                    return "BULLISH", curr['low'], prev2['high'] # Top, Bottom (of the gap)
+            
+            # BEARISH FVG: High of candle i < Low of candle i-2
+            # Implies strong move DOWN in candle i-1
+            if curr['high'] < prev2['low']:
+                gap = prev2['low'] - curr['high']
+                if gap > 0:
+                    return "BEARISH", prev2['low'], curr['high'] # Top, Bottom (of the gap)
+                    
+        return "NONE", 0, 0
+
+    def _is_silver_bullet_time(self):
+        """Checks if we are in the 10-11 AM or 2-3 PM NY Session Window"""
+        try:
+            ny_tz = ZoneInfo("America/New_York")
+            now_ny = datetime.now(ny_tz)
+            h = now_ny.hour
+            # AM Session: 10:00 - 11:00
+            # PM Session: 14:00 - 15:00
+            if h == 10 or h == 14:
+                return True
+            return False
+        except:
+            return False
+
 
     # =========================================================================
     # --- FILTERS & UTILS ---
@@ -896,7 +1044,11 @@ class TradingStrategy:
                 sl = nearest_supp['bottom'] - (atr * 0.2)
             else:
                 sl = entry_price - sl_dist
-            tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
+            
+            # Raw TP based on R:R
+            raw_tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
+            # TP Safety Buffer: Pull back by 5% of ATR to ensure hit
+            tp = raw_tp - (atr * 0.05)
 
         elif direction == "SELL":
             nearest_res = self._get_nearest_zone(entry_price, is_support=False)
@@ -904,7 +1056,11 @@ class TradingStrategy:
                 sl = nearest_res['top'] + (atr * 0.2)
             else:
                 sl = entry_price + sl_dist
-            tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
+            
+            # Raw TP based on R:R
+            raw_tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
+            # TP Safety Buffer: Pull back by 5% of ATR to ensure hit
+            tp = raw_tp + (atr * 0.05)
 
         return float(sl), float(tp)
 
@@ -990,3 +1146,16 @@ class TradingStrategy:
         """Callback to close a specific ticket."""
         self.webhook.send_message(f"⏳ Attempting to close Ticket #{ticket_id}...")
         self.connector.close_ticket(ticket_id)
+
+    def _handle_telegram_news_command(self):
+        """Callback for /news."""
+        if self.news_engine:
+            self.webhook.send_message("🔎 *Fetching live updates...*")
+            self.news_engine.fetch_latest() # Force refresh
+            news_str = self.news_engine.get_latest_news(5) # Get top 5
+            if news_str:
+                self.webhook.send_message(f"📰 *Latest News*\n{news_str}")
+            else:
+                self.webhook.send_message("📭 No relevant news found recently.")
+        else:
+            self.webhook.send_message("⚠️ News Engine not active.")

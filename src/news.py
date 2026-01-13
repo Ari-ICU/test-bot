@@ -84,10 +84,17 @@ class NewsEngine:
                             if self.webhook:
                                 self.webhook.notify_news(entry.title, sentiment, score)
                         
+                        # Parse actual publish time
+                        pub_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        if 'published_parsed' in entry and entry.published_parsed:
+                             pub_time = time.strftime('%Y-%m-%d %H:%M:%S', entry.published_parsed)
+                        elif 'updated_parsed' in entry and entry.updated_parsed:
+                             pub_time = time.strftime('%Y-%m-%d %H:%M:%S', entry.updated_parsed)
+
                         news_item = {
                             'title': entry.title,
                             'summary': entry.get('summary', entry.title),  
-                            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'time': pub_time,
                             'sentiment': sentiment,
                             'score': f"{score:+.2f}",
                             'source': source['name'],
@@ -181,8 +188,12 @@ class NewsEngine:
 
     def get_recent_news(self, count=5):
         recent = self.news_items[-count:]
-        formatted = [f"{item['time']} | {item['title']} ({item['sentiment']}: {item['score']}) [{item['source']}]" for item in recent]
-        return "\n".join(formatted) if formatted else "No recent news."
+        formatted = []
+        for item in recent:
+            # Use 'link' if available, otherwise just Title
+            link_part = f"\n🔗 {item['link']}" if item.get('link') else ""
+            formatted.append(f"📰 *{item['title']}*\nScore: {item['score']} | {item['source']}{link_part}")
+        return "\n\n".join(formatted) if formatted else "No recent news."
 
     def _periodic_fetch(self):
         while True:

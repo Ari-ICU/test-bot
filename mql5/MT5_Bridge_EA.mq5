@@ -216,6 +216,14 @@ void ProcessCommand(string cmd)
     else if(action == "CLOSE_TICKET") CloseTicket((long)StringToInteger(parts[1]));
 }
 
+// --- HELPER: Auto-detect correct filling mode ---
+ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol) {
+    long mode = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+    if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
+    if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
+    return ORDER_FILLING_RETURN;
+}
+
 void CloseTicket(long ticket) {
     if(PositionSelectByTicket(ticket)) {
         MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
@@ -223,8 +231,8 @@ void CloseTicket(long ticket) {
         r.volume=PositionGetDouble(POSITION_VOLUME);
         r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
         r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(r.symbol,SYMBOL_ASK):SymbolInfoDouble(r.symbol,SYMBOL_BID);
-        r.deviation = 10;
-        r.type_filling = ORDER_FILLING_IOC; 
+        r.deviation = 20;
+        r.type_filling = GetFillingMode(r.symbol); 
         if(!OrderSend(r, res)) Print("Close Ticket Fail: ", res.retcode);
         else Print("Closed Ticket #", ticket);
     } else {
@@ -298,6 +306,8 @@ void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w
 }
 
 
+
+
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeRequest r;
     MqlTradeResult res;
@@ -305,8 +315,8 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     r.action=TRADE_ACTION_DEAL; r.symbol=s; r.volume=v; r.type=t; 
     r.price=(t==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID); 
     r.sl=sl; r.tp=tp; 
-    r.deviation = 10;
-    r.type_filling = ORDER_FILLING_IOC; 
+    r.deviation = 20;
+    r.type_filling = GetFillingMode(s); 
     if(!OrderSend(r, res)) Print("Trade Fail: ", res.retcode);
 }
 
@@ -314,8 +324,8 @@ void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, do
     MqlTradeRequest r;
     MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
     r.action=TRADE_ACTION_PENDING; r.symbol=s; r.volume=v; r.type=t; r.price=p; r.sl=sl; r.tp=tp; 
-    r.deviation = 10;
-    r.type_filling = ORDER_FILLING_IOC; 
+    r.deviation = 20;
+    r.type_filling = GetFillingMode(s); 
     if(!OrderSend(r, res)) Print("Pending Fail: ", res.retcode);
 }
 
@@ -328,8 +338,8 @@ void ClosePositions(string s, string m) {
             r.action=TRADE_ACTION_DEAL; r.position=PositionGetTicket(i); r.symbol=s; r.volume=PositionGetDouble(POSITION_VOLUME);
             r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
             r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID);
-            r.deviation = 10;
-            r.type_filling = ORDER_FILLING_IOC; 
+            r.deviation = 20;
+            r.type_filling = GetFillingMode(s); 
             
             // Check return value to fix compiler warning
             if(!OrderSend(r, res)) Print("Close Fail: ", res.retcode);
