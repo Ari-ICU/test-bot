@@ -76,6 +76,9 @@ class MT5Connector:
     def change_symbol(self, symbol):
         self._queue_simple(f"CHANGE_SYMBOL|{symbol}")
     
+    def close_ticket(self, ticket_id):
+        self._queue_simple(f"CLOSE_TICKET|{ticket_id}")
+    
     # --- ADDED THIS MISSING FUNCTION ---
     def request_symbols(self):
         self._queue_simple("GET_SYMBOLS|ALL")

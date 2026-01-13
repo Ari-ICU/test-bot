@@ -54,6 +54,31 @@ class WebhookAlert:
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")
 
+    def send_keyboard(self, message, buttons):
+        """Sends a message with an inline keyboard."""
+        if not self.enabled:
+            return
+
+        thread = threading.Thread(target=self._send_keyboard_sync, args=(message, buttons), daemon=True)
+        thread.start()
+
+    def _send_keyboard_sync(self, message, buttons):
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            payload = {
+                'chat_id': self.chat_id,
+                'text': message,
+                'parse_mode': 'Markdown',
+                'reply_markup': json.dumps({"inline_keyboard": buttons})
+            }
+            
+            data = urllib.parse.urlencode(payload).encode('utf-8')
+            req = urllib.request.Request(url, data=data)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                pass 
+        except Exception as e:
+            logger.error(f"Failed to send Telegram keyboard: {e}")
+
     def _register_commands(self):
         """Tells Telegram to show these commands in the menu."""
         try:
@@ -99,22 +124,31 @@ class WebhookAlert:
         self.send_message(msg)
 
     def notify_active_positions(self, positions_list):
-        """Sends a detailed list of all open positions."""
+        """Sends a detailed list of all open positions with Close buttons."""
         if not positions_list:
             self.send_message("📭 *No Active Positions*")
             return
 
-        msg = "📋 *OPEN POSITIONS*\n"
+        msg = "📋 *OPEN POSITIONS*"
+        buttons = []
+        
         for p in positions_list:
-            # Assuming p is a dict: {'symbol': 'XAUUSD', 'type': 'BUY', 'volume': 0.01, 'profit': 1.23}
-            # Adjust keys based on what Strategy provides
             emoji = "🟢" if p['type'] == 'BUY' else "🔴"
             pl_emoji = "💵" if p['profit'] >= 0 else "🔻"
+            
+            # Button Text: "Close XAUUSD ($1.50)"
+            btn_text = f"❌ Close {p['symbol']} ({pl_emoji}{p['profit']:.2f})"
+            callback_data = f"close_ticket_{p['ticket']}"
+            
+            buttons.append([{"text": btn_text, "callback_data": callback_data}])
+            
             msg += (
-                f"\n{emoji} *{p['type']}* `{p['symbol']}`\n"
+                f"\n\n{emoji} *{p['type']}* `{p['symbol']}`\n"
                 f"   └ Vol: `{p['volume']}` | {pl_emoji} `${p['profit']:.2f}`\n"
+                f"   └ Ticket: `{p['ticket']}`"
             )
-        self.send_message(msg)
+            
+        self.send_keyboard(msg, buttons)
 
     def notify_account_summary(self, balance, floating_pnl, position_count, active_mode):
         """Sends a periodic summary of the account and active positions."""
@@ -180,8 +214,6 @@ class WebhookAlert:
                                     self.send_message("🤖 Fetching Open Positions...")
                                     if self.on_positions_command: self.on_positions_command()
                                 elif cmd.startswith("/buy") or cmd.startswith("/sell"):
-                                    # ... (existing text logic) ...
-                                    # Simplified for brevity, logic remains same but truncated in this replace block
                                     self._handle_text_trade(text)
 
             except Exception as e:
@@ -214,6 +246,11 @@ class WebhookAlert:
                 if self.on_status_command: self.on_status_command()
             elif data == "cmd_positions":
                 if self.on_positions_command: self.on_positions_command()
+            elif data == "cmd_mode":
+                if self.on_mode_command: self.on_mode_command()
+            elif data.startswith("close_ticket_"):
+                ticket_id = data.split("_")[2]
+                if self.on_close_command: self.on_close_command(ticket_id)
             elif data == "trade_buy_xau":
                 if self.on_trade_command: self.on_trade_command("BUY", "XAUUSDm", 0.01)
             elif data == "trade_sell_xau":
@@ -249,7 +286,9 @@ class WebhookAlert:
     # Hook for Strategy to attach its status reporter
     on_status_command = None
     on_positions_command = None
+    on_mode_command = None
     on_trade_command = None # lambda action, symbol, volume: ...
+    on_close_command = None  # lambda ticket_id: ...
 
     def notify_protection(self, symbol, message):
         """Notification for trailing stop or break-even updates."""

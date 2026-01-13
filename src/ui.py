@@ -46,7 +46,8 @@ class TradingBotUI(tb.Window):
         # Profit Settings
         self.auto_close_sec_var = tk.DoubleVar(value=2.0)
         self.use_profit_mgmt_var = tk.BooleanVar(value=True)
-        self.rr_ratio_var = tk.DoubleVar(value=2.0)
+        self.rr_ratio_var = tk.DoubleVar(value=1.5)
+        self.min_profit_var = tk.DoubleVar(value=0.10)
 
         # Indicator Settings (Optimized for M5)
         self.rsi_period_var = tk.IntVar(value=9)
@@ -102,6 +103,7 @@ class TradingBotUI(tb.Window):
             self.max_pos_var, self.lot_size_var, self.cooldown_var,
             self.strategy_mode_var, self.use_trend_filter_var, self.use_zone_filter_var,
             self.auto_close_sec_var, self.use_profit_mgmt_var, self.rr_ratio_var,
+            self.min_profit_var,
             self.rsi_period_var, self.rsi_buy_var, self.rsi_sell_var,
             self.macd_fast_var, self.macd_slow_var, self.macd_signal_var,
             self.bb_period_var, self.bb_dev_var, self.ema_fast_var, self.ema_slow_var,
@@ -123,7 +125,7 @@ class TradingBotUI(tb.Window):
         if self.strategy:
             try:
                 # Basic Settings
-                self.strategy.set_active(self.auto_trade_var.get())
+                # self.strategy.set_active(self.auto_trade_var.get()) <-- REMOVED to prevent overwriting Telegram changes
                 self.strategy.max_positions = self._safe_get(self.max_pos_var, 1)
                 self.strategy.lot_size = self._safe_get(self.lot_size_var, 0.01)
                 self.strategy.trade_cooldown = self._safe_get(self.cooldown_var, 15.0)
@@ -136,7 +138,8 @@ class TradingBotUI(tb.Window):
                 # Profit
                 self.strategy.profit_close_interval = self._safe_get(self.auto_close_sec_var, 2.0)
                 self.strategy.use_profit_management = self.use_profit_mgmt_var.get()
-                self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 2.0)
+                self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 1.5)
+                self.strategy.min_profit_target = self._safe_get(self.min_profit_var, 0.10)
 
                 # Indicators
                 self.strategy.rsi_period = self._safe_get(self.rsi_period_var, 14)
@@ -229,6 +232,10 @@ class TradingBotUI(tb.Window):
 
     def _update_ui_data(self, symbol, bid, ask, balance, profit, acct_name, positions, candles):
         try:
+            # Sync UI Checkbox with Strategy State (in case Telegram changed it)
+            if self.strategy and self.auto_trade_var.get() != self.strategy.active:
+                self.auto_trade_var.set(self.strategy.active)
+
             clean_symbol = str(symbol).replace('\x00', '').strip()
             if not self.symbol_var.get(): self.symbol_var.set(clean_symbol)
 
@@ -620,6 +627,7 @@ class TradingBotUI(tb.Window):
         prof_settings = ttk.Frame(prof_frame)
         prof_settings.pack(fill=X)
         self._add_setting(prof_settings, "Auto Close (sec):", self.auto_close_sec_var, 1.0, 60.0, 0)
+        self._add_setting(prof_settings, "Min Profit ($):", self.min_profit_var, 0.05, 10.0, 1)
         
         # --- Column 2: Indicators ---
         col2_frame = ttk.Frame(scroll_frame)

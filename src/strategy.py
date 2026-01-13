@@ -18,7 +18,7 @@ class TradingStrategy:
         self.active = True
         
         # --- STRATEGY CONFIGURATION ---
-        self.risk_reward_ratio = 2.0     
+        self.risk_reward_ratio = 1.5     
         self.max_positions = 1           
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
         self.trade_cooldown = 15.0       
@@ -43,7 +43,9 @@ class TradingStrategy:
             # Wire up the command listener
             self.webhook.on_status_command = self._handle_telegram_status_command
             self.webhook.on_positions_command = self._handle_telegram_positions_command
+            self.webhook.on_mode_command = self._handle_telegram_mode_command
             self.webhook.on_trade_command = self._handle_telegram_trade
+            self.webhook.on_close_command = self._handle_telegram_close_ticket
         
         # --- MARKET SESSIONS (Local Hours) ---
         self.SESSIONS = {
@@ -886,7 +888,7 @@ class TradingStrategy:
     def calculate_safe_risk(self, direction, entry_price, candles):
         atr = self.calculate_atr(candles)
         if atr == 0: atr = entry_price * 0.001
-        sl_dist = atr * 2.0
+        sl_dist = atr * 1.5
         
         if direction == "BUY":
             nearest_supp = self._get_nearest_zone(entry_price, is_support=True)
@@ -954,6 +956,13 @@ class TradingStrategy:
             else:
                 self.webhook.notify_active_positions([])
 
+    def _handle_telegram_mode_command(self):
+        """Callback for toggling Active/Pause mode via Telegram."""
+        self.active = not self.active
+        state = "ACTIVE (AUTO-TRADING)" if self.active else "PAUSED"
+        self.webhook.send_message(f"🔄 **Strategy Updated**\nNew State: **{state}**")
+        logger.info(f"Telegram Request: Strategy set to {state}")
+
     def _handle_telegram_trade(self, action, symbol=None, volume=None):
         """Callback for /buy or /sell from Telegram."""
         # 1. Determine Symbol
@@ -976,3 +985,8 @@ class TradingStrategy:
             self.webhook.send_message(f"{direction_emoji} *Sent {action}* for `{symbol}` (Lot: {volume})")
         else:
             self.webhook.send_message("❌ Failed to send command to MT5.")
+
+    def _handle_telegram_close_ticket(self, ticket_id):
+        """Callback to close a specific ticket."""
+        self.webhook.send_message(f"⏳ Attempting to close Ticket #{ticket_id}...")
+        self.connector.close_ticket(ticket_id)

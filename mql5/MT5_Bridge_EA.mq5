@@ -213,6 +213,23 @@ void ProcessCommand(string cmd)
     else if(action == "CLOSE_ALL")   ClosePositions(symbol, "ALL");
     else if(action == "CLOSE_WIN")   ClosePositions(symbol, "WIN");
     else if(action == "CLOSE_LOSS")  ClosePositions(symbol, "LOSS");
+    else if(action == "CLOSE_TICKET") CloseTicket((long)StringToInteger(parts[1]));
+}
+
+void CloseTicket(long ticket) {
+    if(PositionSelectByTicket(ticket)) {
+        MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
+        r.action=TRADE_ACTION_DEAL; r.position=ticket; r.symbol=PositionGetString(POSITION_SYMBOL); 
+        r.volume=PositionGetDouble(POSITION_VOLUME);
+        r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
+        r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(r.symbol,SYMBOL_ASK):SymbolInfoDouble(r.symbol,SYMBOL_BID);
+        r.deviation = 10;
+        r.type_filling = ORDER_FILLING_IOC; 
+        if(!OrderSend(r, res)) Print("Close Ticket Fail: ", res.retcode);
+        else Print("Closed Ticket #", ticket);
+    } else {
+        Print("Ticket not found: ", ticket);
+    }
 }
 
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
