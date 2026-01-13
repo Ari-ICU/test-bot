@@ -171,8 +171,18 @@ class TradingStrategy:
             server_time_str = datetime.fromtimestamp(candles[-1]['time']).strftime('%H:%M:%S')
 
         # 0. Data Validation & Automated History Fetching
-        # Master Confluence/CRT need more data
-        min_needed = 300 
+        # Detect timeframe from candle interval
+        tf_minutes = 5 # Default
+        if candles and len(candles) > 2:
+            diff = (candles[1]['time'] - candles[0]['time']) // 60
+            if diff > 0: tf_minutes = diff
+        
+        # Adjust min candles needed based on TF
+        # Lower TF = more candles, Higher TF = fewer needed
+        if tf_minutes <= 5: min_needed = 300
+        elif tf_minutes <= 30: min_needed = 150
+        elif tf_minutes <= 60: min_needed = 100
+        else: min_needed = 50 # H4, D1
         
         if not candles or len(candles) < min_needed:
             if current_time - self.last_hist_req > 5:
@@ -609,10 +619,6 @@ class TradingStrategy:
                 reason_str = ",".join(reasons)
                 logger.info(f"🌟 SELL (U16) | Score: {sell_score} | Reasons: {reason_str}")
                 self.execute_trade("SELL", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                reason_str = ",".join(reasons)
-                logger.info(f"🌟 SELL (MASTER) | Score: {sell_score} | Reasons: {reason_str}")
-                self.execute_trade("SELL", symbol, self.lot_size, "MASTER_CONFLUENCE", sl, tp)
 
     # =========================================================================
     # --- STRUCTURE / ZONES / CRT HELPERS ---
