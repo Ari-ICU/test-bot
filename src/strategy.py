@@ -28,7 +28,7 @@ class TradingStrategy:
         self.trade_cooldown = 15.0       
         
         # --- MODES & FILTERS ---
-        self.strategy_mode = "MASTER_CONFLUENCE" 
+        self.strategy_mode = "U16_STRATEGY"  # Combined strategy
         self.use_trend_filter = True
         self.use_zone_filter = True
         
@@ -177,18 +177,27 @@ class TradingStrategy:
             diff = (candles[1]['time'] - candles[0]['time']) // 60
             if diff > 0: tf_minutes = diff
         
-        if tf_minutes <= 5: min_needed = 300
+        # Adjust min_needed based on TF for robustness across LTF and HTF
+        if tf_minutes <= 1: min_needed = 1440  # M1: Need ~1 day for HTF resampling
+        elif tf_minutes <= 5: min_needed = 300
         elif tf_minutes <= 30: min_needed = 150
         elif tf_minutes <= 60: min_needed = 100
         else: min_needed = 50
         
-        if not candles or len(candles) < min_needed:
+        # For HTF analysis, request extra if current TF is low
+        htf_extra = 0
+        if tf_minutes < 60 and self.use_trend_filter:
+            htf_extra = 500  # Extra for resampling to H4
+        
+        total_needed = min_needed + htf_extra
+        
+        if not candles or len(candles) < total_needed:
             if current_time - self.last_hist_req > 5:
-                self.connector.request_history(symbol, min_needed + 50)
+                self.connector.request_history(symbol, total_needed + 50)
                 self.last_hist_req = current_time
-                logging.info(f"Requesting {min_needed + 50} candles for {symbol}...")
+                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (TF: {tf_minutes}min)...")
             if candles and len(candles) > 0:
-                self._log_skip(f"Gathering data... ({len(candles)}/{min_needed} candles)")
+                self._log_skip(f"Gathering data... ({len(candles)}/{total_needed} candles)")
             return
 
         if candles[0]['time'] > candles[-1]['time']:
@@ -212,23 +221,8 @@ class TradingStrategy:
         
         if self.active and actual_positions < self.max_positions:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
-                mode = self.strategy_mode
-                if mode == "ZONE_BOUNCE": self.check_signals_zone_bounce(symbol, bid, ask, candles)
-                elif mode == "MACD_RSI": self.check_signals_macd_rsi(symbol, bid, ask, candles)
-                elif mode == "BOLLINGER": self.check_signals_bollinger(symbol, bid, ask, candles)
-                elif mode == "EMA_CROSS": self.check_signals_ema_cross(symbol, bid, ask, candles)
-                elif mode == "SMC": self.check_signals_smc(symbol, bid, ask, candles)
-                elif mode == "CRT": self.check_signals_crt(symbol, bid, ask, candles)
-                elif mode == "STOCHASTIC": self.check_signals_stochastic(symbol, bid, ask, candles)
-                elif mode == "ICHIMOKU": self.check_signals_ichimoku(symbol, bid, ask, candles)
-                elif mode == "PRICE_ACTION": self.check_signals_price_action(symbol, bid, ask, candles)
-                elif mode == "ICT_FVG": self.check_signals_ict_fvg(symbol, bid, ask, candles)
-                elif mode == "ICT_SILVER_BULLET": self.check_signals_ict_silver_bullet(symbol, bid, ask, candles)
-                elif mode == "U16_STRATEGY": self.check_signals_u16(symbol, bid, ask, candles)
-                elif mode == "BREAKOUT": self.check_signals_breakout(symbol, bid, ask, candles)
-                elif mode == "SCALPING": self.check_signals_scalping(symbol, bid, ask, candles)
-                elif mode == "MEAN_REVERSION": self.check_signals_mean_reversion(symbol, bid, ask, candles)
-                elif mode == "MOMENTUM": self.check_signals_momentum(symbol, bid, ask, candles)
+                # Always use combined U16 strategy, adaptive to TF
+                self.check_signals_u16(symbol, bid, ask, candles, tf_minutes)
 
         if current_time - self.last_status_time >= 10:
             self.last_status_time = current_time
@@ -236,7 +230,7 @@ class TradingStrategy:
             near_supp = self._get_nearest_zone(bid, is_support=True)
             s_val = f"{near_supp['top']:.2f}" if near_supp else "None"
             active_txt = "AUTO-ON" if self.active else "AUTO-OFF"
-            logger.info(f"📊 [MT5:{server_time_str}] {active_txt} | {symbol} | Mode: {self.strategy_mode} | S: {s_val} | Conf: {conf_score}% | PnL: {profit:.2f}")
+            logger.info(f"📊 [MT5:{server_time_str}] {active_txt} | {symbol} | Mode: {self.strategy_mode} | TF: {tf_minutes}min | S: {s_val} | Conf: {conf_score}% | PnL: {profit:.2f}")
 
         current_positions_list = getattr(self.connector, 'open_positions', [])
         
@@ -372,169 +366,45 @@ class TradingStrategy:
             return last['upper'], last['lower'], last['sma'], bandwidth
         except: return 0, 0, 0, 0
 
-    # --- SIGNALS ---
-    def check_signals_stochastic(self, symbol, bid, ask, candles):
-        k, d = self.calculate_stochastic(candles)
-        if k < self.stoch_oversold and d < self.stoch_oversold and k > d:
-            if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                logger.info(f"✅ BUY (STOCH) | K: {k:.1f} / D: {d:.1f}")
-                self.execute_trade("BUY", symbol, self.lot_size, "STOCHASTIC", sl, tp)
-        elif k > self.stoch_overbought and d > self.stoch_overbought and k < d:
-            if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                logger.info(f"✅ SELL (STOCH) | K: {k:.1f} / D: {d:.1f}")
-                self.execute_trade("SELL", symbol, self.lot_size, "STOCHASTIC", sl, tp)
+    def get_htf_trend(self, candles, htf_minutes=240):
+        """Calculate trend on higher timeframe via resampling."""
+        try:
+            if len(candles) < 200: return "NEUTRAL"
+            df = pd.DataFrame(candles)
+            df['dt'] = pd.to_datetime(df['time'], unit='s')
+            df.set_index('dt', inplace=True)
+            htf_df = df.resample(f"{htf_minutes}T").agg({'open':'first', 'high':'max', 'low':'min', 'close':'last'}).dropna()
+            if len(htf_df) < 200: return "NEUTRAL"
+            htf_ema200 = htf_df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            htf_close = htf_df['close'].iloc[-1]
+            if htf_close > htf_ema200:
+                return "BULLISH_STRONG" if htf_close > (htf_ema200 * 1.001) else "BULLISH_WEAK"
+            else:
+                return "BEARISH_STRONG" if htf_close < (htf_ema200 * 0.999) else "BEARISH_WEAK"
+        except:
+            return "NEUTRAL"
 
-    def check_signals_ichimoku(self, symbol, bid, ask, candles):
-        tenkan, kijun, span_a, span_b, price = self.calculate_ichimoku(candles)
-        above_cloud = price > max(span_a, span_b); below_cloud = price < min(span_a, span_b)
-        tk_cross_bull = tenkan > kijun; tk_cross_bear = tenkan < kijun
-        if above_cloud and tk_cross_bull:
-            if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                logger.info(f"✅ BUY (ICHIMOKU) | Above Cloud + TK Cross")
-                self.execute_trade("BUY", symbol, self.lot_size, "ICHIMOKU", sl, tp)
-        elif below_cloud and tk_cross_bear:
-            if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                logger.info(f"✅ SELL (ICHIMOKU) | Below Cloud + TK Cross")
-                self.execute_trade("SELL", symbol, self.lot_size, "ICHIMOKU", sl, tp)
-
-    def check_signals_price_action(self, symbol, bid, ask, candles):
-        pattern = self.detect_candle_patterns(candles)
-        if pattern in ["BULLISH_ENGULFING", "HAMMER"]:
-            if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                logger.info(f"✅ BUY (PA) | Pattern: {pattern}")
-                self.execute_trade("BUY", symbol, self.lot_size, "PA_" + pattern, sl, tp)
-        elif pattern in ["BEARISH_ENGULFING", "SHOOTING_STAR"]:
-            if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                logger.info(f"✅ SELL (PA) | Pattern: {pattern}")
-                self.execute_trade("SELL", symbol, self.lot_size, "PA_" + pattern, sl, tp)
-
-    def check_signals_ict_fvg(self, symbol, bid, ask, candles):
-        fvg_type, top, bottom = self._detect_recent_fvg(candles)
-        if fvg_type == "BULLISH" and bottom < ask < top:
-            if self._check_filters("BUY", ask):
-                atr = self.calculate_atr(candles)
-                sl = bottom - (atr * 0.2)
-                tp = ask + ((ask - sl) * 2.0)
-                logger.info(f"✅ BUY (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
-                self.execute_trade("BUY", symbol, self.lot_size, "ICT_FVG", sl, tp)
-        elif fvg_type == "BEARISH" and bottom < bid < top:
-            if self._check_filters("SELL", bid):
-                atr = self.calculate_atr(candles)
-                sl = top + (atr * 0.2)
-                tp = bid - ((sl - bid) * 2.0)
-                logger.info(f"✅ SELL (ICT FVG) | Gap: {bottom:.2f}-{top:.2f}")
-                self.execute_trade("SELL", symbol, self.lot_size, "ICT_FVG", sl, tp)
-
-    def check_signals_ict_silver_bullet(self, symbol, bid, ask, candles):
-        if not self._is_silver_bullet_time(): return
-        fvg_type, top, bottom = self._detect_recent_fvg(candles)
-        if fvg_type == "NONE": return
-        if fvg_type == "BULLISH" and bottom < ask < top and self._check_filters("BUY", ask):
-             atr = self.calculate_atr(candles)
-             sl = bottom - (atr * 0.1); tp = ask + ((ask - sl) * 2.0)
-             self.execute_trade("BUY", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
-        elif fvg_type == "BEARISH" and bottom < bid < top and self._check_filters("SELL", bid):
-             atr = self.calculate_atr(candles)
-             sl = top + (atr * 0.1); tp = bid - ((sl - bid) * 2.0)
-             self.execute_trade("SELL", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
-
-    def check_signals_breakout(self, symbol, bid, ask, candles):
-        if len(candles) < self.breakout_period + 1: return
-        upper, lower, sma, bandwidth = self.calculate_bollinger_bands(candles, self.breakout_period, self.bb_dev)
-        atr = self.calculate_atr(candles)
-        current_close = candles[-1]['close']; prev_close = candles[-2]['close']
-        squeeze_threshold = sma * 0.005
-        if bandwidth < squeeze_threshold:
-            if current_close > upper and current_close > prev_close + (atr * self.breakout_threshold):
-                if self._check_filters("BUY", ask):
-                    sl = lower; tp = ask + ((ask - sl) * self.risk_reward_ratio)
-                    logger.info(f"✅ BUY (BREAKOUT) | Upper Break: {upper:.2f}")
-                    self.execute_trade("BUY", symbol, self.lot_size, "BREAKOUT", sl, tp)
-            elif current_close < lower and current_close < prev_close - (atr * self.breakout_threshold):
-                if self._check_filters("SELL", bid):
-                    sl = upper; tp = bid - ((sl - bid) * self.risk_reward_ratio)
-                    logger.info(f"✅ SELL (BREAKOUT) | Lower Break: {lower:.2f}")
-                    self.execute_trade("SELL", symbol, self.lot_size, "BREAKOUT", sl, tp)
-
-    def check_signals_scalping(self, symbol, bid, ask, candles):
-        k, d_prev = self.calculate_stochastic(candles)[0], (self.calculate_stochastic(candles[:-1])[1] if len(candles)>1 else 50)
-        rsi = self.calculate_indicators(candles)[0]
-        atr = self.calculate_atr(candles)
-        if k > d_prev and k < self.stoch_oversold and rsi > 30:
-            if self._check_filters("BUY", ask):
-                sl_dist = atr * self.scalp_atr_mult
-                sl = ask - sl_dist; tp = ask + (sl_dist * self.scalp_tp_mult)
-                logger.info(f"✅ BUY (SCALP) | Stoch Cross Up")
-                self.execute_trade("BUY", symbol, self.lot_size, "SCALPING", sl, tp)
-        elif k < d_prev and k > self.stoch_overbought and rsi < 70:
-            if self._check_filters("SELL", bid):
-                sl_dist = atr * self.scalp_atr_mult
-                sl = bid + sl_dist; tp = bid - (sl_dist * self.scalp_tp_mult)
-                logger.info(f"✅ SELL (SCALP) | Stoch Cross Down")
-                self.execute_trade("SELL", symbol, self.lot_size, "SCALPING", sl, tp)
-
-    def check_signals_mean_reversion(self, symbol, bid, ask, candles):
-        if len(candles) < self.mr_bb_period + 1: return
-        upper, lower, sma, _ = self.calculate_bollinger_bands(candles, self.mr_bb_period, self.mr_bb_dev)
-        rsi = self.calculate_indicators(candles)[0]
-        adx = self.calculate_adx(candles)
-        current_close = candles[-1]['close']
-        if adx > 25: return
-        if current_close <= lower and rsi < (100 - self.mr_rsi_extreme):
-            if self._check_filters("BUY", ask):
-                atr = self.calculate_atr(candles)
-                sl = lower - (atr * 0.5); tp = sma
-                logger.info(f"✅ BUY (MEAN REV)")
-                self.execute_trade("BUY", symbol, self.lot_size, "MEAN_REVERSION", sl, tp)
-        elif current_close >= upper and rsi > self.mr_rsi_extreme:
-            if self._check_filters("SELL", bid):
-                atr = self.calculate_atr(candles)
-                sl = upper + (atr * 0.5); tp = sma
-                logger.info(f"✅ SELL (MEAN REV)")
-                self.execute_trade("SELL", symbol, self.lot_size, "MEAN_REVERSION", sl, tp)
-
-    def check_signals_momentum(self, symbol, bid, ask, candles):
-        rsi, macd, macd_sig = self.calculate_indicators(candles)
-        adx = self.calculate_adx(candles)
-        df = pd.DataFrame(candles)
-        df['ema_20'] = df['close'].ewm(span=20).mean()
-        current_close = df.iloc[-1]['close']
-        prev_macd_hist = (df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']) if len(df)>1 else 0
-        curr_macd_hist = macd - macd_sig
-        if adx > 25:
-            if current_close > df.iloc[-1]['ema_20'] and curr_macd_hist > prev_macd_hist:
-                if self._check_filters("BUY", ask):
-                    sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                    logger.info(f"✅ BUY (MOMENTUM)")
-                    self.execute_trade("BUY", symbol, self.lot_size, "MOMENTUM", sl, tp)
-            elif current_close < df.iloc[-1]['ema_20'] and curr_macd_hist < prev_macd_hist:
-                if self._check_filters("SELL", bid):
-                    sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                    logger.info(f"✅ SELL (MOMENTUM)")
-                    self.execute_trade("SELL", symbol, self.lot_size, "MOMENTUM", sl, tp)
-
-    def check_signals_u16(self, symbol, bid, ask, candles):
+    # --- COMBINED U16 STRATEGY (Incorporates all other strategies, multi-TF adaptive) ---
+    def check_signals_u16(self, symbol, bid, ask, candles, tf_minutes):
+        if len(candles) < 50: return  # Need sufficient data
         buy_score = 0; sell_score = 0; reasons = []
-        rsi, macd, sig = self.calculate_indicators(candles)
+        rsi, macd, macd_sig = self.calculate_indicators(candles)
         k, d = self.calculate_stochastic(candles)
         adx = self.calculate_adx(candles)
         tenkan, kijun, span_a, span_b, price = self.calculate_ichimoku(candles)
         fvg_type, fvg_top, fvg_bot = self._detect_recent_fvg(candles)
+        current_close = candles[-1]['close']
+        df = pd.DataFrame(candles)
         
+        # LTF Core indicators (current TF)
         if rsi < 40: buy_score += 1
         elif rsi > 60: sell_score += 1
-        if macd > sig: buy_score += 1
+        if macd > macd_sig: buy_score += 1
         else: sell_score += 1
         if k < 25 and k > d: buy_score += 1; reasons.append("StochOvS")
         if k > 75 and k < d: sell_score += 1; reasons.append("StochOvB")
-        if price > span_a and price > span_b: buy_score += 1
-        if price < span_a and price < span_b: sell_score += 1
+        if price > max(span_a, span_b): buy_score += 1
+        if price < min(span_a, span_b): sell_score += 1
         
         pattern = self.detect_candle_patterns(candles)
         if "BULLISH" in pattern or pattern == "HAMMER": buy_score += 2; reasons.append(pattern)
@@ -562,114 +432,91 @@ class TradingStrategy:
         if crt_signal == "BUY": buy_score += 3; reasons.append("CRT_Sweep")
         elif crt_signal == "SELL": sell_score += 3; reasons.append("CRT_Sweep")
 
-        THRESHOLD = 5 
+        # Additional confluence from other strategies (LTF)
+        # Bollinger Bands (Mean Reversion & Breakout)
+        upper, lower, sma, bandwidth = self.calculate_bollinger_bands(candles, self.bb_period, self.bb_dev)
+        if current_close < lower: buy_score += 2; reasons.append("BB_Lower")
+        if current_close > upper: sell_score += 2; reasons.append("BB_Upper")
+        prev_close = candles[-2]['close']
+        squeeze_threshold = sma * 0.005
+        if bandwidth < squeeze_threshold:
+            if current_close > upper and current_close > prev_close + (atr * self.breakout_threshold):
+                buy_score += 2; reasons.append("Breakout_Bull")
+            elif current_close < lower and current_close < prev_close - (atr * self.breakout_threshold):
+                sell_score += 2; reasons.append("Breakout_Bear")
+
+        # EMA Cross
+        df['fast_ema'] = df['close'].ewm(span=self.ema_fast, adjust=False).mean()
+        df['slow_ema'] = df['close'].ewm(span=self.ema_slow, adjust=False).mean()
+        if df.iloc[-1]['fast_ema'] > df.iloc[-1]['slow_ema']: buy_score += 1
+        else: sell_score += 1
+
+        # Mean Reversion (low ADX)
+        if adx < 25:
+            if current_close <= lower and rsi < (100 - self.mr_rsi_extreme): buy_score += 2; reasons.append("MR_Buy")
+            elif current_close >= upper and rsi > self.mr_rsi_extreme: sell_score += 2; reasons.append("MR_Sell")
+
+        # SMC Order Blocks
+        bullish_ob, bearish_ob = self.calculate_order_blocks(candles)
+        if bullish_ob and bullish_ob['bottom'] <= ask <= bullish_ob['top']: buy_score += 2; reasons.append("Bull_OB")
+        if bearish_ob and bearish_ob['bottom'] <= bid <= bearish_ob['top']: sell_score += 2; reasons.append("Bear_OB")
+
+        # Silver Bullet Time Bonus
+        if self._is_silver_bullet_time() and fvg_type != "NONE":
+            if fvg_type == "BULLISH": buy_score += 1; reasons.append("Silver_Bull")
+            elif fvg_type == "BEARISH": sell_score += 1; reasons.append("Silver_Bear")
+
+        # Momentum (MACD Histogram expansion)
+        prev_macd_hist = (df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']) if len(df) > 1 else 0
+        curr_macd_hist = macd - macd_sig
+        if adx > 25 and curr_macd_hist > prev_macd_hist: buy_score += 1
+        elif adx > 25 and curr_macd_hist < prev_macd_hist: sell_score += 1
+
+        # HTF Confluence (always check higher TF for alignment, adaptive to current TF)
+        target_htf = min(1440, max(60, tf_minutes * 12))  # Adaptive HTF: 12x current or cap at D1
+        htf_trend = self.get_htf_trend(candles, target_htf)
+        if "BULLISH" in htf_trend:
+            buy_score += 2 if "STRONG" in htf_trend else 1
+            reasons.append(f"HTF_{htf_trend}")
+        elif "BEARISH" in htf_trend:
+            sell_score += 2 if "STRONG" in htf_trend else 1
+            reasons.append(f"HTF_{htf_trend}")
+
+        # TF-Adaptive Threshold: Lower for LTF (scalping), higher for HTF (swing)
+        base_threshold = 7
+        if tf_minutes <= 5:  # LTF: Easier entry for quick scalps
+            THRESHOLD = base_threshold - 1
+        elif tf_minutes >= 240:  # HTF: Stricter for longer holds
+            THRESHOLD = base_threshold + 2
+        else:
+            THRESHOLD = base_threshold
+
+        # TF-Adaptive Risk: Tighter on LTF, wider on HTF
+        if tf_minutes <= 5:
+            atr_mult = self.scalp_atr_mult * 0.8  # Even tighter SL for LTF
+            tp_base = 1.2
+        else:
+            atr_mult = self.scalp_atr_mult * 1.5  # Wider for HTF
+            tp_base = 2.0
+
         if buy_score >= THRESHOLD and buy_score > sell_score:
             if self._check_filters("BUY", ask):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
+                sl_dist = atr * atr_mult
+                sl = ask - sl_dist
+                tp_mult = min(tp_base + (buy_score - THRESHOLD) * 0.2, 3.0)  # Dynamic TP, capped higher for HTF
+                tp = ask + (sl_dist * tp_mult)
                 reason_str = ",".join(reasons)
-                logger.info(f"🌟 BUY (U16) | Score: {buy_score} | Reasons: {reason_str}")
+                logger.info(f"🌟 BUY (U16) | TF:{tf_minutes}min | Score: {buy_score} | Reasons: {reason_str}")
                 self.execute_trade("BUY", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
         elif sell_score >= THRESHOLD and sell_score > buy_score:
             if self._check_filters("SELL", bid):
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
+                sl_dist = atr * atr_mult
+                sl = bid + sl_dist
+                tp_mult = min(tp_base + (sell_score - THRESHOLD) * 0.2, 3.0)  # Dynamic TP
+                tp = bid - (sl_dist * tp_mult)
                 reason_str = ",".join(reasons)
-                logger.info(f"🌟 SELL (U16) | Score: {sell_score} | Reasons: {reason_str}")
+                logger.info(f"🌟 SELL (U16) | TF:{tf_minutes}min | Score: {sell_score} | Reasons: {reason_str}")
                 self.execute_trade("SELL", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
-
-    def check_signals_zone_bounce(self, symbol, bid, ask, candles):
-        atr = self.calculate_atr(candles)
-        if atr == 0: return
-        nearest_supp = self._get_nearest_zone(bid, is_support=True)
-        if nearest_supp:
-            dist = bid - nearest_supp['top']
-            if dist <= (atr * 1.5) and bid >= (nearest_supp['bottom'] - (atr * 0.5)):
-                conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
-                if conf >= 60 and dir == "BUY" and self._check_filters("BUY", ask):
-                    sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                    self.execute_trade("BUY", symbol, self.lot_size, "ZONE_BOUNCE", sl, tp)
-        nearest_res = self._get_nearest_zone(bid, is_support=False)
-        if nearest_res:
-            dist = nearest_res['bottom'] - bid
-            if dist <= (atr * 1.5) and bid <= (nearest_res['top'] + (atr * 0.5)):
-                conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
-                if conf >= 60 and dir == "SELL" and self._check_filters("SELL", bid):
-                    sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                    self.execute_trade("SELL", symbol, self.lot_size, "ZONE_BOUNCE", sl, tp)
-
-    def check_signals_macd_rsi(self, symbol, bid, ask, candles):
-        rsi, macd, macd_signal = self.calculate_indicators(candles)
-        conf, dir = self.get_prediction_score(symbol, bid, ask, candles)
-        if rsi < self.rsi_buy_threshold and macd > macd_signal and conf >= 50 and self._check_filters("BUY", ask):
-            sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-            self.execute_trade("BUY", symbol, self.lot_size, "MACD_RSI", sl, tp)
-        elif rsi > self.rsi_sell_threshold and macd < macd_signal and conf >= 50 and self._check_filters("SELL", bid):
-            sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-            self.execute_trade("SELL", symbol, self.lot_size, "MACD_RSI", sl, tp)
-
-    def check_signals_bollinger(self, symbol, bid, ask, candles):
-        if len(candles) < 50: return
-        df = pd.DataFrame(candles)
-        df['sma'] = df['close'].rolling(20).mean()
-        curr = df.iloc[-1]; prev = df.iloc[-2]
-        cross_up = prev['close'] < prev['sma'] and curr['close'] > curr['sma']
-        cross_down = prev['close'] > prev['sma'] and curr['close'] < curr['sma']
-        if cross_up and self._check_filters("BUY", ask):
-             sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-             self.execute_trade("BUY", symbol, self.lot_size, "BB_RSI", sl, tp)
-        elif cross_down and self._check_filters("SELL", bid):
-             sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-             self.execute_trade("SELL", symbol, self.lot_size, "BB_RSI", sl, tp)
-
-    def check_signals_ema_cross(self, symbol, bid, ask, candles):
-        if len(candles) < 50: return
-        df = pd.DataFrame(candles)
-        df['fast'] = df['close'].ewm(span=self.ema_fast, adjust=False).mean()
-        df['slow'] = df['close'].rolling(window=self.ema_slow).mean()
-        curr = df.iloc[-1]
-        if curr['fast'] > curr['slow'] and self._check_filters("BUY", ask):
-             sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-             self.execute_trade("BUY", symbol, self.lot_size, "EMA_CROSS", sl, tp)
-        elif curr['fast'] < curr['slow'] and self._check_filters("SELL", bid):
-             sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-             self.execute_trade("SELL", symbol, self.lot_size, "EMA_CROSS", sl, tp)
-
-    def check_signals_smc(self, symbol, bid, ask, candles):
-        structure = self.detect_market_structure(candles)
-        bullish_ob, bearish_ob = self.calculate_order_blocks(candles)
-        atr = self.calculate_atr(candles)
-        if structure == "BULLISH" and bullish_ob and self._check_filters("BUY", ask):
-            if bullish_ob['bottom'] <= ask <= (bullish_ob['top'] + atr*0.2):
-                sl, tp = self.calculate_safe_risk("BUY", ask, candles)
-                self.execute_trade("BUY", symbol, self.lot_size, "SMC_OB", sl, tp)
-        elif structure == "BEARISH" and bearish_ob and self._check_filters("SELL", bid):
-            if (bearish_ob['bottom'] - atr*0.2) <= bid <= bearish_ob['top']:
-                sl, tp = self.calculate_safe_risk("SELL", bid, candles)
-                self.execute_trade("SELL", symbol, self.lot_size, "SMC_OB", sl, tp)
-
-    def check_signals_crt(self, symbol, bid, ask, candles):
-        if len(candles) < 20: return
-        htf_minutes = self.crt_htf
-        crt_high, crt_low, status = self.get_htf_structure(candles, htf_minutes)
-        
-        if status == "OK" and time.time() - self.last_crt_draw > 5:
-            self.connector.send_draw_command(f"CRT_BOX_{symbol}", crt_high, crt_low, 20, 0, "64,224,208")
-            self.connector.send_hline_command(f"CRT_HI_{symbol}", crt_high, "255,0,0", 2) 
-            self.connector.send_hline_command(f"CRT_LO_{symbol}", crt_low, "0,255,0", 2)
-            self.last_crt_draw = time.time()
-            
-        signal = self._detect_crt_signal(candles, bid, ask)
-        atr = self.calculate_atr(candles)
-        
-        if signal == "BUY" and self._check_filters("BUY", ask):
-             recent_history = candles[-11:-1]
-             recent_lows = [c['low'] for c in recent_history]
-             sl = min(recent_lows) - (atr * 0.2); tp = crt_high - (atr * 0.10)
-             self.execute_trade("BUY", symbol, self.lot_size, "CRT_RANGE", sl, tp)
-        elif signal == "SELL" and self._check_filters("SELL", bid):
-             recent_history = candles[-11:-1]
-             recent_highs = [c['high'] for c in recent_history]
-             sl = max(recent_highs) + (atr * 0.2); tp = crt_low + (atr * 0.10)
-             self.execute_trade("SELL", symbol, self.lot_size, "CRT_RANGE", sl, tp)
 
     # --- STRUCTURE HELPERS ---
     def analyze_structure_zones(self, symbol, candles):
@@ -865,7 +712,7 @@ class TradingStrategy:
             if direction == "SELL":
                 nearest_supp = self._get_nearest_zone(current_price, is_support=True)
                 if nearest_supp and (current_price - nearest_supp['top']) < (self.zone_tolerance * 0.5): return False
-        if self.use_trend_filter and self.strategy_mode != "MASTER_CONFLUENCE":
+        if self.use_trend_filter:
              if direction == "BUY" and "BEARISH" in self.trend: return False
              if direction == "SELL" and "BULLISH" in self.trend: return False
         return True
@@ -1010,15 +857,20 @@ class TradingStrategy:
 
     def _handle_telegram_analysis(self):
         if hasattr(self, 'last_candles') and hasattr(self, 'last_symbol') and self.last_candles:
+            tf_min = 5  # Default
+            if len(self.last_candles) > 2:
+                diff = (self.last_candles[1]['time'] - self.last_candles[0]['time']) // 60
+                if diff > 0: tf_min = diff
             rsi, macd, macd_sig = self.calculate_indicators(self.last_candles)
             score, signal = self.get_prediction_score(self.last_symbol, 0, 0, self.last_candles)
-            self.webhook.notify_analysis(self.last_symbol, self.trend, rsi, macd, score, signal)
+            htf_trend = self.get_htf_trend(self.last_candles)
+            self.webhook.notify_analysis(self.last_symbol, self.trend, rsi, macd, score, signal, tf_min, htf_trend)
         else: self.webhook.send_message("⚠️ No market data available yet. Wait for a tick.")
 
     def _handle_telegram_strategy_select(self, mode_name):
-        self.strategy_mode = mode_name
-        self.webhook.send_message(f"🧠 Strategy switched to: **{mode_name}**")
-        logger.info(f"Telegram: Strategy changed to {mode_name}")
+        # Since all combined into U16, ignore changes or log
+        self.webhook.send_message(f"🧠 Strategy locked to combined **U16_STRATEGY**. Change ignored.")
+        logger.info(f"Telegram: Attempt to change to {mode_name}, but locked to U16")
 
     def _handle_telegram_lot_change(self, delta):
         new_lot = round(self.lot_size + delta, 2)
