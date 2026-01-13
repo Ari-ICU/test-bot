@@ -17,8 +17,8 @@ class MT5Connector:
         self.command_queue = []
         self.on_tick_received = None 
         self.on_symbols_received = None
-        self.open_positions = [] # Store detailed active positions
-        self.account_info = {}   # Store MT5 account details
+        self.open_positions = [] 
+        self.account_info = {}   
 
     def start(self):
         try:
@@ -54,7 +54,6 @@ class MT5Connector:
         self._queue_simple(command)
         return True
 
-    # --- NEW: ZIGZAG & LINES ---
     def send_trend_command(self, name, b1, p1, b2, p2, color_code, width=1):
         command = f"DRAW_TREND|{name}|{b1}|{p1}|{b2}|{p2}|{color_code}|{width}"
         self._queue_simple(command)
@@ -66,7 +65,6 @@ class MT5Connector:
     def send_label_command(self, name, text, color_code, y_pos):
         command = f"DRAW_LABEL|{name}|{text}|{color_code}|{y_pos}"
         self._queue_simple(command)
-    # ---------------------------
 
     def close_position(self, symbol):
         self._queue_simple(f"CLOSE_ALL|{symbol}")
@@ -80,7 +78,6 @@ class MT5Connector:
     def close_ticket(self, ticket_id):
         self._queue_simple(f"CLOSE_TICKET|{ticket_id}")
     
-    # --- ADDED THIS MISSING FUNCTION ---
     def request_symbols(self):
         self._queue_simple("GET_SYMBOLS|ALL")
 
@@ -115,7 +112,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 if 'symbol' in data:
                     s = data['symbol'].replace('\x00', '').strip()
                     p = data.get('profit', '0')
-                    logger.info(f"❤️ Pulse: {s} | P/L: {p}")
+                    # logger.info(f"❤️ Pulse: {s} | P/L: {p}")
                 MT5RequestHandler.last_log_time = current_time
 
             # Symbols
@@ -128,8 +125,14 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     clean_symbol = data['symbol'].replace('\x00', '').strip()
                     
                     def clean_float(val):
+                        if not val: return 0.0
                         if isinstance(val, str):
-                            return float(val.replace('\x00', '').strip())
+                            val = val.replace('\x00', '').strip()
+                            if val == "": return 0.0
+                            try:
+                                return float(val)
+                            except:
+                                return 0.0
                         return float(val)
 
                     try:
@@ -187,10 +190,8 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
                     if 'active_trades' in data:
                         raw_trades = data['active_trades']
-                        # Format: TICKET,SYMBOL,TYPE,VOLUME,PROFIT|...
                         parsed_trades = []
                         if raw_trades:
-                            # Clean entire string of null bytes first
                             raw_trades = raw_trades.replace('\x00', '').strip()
                             if raw_trades:
                                 for t_str in raw_trades.split('|'):
@@ -200,12 +201,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                             parsed_trades.append({
                                                 'ticket': p[0].strip(),
                                                 'symbol': p[1].strip(),
-                                                'type': p[2].strip(), # BUY or SELL
+                                                'type': p[2].strip(), 
                                                 'volume': float(p[3].strip()),
                                                 'profit': float(p[4].strip())
                                             })
                                         except ValueError:
-                                            logger.warning(f"Failed to parse trade: {p}")
+                                            pass
                         self.connector.open_positions = parsed_trades
 
                     self.connector.on_tick_received(
