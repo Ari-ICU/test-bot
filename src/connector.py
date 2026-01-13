@@ -156,10 +156,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         'leverage': data.get('acct_leverage', '0').replace('\x00', '').strip(),
                         'equity': clean_float(data.get('acct_equity', 0)),
                         'balance': balance,
-                        'profit': profit,
-                        'today': clean_float(data.get('prof_today', 0)),
-                        'week': clean_float(data.get('prof_week', 0)),
-                        'month': clean_float(data.get('prof_month', 0))
+                        'profit': profit
                     }
 
                     candles = []

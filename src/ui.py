@@ -496,19 +496,6 @@ class TradingBotUI(tb.Window):
         self.lbl_server_time = ttk.Label(stats_frame, text="🕒 MT5: --:--:--", font=("Segoe UI", 9), foreground="#888")
         self.lbl_server_time.pack(anchor=W, pady=2)
 
-        # Performance Stats
-        perf_frame = ttk.LabelFrame(left_frame, text="📈 Performance", padding=10, bootstyle="secondary")
-        perf_frame.pack(fill=X, pady=5)
-
-        self.lbl_prof_today = ttk.Label(perf_frame, text="Today: $0.00", font=("Segoe UI", 10, "bold"))
-        self.lbl_prof_today.pack(anchor=W, pady=2)
-
-        self.lbl_prof_week = ttk.Label(perf_frame, text="Week: $0.00", font=("Segoe UI", 10))
-        self.lbl_prof_week.pack(anchor=W, pady=2)
-
-        self.lbl_prof_month = ttk.Label(perf_frame, text="Month: $0.00", font=("Segoe UI", 10))
-        self.lbl_prof_month.pack(anchor=W, pady=2)
-
         # Live Indicators
         ind_frame = ttk.LabelFrame(left_frame, text="📉 Indicators", padding=10, bootstyle="info")
         ind_frame.pack(fill=X, pady=5)
