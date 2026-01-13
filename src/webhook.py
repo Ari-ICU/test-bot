@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+import queue
 
 logger = logging.getLogger("WebhookAlert")
 
@@ -23,7 +24,6 @@ class WebhookAlert:
         self.on_news_command = None         
         self.on_accounts_command = None     
         self.on_account_select = None       
-        # -- New Hooks --
         self.on_analysis_command = None     # Request Technical Analysis
         self.on_strategy_select = None      # Change Strategy Mode (name)
         self.on_lot_change = None           # Change Lot Size (delta)
@@ -31,12 +31,21 @@ class WebhookAlert:
         if self.enabled:
             logger.info("Telegram Webhook Alert initialized.")
             
+            # --- INTERNAL QUEUE FOR OUTGOING MESSAGES ---
+            # Prevents thread exhaustion by queuing messages
+            self.msg_queue = queue.Queue()
+            self.stop_event = threading.Event()
+            
             # --- FIX: Ensure no webhook is blocking polling ---
             self._delete_webhook() 
 
-            self.stop_event = threading.Event()
+            # Start Worker Threads
             self.poll_thread = threading.Thread(target=self._poll_updates, daemon=True)
             self.poll_thread.start()
+            
+            self.sender_thread = threading.Thread(target=self._sender_worker, daemon=True)
+            self.sender_thread.start()
+            
             self._register_commands()
             self.send_message("🤖 **Trading Bot Online**\nSystem initialized and ready.")
         else:
@@ -53,45 +62,66 @@ class WebhookAlert:
             logger.warning(f"Warning: Could not delete webhook: {e}")
 
     # ---------------------------------------------------------
-    # SENDING METHODS
+    # SENDING METHODS (PRODUCER)
     # ---------------------------------------------------------
 
     def send_message(self, message):
+        """Queues a text message to be sent."""
         if not self.enabled: return
-        threading.Thread(target=self._send_sync, args=(message,), daemon=True).start()
-
-    def _send_sync(self, message):
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            data = urllib.parse.urlencode({
+        self.msg_queue.put({
+            'method': 'sendMessage',
+            'payload': {
                 'chat_id': self.chat_id,
                 'text': message,
                 'parse_mode': 'Markdown'
-            }).encode('utf-8')
-            
-            req = urllib.request.Request(url, data=data)
-            with urllib.request.urlopen(req, timeout=10): pass
-        except Exception as e:
-            logger.error(f"Failed to send Telegram alert: {e}")
+            }
+        })
 
     def send_keyboard(self, message, buttons):
+        """Queues a message with inline buttons."""
         if not self.enabled: return
-        threading.Thread(target=self._send_keyboard_sync, args=(message, buttons), daemon=True).start()
-
-    def _send_keyboard_sync(self, message, buttons):
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            payload = {
+        self.msg_queue.put({
+            'method': 'sendMessage',
+            'payload': {
                 'chat_id': self.chat_id,
                 'text': message,
                 'parse_mode': 'Markdown',
                 'reply_markup': json.dumps({"inline_keyboard": buttons})
             }
+        })
+
+    # ---------------------------------------------------------
+    # WORKER THREAD (CONSUMER)
+    # ---------------------------------------------------------
+
+    def _sender_worker(self):
+        """Processes the message queue sequentially."""
+        while not self.stop_event.is_set():
+            try:
+                # Get task with timeout to allow checking stop_event
+                task = self.msg_queue.get(timeout=1)
+                self._execute_request(task['method'], task['payload'])
+                self.msg_queue.task_done()
+                time.sleep(0.05) # Brief pause to respect rate limits
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Sender Worker Error: {e}")
+
+    def _execute_request(self, method, payload):
+        """Performs the actual HTTP request."""
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
             data = urllib.parse.urlencode(payload).encode('utf-8')
             req = urllib.request.Request(url, data=data)
-            with urllib.request.urlopen(req, timeout=10): pass 
+            with urllib.request.urlopen(req, timeout=10): 
+                pass
+        except urllib.error.HTTPError as e:
+            logger.error(f"Telegram API HTTPError ({method}): {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            logger.error(f"Telegram API URLError ({method}): {e.reason}")
         except Exception as e:
-            logger.error(f"Failed to send Telegram keyboard: {e}")
+            logger.error(f"Telegram API Error ({method}): {e}")
 
     # ---------------------------------------------------------
     # NOTIFICATION FORMATTERS
@@ -126,6 +156,8 @@ class WebhookAlert:
             callback_data = f"close_ticket_{p['ticket']}"
             buttons.append([{"text": btn_text, "callback_data": callback_data}])
             
+            # Note: This loop assumes reasonable number of positions. 
+            # If > 10, consider truncating to avoid message length limits.
             msg += (
                 f"\n\n{emoji} *{p['type']}* `{p['symbol']}`\n"
                 f"   └ Vol: `{p['volume']}` | {pl_emoji} `${p['profit']:.2f}`\n"
@@ -149,7 +181,6 @@ class WebhookAlert:
         self.send_message(msg)
 
     def notify_analysis(self, symbol, trend, rsi, macd, score, signal):
-        """Displays technical analysis summary."""
         msg = (
             f"🔬 *MARKET ANALYSIS* ({symbol})\n\n"
             f"📈 Trend: `{trend}`\n"
@@ -161,7 +192,6 @@ class WebhookAlert:
         self.send_message(msg)
 
     def notify_news(self, title, sentiment, score, impact="Medium"):
-        """Specifically formatted notification for news."""
         emoji = "🔥" if sentiment == "BEARISH" else "🚀" if sentiment == "BULLISH" else "ℹ️"
         msg = (
             f"{emoji} *NEWS UPDATE*\n\n"
@@ -229,10 +259,8 @@ class WebhookAlert:
         self.send_keyboard("⚙️ *Bot Settings*", buttons)
 
     def _show_strategy_menu(self):
-        # Common strategies list
         strategies = ["MASTER_CONFLUENCE", "U16_STRATEGY", "SCALPING", "BREAKOUT", "ZONE_BOUNCE", "ICT_FVG"]
         buttons = []
-        # Create rows of 2
         for i in range(0, len(strategies), 2):
             row = []
             row.append({"text": strategies[i], "callback_data": f"set_strat_{strategies[i]}"})
@@ -247,8 +275,10 @@ class WebhookAlert:
         last_update_id = 0
         while not self.stop_event.is_set():
             try:
+                # Long polling request
                 url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates?offset={last_update_id + 1}&timeout=30"
                 req = urllib.request.Request(url)
+                
                 with urllib.request.urlopen(req, timeout=35) as response:
                     data = json.loads(response.read().decode('utf-8'))
                     if data.get('ok'):
@@ -263,28 +293,32 @@ class WebhookAlert:
                             text = message.get('text', '')
                             chat_id = str(message.get('chat', {}).get('id'))
                             
-                            # Simple Auth Check
-                            if chat_id == self.chat_id:
-                                cmd = text.strip().lower()
+                            if chat_id == self.chat_id and text:
+                                self._handle_command(text)
                                 
-                                if cmd in ["/menu", "/start"]:
-                                    self._show_main_menu()
-                                elif cmd == "/settings":
-                                    self._show_settings_menu()
-                                elif cmd == "/status":
-                                    logger.info("Received /status command")
-                                    if self.on_status_command: self.on_status_command()
-                                elif cmd == "/positions":
-                                    if self.on_positions_command: self.on_positions_command()
-                                elif cmd == "/analysis":
-                                    self.send_message("🔍 Analyzing market...")
-                                    if self.on_analysis_command: self.on_analysis_command()
-                                elif cmd.startswith("/buy") or cmd.startswith("/sell"):
-                                    self._handle_text_trade(text)
+            except urllib.error.URLError:
+                # Common timeout error, just retry cleanly
+                time.sleep(2)
             except Exception as e:
                 logger.error(f"Poll Error: {e}")
                 time.sleep(5)
-            time.sleep(1)
+            
+            # Small buffer to prevent tight loops on error
+            time.sleep(0.5)
+
+    def _handle_command(self, text):
+        cmd = text.strip().lower()
+        if cmd in ["/menu", "/start"]: self._show_main_menu()
+        elif cmd == "/settings": self._show_settings_menu()
+        elif cmd == "/status":
+            if self.on_status_command: self.on_status_command()
+        elif cmd == "/positions":
+            if self.on_positions_command: self.on_positions_command()
+        elif cmd == "/analysis":
+            self.send_message("🔍 Analyzing market...")
+            if self.on_analysis_command: self.on_analysis_command()
+        elif cmd.startswith("/buy") or cmd.startswith("/sell"):
+            self._handle_text_trade(text)
 
     def _handle_callback(self, callback):
         try:
@@ -293,7 +327,12 @@ class WebhookAlert:
             chat_id = str(callback.get('from', {}).get('id'))
             
             if chat_id != self.chat_id: return
-            self._answer_callback(callback_id)
+            
+            # Answer callback to stop loading animation
+            self.msg_queue.put({
+                'method': 'answerCallbackQuery',
+                'payload': {'callback_query_id': callback_id}
+            })
             
             # --- Navigation ---
             if data == "cmd_menu": self._show_main_menu()
@@ -343,12 +382,6 @@ class WebhookAlert:
 
         except Exception as e:
             logger.error(f"Callback Error: {e}")
-
-    def _answer_callback(self, callback_id):
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/answerCallbackQuery?callback_query_id={callback_id}"
-            urllib.request.urlopen(url)
-        except: pass
 
     def _handle_text_trade(self, text):
          parts = text.strip().split()

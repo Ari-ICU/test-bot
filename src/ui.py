@@ -227,13 +227,11 @@ class TradingBotUI(tb.Window):
                 self.lbl_positions.config(text=f"📦 Positions: {positions}/{self.max_pos_var.get()}")
             elif event_type == "break_even":
                 self.lbl_profit.config(bootstyle="warning")
-                # Messagebox.show_info("Break-Even Activated", data["msg"]) 
                 self.after(2000, lambda: self.lbl_profit.config(bootstyle="success" if data["profit"] >= 0 else "danger"))
             elif event_type == "profit_closed":
                 Messagebox.show_success("Profit Closed", f"Closed ${data['profit']:.2f} on {data['symbol']}")
                 self.lbl_profit.config(text="📈 P/L: $0.00", bootstyle="success")
             elif event_type == "error":
-                # Messagebox.show_error("Strategy Error", data["msg"])
                 pass
         except Exception as e:
             logging.error(f"UI callback error: {e}")
@@ -245,9 +243,19 @@ class TradingBotUI(tb.Window):
 
     def _update_ui_data(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, candles):
         try:
-            # Sync UI Checkbox with Strategy State
-            if self.strategy and self.auto_trade_var.get() != self.strategy.active:
-                self.auto_trade_var.set(self.strategy.active)
+            # --- FIX: Two-Way Sync (Telegram -> UI) ---
+            if self.strategy:
+                # 1. Sync Active/Pause State
+                if self.auto_trade_var.get() != self.strategy.active:
+                    self.auto_trade_var.set(self.strategy.active)
+                
+                # 2. Sync Lot Size (if changed via Telegram)
+                if abs(self.lot_size_var.get() - self.strategy.lot_size) > 0.001:
+                    self.lot_size_var.set(self.strategy.lot_size)
+
+                # 3. Sync Strategy Mode (if changed via Telegram)
+                if self.strategy_mode_var.get() != self.strategy.strategy_mode:
+                    self.strategy_mode_var.set(self.strategy.strategy_mode)
 
             clean_symbol = str(symbol).replace('\x00', '').strip()
             
