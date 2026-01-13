@@ -29,6 +29,7 @@ class TradingStrategy:
         # "STOCHASTIC", "ICHIMOKU", "PRICE_ACTION"
         # "ICT_FVG", "ICT_SILVER_BULLET"
         # "MASTER_CONFLUENCE" (Combines All)
+        # NEW ADDITIONS: "BREAKOUT", "SCALPING", "MEAN_REVERSION", "MOMENTUM"
         self.strategy_mode = "MASTER_CONFLUENCE" 
         self.use_trend_filter = True
         self.use_zone_filter = True
@@ -106,6 +107,19 @@ class TradingStrategy:
         # CRT Settings
         self.crt_htf = 240
         self.crt_zone_size = 0.50 
+
+        # NEW: Breakout Settings
+        self.breakout_period = 20  # Period for consolidation detection
+        self.breakout_threshold = 1.5  # ATR multiplier for breakout confirmation
+
+        # NEW: Scalping Settings
+        self.scalp_atr_mult = 0.5  # Tight SL for scalping
+        self.scalp_tp_mult = 1.0   # Quick TP for scalping
+
+        # NEW: Mean Reversion Settings
+        self.mr_bb_period = 20
+        self.mr_bb_dev = 2.0
+        self.mr_rsi_extreme = 70  # For overbought/oversold in reversion
 
         # --- State ---
         self.last_trade_time = 0           
@@ -255,6 +269,16 @@ class TradingStrategy:
                 # --- U16 COMBINED MODE ---
                 elif mode == "U16_STRATEGY":
                     self.check_signals_u16(symbol, bid, ask, candles)
+
+                # --- NEW ADDED STRATEGIES ---
+                elif mode == "BREAKOUT":
+                    self.check_signals_breakout(symbol, bid, ask, candles)
+                elif mode == "SCALPING":
+                    self.check_signals_scalping(symbol, bid, ask, candles)
+                elif mode == "MEAN_REVERSION":
+                    self.check_signals_mean_reversion(symbol, bid, ask, candles)
+                elif mode == "MOMENTUM":
+                    self.check_signals_momentum(symbol, bid, ask, candles)
 
         # 3. Status Dashboard (Every 10 seconds)
         if current_time - self.last_status_time >= 10:
@@ -436,6 +460,20 @@ class TradingStrategy:
 
         return "NONE"
 
+    # NEW: Bollinger Bands Calculation for Mean Reversion and Breakout
+    def calculate_bollinger_bands(self, candles, period=20, dev=2.0):
+        try:
+            df = pd.DataFrame(candles)
+            df['sma'] = df['close'].rolling(window=period).mean()
+            df['std'] = df['close'].rolling(window=period).std()
+            df['upper'] = df['sma'] + (df['std'] * dev)
+            df['lower'] = df['sma'] - (df['std'] * dev)
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+            return last['upper'], last['lower'], last['sma'], (last['upper'] - last['lower']) / last['sma'] * 100  # Bandwidth %
+        except:
+            return 0, 0, 0, 0
+
     # =========================================================================
     # --- NEW STRATEGIES ---
     # =========================================================================
@@ -525,7 +563,6 @@ class TradingStrategy:
             return
             
         # 2. Check FVG (Same mechanism, just restricted by time)
-        self.check_signals_ict_fvg(symbol, bid, ask, candles) 
         # Note: We reuse the FVG logic but because we are inside the Silver Bullet function,
         # we implicitly rely on the time check. 
         # *Self-Correction*: The trade reason should ideally reflect Silver Bullet.
@@ -543,6 +580,131 @@ class TradingStrategy:
              sl = top + (self.calculate_atr(candles) * 0.1)
              tp = bid - ((sl - bid) * 2.0)
              self.execute_trade("SELL", symbol, self.lot_size, "ICT_SILVER_BULLET", sl, tp)
+
+    # NEW: Breakout Strategy
+    def check_signals_breakout(self, symbol, bid, ask, candles):
+        """
+        Breakout Trading: Detects consolidation (low volatility) followed by a strong break.
+        Uses Bollinger Band squeeze (low bandwidth) + price close outside bands.
+        """
+        if len(candles) < self.breakout_period + 1:
+            return
+        upper, lower, sma, bandwidth = self.calculate_bollinger_bands(candles, self.breakout_period, self.bb_dev)
+        atr = self.calculate_atr(candles)
+        current_close = candles[-1]['close']
+        prev_close = candles[-2]['close']
+
+        # Detect squeeze: Bandwidth < threshold (e.g., 0.5% of price)
+        squeeze_threshold = sma * 0.005  # 0.5%
+        if bandwidth < squeeze_threshold:
+            # Breakout up: Close > upper band + ATR confirmation
+            if current_close > upper and current_close > prev_close + (atr * self.breakout_threshold):
+                if self._check_filters("BUY", ask):
+                    sl = lower  # SL below lower band
+                    tp = ask + ((ask - sl) * self.risk_reward_ratio)
+                    logger.info(f"✅ BUY (BREAKOUT) | Upper Break: {upper:.2f} | Bandwidth: {bandwidth:.2f}%")
+                    self.execute_trade("BUY", symbol, self.lot_size, "BREAKOUT", sl, tp)
+            
+            # Breakout down: Close < lower band + ATR confirmation
+            elif current_close < lower and current_close < prev_close - (atr * self.breakout_threshold):
+                if self._check_filters("SELL", bid):
+                    sl = upper  # SL above upper band
+                    tp = bid - ((sl - bid) * self.risk_reward_ratio)
+                    logger.info(f"✅ SELL (BREAKOUT) | Lower Break: {lower:.2f} | Bandwidth: {bandwidth:.2f}%")
+                    self.execute_trade("SELL", symbol, self.lot_size, "BREAKOUT", sl, tp)
+
+    # NEW: Scalping Strategy
+    def check_signals_scalping(self, symbol, bid, ask, candles):
+        """
+        Scalping: High-frequency, short-term trades on momentum bursts.
+        Uses Stochastic crossover in extremes + tight ATR-based SL/TP.
+        Best on low-spread pairs during high liquidity.
+        """
+        k, d = self.calculate_stochastic(candles)
+        rsi, _, _ = self.calculate_indicators(candles)
+        atr = self.calculate_atr(candles)
+
+        # Buy: K crosses above D in oversold + RSI rising
+        if k > d and k[1] <= d[1] and k < self.stoch_oversold and rsi > 30:
+            if self._check_filters("BUY", ask):
+                sl_dist = atr * self.scalp_atr_mult
+                sl = ask - sl_dist
+                tp = ask + (sl_dist * self.scalp_tp_mult)
+                logger.info(f"✅ BUY (SCALP) | Stoch Cross Up: {k:.1f} | RSI: {rsi:.1f}")
+                self.execute_trade("BUY", symbol, self.lot_size, "SCALPING", sl, tp)
+
+        # Sell: K crosses below D in overbought + RSI falling
+        elif k < d and k[1] >= d[1] and k > self.stoch_overbought and rsi < 70:
+            if self._check_filters("SELL", bid):
+                sl_dist = atr * self.scalp_atr_mult
+                sl = bid + sl_dist
+                tp = bid - (sl_dist * self.scalp_tp_mult)
+                logger.info(f"✅ SELL (SCALP) | Stoch Cross Down: {k:.1f} | RSI: {rsi:.1f}")
+                self.execute_trade("SELL", symbol, self.lot_size, "SCALPING", sl, tp)
+
+    # NEW: Mean Reversion Strategy
+    def check_signals_mean_reversion(self, symbol, bid, ask, candles):
+        """
+        Mean Reversion: Trades pullbacks to the mean in ranging markets.
+        Uses Bollinger Bands (price touching outer bands) + RSI extremes.
+        Avoids trending markets (ADX < 25).
+        """
+        if len(candles) < self.mr_bb_period + 1:
+            return
+        upper, lower, sma, _ = self.calculate_bollinger_bands(candles, self.mr_bb_period, self.mr_bb_dev)
+        rsi, _, _ = self.calculate_indicators(candles)
+        adx = self.calculate_adx(candles)
+        current_close = candles[-1]['close']
+
+        # Range filter: Low ADX
+        if adx > 25:
+            return  # Trending, skip
+
+        # Buy: Price at lower band + RSI oversold
+        if current_close <= lower and rsi < (100 - self.mr_rsi_extreme):
+            if self._check_filters("BUY", ask):
+                sl = lower - (self.calculate_atr(candles) * 0.5)
+                tp = sma  # Revert to mean
+                logger.info(f"✅ BUY (MEAN REV) | Lower Band: {lower:.2f} | RSI: {rsi:.1f}")
+                self.execute_trade("BUY", symbol, self.lot_size, "MEAN_REVERSION", sl, tp)
+
+        # Sell: Price at upper band + RSI overbought
+        elif current_close >= upper and rsi > self.mr_rsi_extreme:
+            if self._check_filters("SELL", bid):
+                sl = upper + (self.calculate_atr(candles) * 0.5)
+                tp = sma  # Revert to mean
+                logger.info(f"✅ SELL (MEAN REV) | Upper Band: {upper:.2f} | RSI: {rsi:.1f}")
+                self.execute_trade("SELL", symbol, self.lot_size, "MEAN_REVERSION", sl, tp)
+
+    # NEW: Momentum Strategy
+    def check_signals_momentum(self, symbol, bid, ask, candles):
+        """
+        Momentum Trading: Rides accelerating trends using MACD histogram expansion + ADX.
+        Enters on pullback to EMA in strong trend.
+        """
+        rsi, macd, macd_sig = self.calculate_indicators(candles)
+        adx = self.calculate_adx(candles)
+        df = pd.DataFrame(candles)
+        df['ema_20'] = df['close'].ewm(span=20).mean()
+        current_close = df.iloc[-1]['close']
+        prev_macd = df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']
+        curr_macd_hist = macd - macd_sig
+
+        # Strong momentum: ADX > 25 + expanding MACD hist
+        if adx > 25:
+            # Bullish: Price above EMA + MACD hist increasing
+            if current_close > df.iloc[-1]['ema_20'] and curr_macd_hist > prev_macd:
+                if self._check_filters("BUY", ask):
+                    sl, tp = self.calculate_safe_risk("BUY", ask, candles)
+                    logger.info(f"✅ BUY (MOMENTUM) | ADX: {adx:.1f} | MACD Hist: {curr_macd_hist:.4f}")
+                    self.execute_trade("BUY", symbol, self.lot_size, "MOMENTUM", sl, tp)
+
+            # Bearish: Price below EMA + MACD hist decreasing (more negative)
+            elif current_close < df.iloc[-1]['ema_20'] and curr_macd_hist < prev_macd:
+                if self._check_filters("SELL", bid):
+                    sl, tp = self.calculate_safe_risk("SELL", bid, candles)
+                    logger.info(f"✅ SELL (MOMENTUM) | ADX: {adx:.1f} | MACD Hist: {curr_macd_hist:.4f}")
+                    self.execute_trade("SELL", symbol, self.lot_size, "MOMENTUM", sl, tp)
 
     # =========================================================================
     # --- U16 STRATEGY (Combines Everything) ---
@@ -598,7 +760,6 @@ class TradingStrategy:
         if nearest_supp and (bid - nearest_supp['top']) < atr: buy_score += 2; reasons.append("SuppBounce")
         if nearest_res and (nearest_res['bottom'] - bid) < atr: sell_score += 2; reasons.append("ResReject")
         
-        # 5. ICT FVG Confluence
         # 5. ICT FVG Confluence
         if fvg_type == "BULLISH" and fvg_bot < ask < fvg_top:
             buy_score += 3; reasons.append("FVG_Retrace")
