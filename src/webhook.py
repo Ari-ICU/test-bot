@@ -27,16 +27,15 @@ class WebhookAlert:
         self.on_analysis_command = None     # Request Technical Analysis
         self.on_strategy_select = None      # Change Strategy Mode (name)
         self.on_lot_change = None           # Change Lot Size (delta)
+        self.on_timeframe_select = None     # NEW HOOK for Timeframe
 
         if self.enabled:
             logger.info("Telegram Webhook Alert initialized.")
             
             # --- INTERNAL QUEUE FOR OUTGOING MESSAGES ---
-            # Prevents thread exhaustion by queuing messages
             self.msg_queue = queue.Queue()
             self.stop_event = threading.Event()
             
-            # --- FIX: Ensure no webhook is blocking polling ---
             self._delete_webhook() 
 
             # Start Worker Threads
@@ -52,7 +51,6 @@ class WebhookAlert:
             logger.warning("Telegram Webhook Alert: Missing bot_token or chat_id. Alerts disabled.")
 
     def _delete_webhook(self):
-        """Removes any existing webhook to allow getUpdates polling."""
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/deleteWebhook"
             with urllib.request.urlopen(url, timeout=5):
@@ -98,18 +96,16 @@ class WebhookAlert:
         """Processes the message queue sequentially."""
         while not self.stop_event.is_set():
             try:
-                # Get task with timeout to allow checking stop_event
                 task = self.msg_queue.get(timeout=1)
                 self._execute_request(task['method'], task['payload'])
                 self.msg_queue.task_done()
-                time.sleep(0.05) # Brief pause to respect rate limits
+                time.sleep(0.05) 
             except queue.Empty:
                 continue
             except Exception as e:
                 logger.error(f"Sender Worker Error: {e}")
 
     def _execute_request(self, method, payload):
-        """Performs the actual HTTP request."""
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
             data = urllib.parse.urlencode(payload).encode('utf-8')
@@ -156,8 +152,6 @@ class WebhookAlert:
             callback_data = f"close_ticket_{p['ticket']}"
             buttons.append([{"text": btn_text, "callback_data": callback_data}])
             
-            # Note: This loop assumes reasonable number of positions. 
-            # If > 10, consider truncating to avoid message length limits.
             msg += (
                 f"\n\n{emoji} *{p['type']}* `{p['symbol']}`\n"
                 f"   └ Vol: `{p['volume']}` | {pl_emoji} `${p['profit']:.2f}`\n"
@@ -180,14 +174,15 @@ class WebhookAlert:
         )
         self.send_message(msg)
 
-    def notify_analysis(self, symbol, trend, rsi, macd, score, signal):
+    def notify_analysis(self, symbol, trend, rsi, macd, score, signal, tf_min=5, htf_trend="N/A"):
         msg = (
             f"🔬 *MARKET ANALYSIS* ({symbol})\n\n"
             f"📈 Trend: `{trend}`\n"
             f"📊 RSI: `{rsi:.1f}`\n"
             f"📉 MACD: `{macd:.5f}`\n"
             f"🎯 Signal Score: `{score}`\n"
-            f"🤖 Recommendation: *{signal}*"
+            f"🤖 Recommendation: *{signal}*\n"
+            f"⏱️ TF: {tf_min}m | HTF: {htf_trend}"
         )
         self.send_message(msg)
 
@@ -251,12 +246,23 @@ class WebhookAlert:
 
     def _show_settings_menu(self):
         buttons = [
+            [{"text": "⏱️ Change Timeframe", "callback_data": "menu_timeframe"}], # NEW: Link to TF Menu
             [{"text": "🧠 Change Strategy", "callback_data": "menu_strategies"}],
             [{"text": "🎲 Lot Size -0.01", "callback_data": "lot_dec"}, {"text": "🎲 Lot Size +0.01", "callback_data": "lot_inc"}],
             [{"text": "🔑 Switch Accounts", "callback_data": "cmd_accounts"}],
             [{"text": "⬅️ Back to Menu", "callback_data": "cmd_menu"}]
         ]
         self.send_keyboard("⚙️ *Bot Settings*", buttons)
+
+    # --- NEW: TIMEFRAME MENU ---
+    def _show_timeframe_menu(self):
+        buttons = [
+            [{"text": "1 Min", "callback_data": "set_tf_1min"}, {"text": "5 Min", "callback_data": "set_tf_5min"}],
+            [{"text": "15 Min", "callback_data": "set_tf_15min"}, {"text": "30 Min", "callback_data": "set_tf_30min"}],
+            [{"text": "1 Hour", "callback_data": "set_tf_H1"}, {"text": "4 Hour", "callback_data": "set_tf_H4"}],
+            [{"text": "⬅️ Back", "callback_data": "menu_settings"}]
+        ]
+        self.send_keyboard("⏱️ *Select Timeframe*", buttons)
 
     def _show_strategy_menu(self):
         strategies = ["MASTER_CONFLUENCE", "U16_STRATEGY", "SCALPING", "BREAKOUT", "ZONE_BOUNCE", "ICT_FVG"]
@@ -338,6 +344,7 @@ class WebhookAlert:
             if data == "cmd_menu": self._show_main_menu()
             elif data == "menu_settings": self._show_settings_menu()
             elif data == "menu_strategies": self._show_strategy_menu()
+            elif data == "menu_timeframe": self._show_timeframe_menu() # NEW
             
             # --- Commands ---
             elif data == "cmd_status":
@@ -354,6 +361,10 @@ class WebhookAlert:
                 if self.on_mode_command: self.on_mode_command()
 
             # --- Settings Changes ---
+            elif data.startswith("set_tf_"): # NEW HANDLER
+                new_tf = data.replace("set_tf_", "")
+                if self.on_timeframe_select: self.on_timeframe_select(new_tf)
+
             elif data.startswith("set_strat_"):
                 strat_name = data.replace("set_strat_", "")
                 if self.on_strategy_select: self.on_strategy_select(strat_name)

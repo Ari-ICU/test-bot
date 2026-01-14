@@ -2,7 +2,6 @@ import logging
 import time
 import pandas as pd
 import numpy as np
-# Note: WebhookAlert import not strictly needed for logic, but okay to keep
 from datetime import datetime
 try:
     from zoneinfo import ZoneInfo
@@ -26,6 +25,9 @@ class TradingStrategy:
         self.max_positions = 1           
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
         self.trade_cooldown = 15.0       
+        
+        # --- TIMEFRAME STATE (FIX) ---
+        self.target_timeframe = "5min" # Remembers your choice
         
         # --- MODES & FILTERS ---
         self.strategy_mode = "U16_STRATEGY"  # Combined strategy
@@ -53,6 +55,7 @@ class TradingStrategy:
             self.webhook.on_analysis_command = self._handle_telegram_analysis
             self.webhook.on_strategy_select = self._handle_telegram_strategy_select
             self.webhook.on_lot_change = self._handle_telegram_lot_change
+            self.webhook.on_timeframe_select = self.update_timeframe # <--- WIRED UP
         
         # --- UI CALLBACK (for profit/protection updates) ---
         self.ui_callback = None 
@@ -131,6 +134,7 @@ class TradingStrategy:
         self.last_positions_count = 0    
         self.last_balance = 0.0
         self.last_positions_list = []
+        self.last_candles = None
         
         # --- TRADE PROTECTION ---
         self.break_even_activation = 0.50  
@@ -155,13 +159,35 @@ class TradingStrategy:
         self.resistance_zones = []
         self.peak_profit = 0.0
         self.last_positions_list = []
-        logging.info("Strategy state reset for new symbol.")
+        logging.info("Strategy state reset for new symbol/timeframe.")
 
     def get_session_times(self):
         parts = []
         for city, data in self.SESSIONS.items():
             parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
         return " | ".join(parts)
+
+    # --- NEW METHOD: Force Update Timeframe ---
+    def update_timeframe(self, new_tf):
+        if self.target_timeframe == new_tf:
+            return
+
+        logger.info(f"🔄 Switching Timeframe: {self.target_timeframe} -> {new_tf}")
+        self.target_timeframe = new_tf
+        
+        # 1. Update Connector (Push the change)
+        if hasattr(self.connector, 'set_timeframe'):
+             self.connector.set_timeframe(new_tf)
+        elif hasattr(self.connector, 'timeframe'):
+             self.connector.timeframe = new_tf
+        
+        # 2. Reset internal data
+        self.last_candles = None
+        self.last_hist_req = 0 
+        self.reset_state()
+        
+        if self.webhook:
+            self.webhook.send_message(f"⌛ **Timeframe Changed**\nTarget: `{new_tf}`\nBuffering new data...")
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         current_time = time.time()
@@ -172,30 +198,34 @@ class TradingStrategy:
         self.last_candles = candles
         self.last_symbol = symbol
         
-        tf_minutes = 5 
+        # --- FIX: USE TARGET TF IF CANDLES ARE LOADING ---
         if candles and len(candles) > 2:
             diff = (candles[1]['time'] - candles[0]['time']) // 60
-            if diff > 0: tf_minutes = diff
+            tf_minutes = diff if diff > 0 else 5
+        else:
+            # Fallback to target so logs are correct while waiting
+            tf_map = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}
+            tf_minutes = tf_map.get(self.target_timeframe, 5)
         
-        # Adjust min_needed based on TF for robustness across LTF and HTF
-        if tf_minutes <= 1: min_needed = 1440  # M1: Need ~1 day for HTF resampling
+        # Adjust min_needed based on TF
+        if tf_minutes <= 1: min_needed = 1440 
         elif tf_minutes <= 5: min_needed = 300
         elif tf_minutes <= 30: min_needed = 150
         elif tf_minutes <= 60: min_needed = 100
         else: min_needed = 50
         
-        # For HTF analysis, request extra if current TF is low
         htf_extra = 0
         if tf_minutes < 60 and self.use_trend_filter:
-            htf_extra = 500  # Extra for resampling to H4
+            htf_extra = 500  
         
         total_needed = min_needed + htf_extra
         
         if not candles or len(candles) < total_needed:
             if current_time - self.last_hist_req > 5:
+                # Ensure connector knows the target TF
                 self.connector.request_history(symbol, total_needed + 50)
                 self.last_hist_req = current_time
-                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (TF: {tf_minutes}min)...")
+                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (Target: {self.target_timeframe})...")
             if candles and len(candles) > 0:
                 self._log_skip(f"Gathering data... ({len(candles)}/{total_needed} candles)")
             return
@@ -467,12 +497,10 @@ class TradingStrategy:
             elif fvg_type == "BEARISH": sell_score += 1; reasons.append("Silver_Bear")
 
         # Momentum (MACD Histogram expansion)
-        # --- FIX APPLIED HERE: Calculate MACD columns for DataFrame before access ---
         short_ema_val = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
         long_ema_val = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
         df['macd'] = short_ema_val - long_ema_val
         df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
-        # --------------------------------------------------------------------------
 
         prev_macd_hist = (df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']) if len(df) > 1 else 0
         curr_macd_hist = macd - macd_sig
@@ -875,7 +903,6 @@ class TradingStrategy:
         else: self.webhook.send_message("⚠️ No market data available yet. Wait for a tick.")
 
     def _handle_telegram_strategy_select(self, mode_name):
-        # Since all combined into U16, ignore changes or log
         self.webhook.send_message(f"🧠 Strategy locked to combined **U16_STRATEGY**. Change ignored.")
         logger.info(f"Telegram: Attempt to change to {mode_name}, but locked to U16")
 
