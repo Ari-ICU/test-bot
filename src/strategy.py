@@ -3,359 +3,139 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo
-
-import warnings
-warnings.filterwarnings("ignore", message=".*'T' is deprecated.*")
 
 logger = logging.getLogger("Strategy")
 
 class TradingStrategy:
     def __init__(self, connector, news_engine, config, webhook=None):
         self.connector = connector
-        self.news_engine = news_engine
         self.active = True
         
-        # --- STRATEGY CONFIGURATION ---
-        self.risk_reward_ratio = 1.5     
-        self.max_positions = 1           
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
         self.trade_cooldown = 15.0       
-        
-        # --- TIMEFRAME STATE ---
         self.target_timeframe = "5min" 
+        self.strategy_mode = "CONFLUENCE" 
         
-        # --- MODES & FILTERS ---
-        self.strategy_mode = "CONFLUENCE" # Updated name
+        # Filters
         self.use_trend_filter = True
         self.use_zone_filter = True
         
-        # Store config
-        self.config = config
-        
-        # WEBHOOK
         self.webhook = webhook
-        if self.webhook:
-            self._setup_webhook_handlers()
-        
-        self.ui_callback = None 
-        
-        # --- MARKET SESSIONS ---
-        self.SESSIONS = {
-            "London": {"start": 8, "end": 17, "tz": "Europe/London"},
-            "New York": {"start": 8, "end": 17, "tz": "America/New_York"},
-            "Tokyo": {"start": 9, "end": 18, "tz": "Asia/Tokyo"},
-            "Sydney": {"start": 7, "end": 16, "tz": "Australia/Sydney"}
-        }
-
-        # --- TIME FILTER ---
-        self.use_time_filter = True
-        self.time_zone = "Auto" 
-        self.start_hour = 8   
-        self.end_hour = 20    
-
-        # --- PROFIT SETTINGS ---
-        self.use_profit_management = True
-        self.min_profit_target = 0.10    
-        
-        # --- INDICATOR SETTINGS (CONFLUENCE ONLY) ---
-        self.rsi_period = 14
-        self.macd_fast = 12
-        self.macd_slow = 26
-        self.macd_signal = 9
-        
-        # --- State ---
-        self.last_trade_time = 0           
-        self.last_log_time = 0           
-        self.last_status_time = 0        
-        self.last_hist_req = 0           
+        self.last_trade_time = 0
+        self.last_status_time = 0
+        self.last_hist_req = 0
         self.trend = "NEUTRAL"
-        self.active_session_name = "None"
-        
-        # --- S&R Zones ---
         self.support_zones = []     
         self.resistance_zones = []
-        self.zone_min_touches = 2   # Increased to 2 for stronger levels
-        self.zone_tolerance = 0.0   
-        self.last_draw_time = 0     
-
-        self.current_profit = 0.0 
-        self.peak_profit = 0.0        
-        self.last_profit_close_time = 0
-        self.profit_close_interval = 1 
-        self.last_positions_count = 0    
-        self.last_balance = 0.0
-        self.last_positions_list = []
-        self.last_candles = None
-        self.last_symbol = None
         
-        # --- TRADE PROTECTION ---
-        self.break_even_activation = 0.50  
+        # Performance Cache
+        self.last_zone_analysis_time = 0
+        
+        # Default settings
+        self.rsi_period = 14
+        self.use_profit_management = True
+        self.min_profit_target = 0.10
+        self.break_even_activation = 0.50
         self.break_even_active = False
-
-    def _setup_webhook_handlers(self):
-        self.webhook.on_status_command = self._handle_telegram_status_command
-        self.webhook.on_positions_command = self._handle_telegram_positions_command
-        self.webhook.on_mode_command = self._handle_telegram_mode_command
-        self.webhook.on_trade_command = self._handle_telegram_trade
-        self.webhook.on_close_command = self._handle_telegram_close_ticket
-        self.webhook.on_news_command = self._handle_telegram_news_command
-        self.webhook.on_accounts_command = self._handle_telegram_accounts_command
-        self.webhook.on_account_select = self._handle_telegram_select_account
-        self.webhook.on_analysis_command = self._handle_telegram_analysis
-        self.webhook.on_strategy_select = self._handle_telegram_strategy_select
-        self.webhook.on_lot_change = self._handle_telegram_lot_change
-        self.webhook.on_timeframe_select = self.update_timeframe
-
-    def start(self):
-        tz_info = f"Zone: {self.time_zone}" if self.time_zone != "Auto" else "Zone: AUTO (Rotation)"
-        logger.info(f"✅ Strategy STARTED | Mode: {self.strategy_mode} | {tz_info}")
-
-    def stop(self):
-        self.active = False
-        logger.info("🛑 Strategy STOPPED")
-
-    def set_active(self, active):
-        self.active = bool(active)
-        state = "ACTIVE" if self.active else "PAUSED"
-        logging.info(f"🔄 Strategy State Changed: {state}")
-
-    def reset_state(self):
-        self.trend = "NEUTRAL"
-        self.support_zones = []
-        self.resistance_zones = []
-        self.peak_profit = 0.0
-        self.last_positions_list = []
-        logging.info("🧹 Strategy State Reset (New Symbol/TF)")
-
-    def get_session_times(self):
-        parts = []
-        for city, data in self.SESSIONS.items():
-            parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
-        return " | ".join(parts)
+        self.current_profit = 0.0
 
     def update_timeframe(self, new_tf):
         if self.target_timeframe == new_tf: return
-        logger.info(f"⏱️ Timeframe Changing: {self.target_timeframe} -> {new_tf}")
+        logger.info(f"🔄 Strategy sync: TF changed to {new_tf}")
         self.target_timeframe = new_tf
-        if self.last_symbol:
-             self.connector.change_timeframe(self.last_symbol, new_tf)
-        self.last_candles = None
-        self.last_hist_req = time.time() 
-        self.reset_state()
-        if self.webhook:
-            self.webhook.send_message(f"⌛ **Timeframe Changed**\nTarget: `{new_tf}`\nBuffering new data...")
+        self.last_zone_analysis_time = 0 # Force refresh
+        
+        # Mapping to send clean command
+        self.connector.change_timeframe("XAUUSDm", new_tf) # Symbol usually updated dynamically
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         current_time = time.time()
-        server_time_str = "??:??:??"
-        if candles and len(candles) > 0:
-            server_time_str = datetime.fromtimestamp(candles[-1]['time']).strftime('%H:%M:%S')
-
-        self.last_candles = candles
-        self.last_symbol = symbol
         
-        # 1. TIMEFRAME SYNC
+        # 1. SYNC CHECK
         tf_map = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}
         tf_minutes = tf_map.get(self.target_timeframe, 5)
 
         if candles and len(candles) > 2:
             data_diff = (candles[1]['time'] - candles[0]['time']) // 60
             data_minutes = data_diff if data_diff > 0 else 5
+            
+            # If mismatch, request history and STOP processing
             if data_minutes != tf_minutes:
                 if current_time - self.last_hist_req > 5:
                     logger.info(f"⏳ Syncing data... Target: {self.target_timeframe} | Received: {data_minutes}min candles")
                     self.connector.request_history(symbol, 1000)
+                    self.connector.change_timeframe(symbol, self.target_timeframe) # Force Switch again
                     self.last_hist_req = current_time
                 return
 
-        # 2. DATA CHECK
-        min_needed = 200
-        if not candles or len(candles) < min_needed:
-            if current_time - self.last_hist_req > 5:
-                self.connector.request_history(symbol, min_needed + 50)
-                self.last_hist_req = current_time
-            return
-
-        if candles[0]['time'] > candles[-1]['time']:
-            candles = candles[::-1]
-        
-        self.current_profit = profit 
-        self.last_positions_count = positions
-        if positions > 0 and profit > self.peak_profit: self.peak_profit = profit
-        elif positions == 0: self.peak_profit = 0.0
-
-        # 3. ANALYSIS
+        # 2. ANALYSIS
         self.analyze_structure_zones(symbol, candles)
         self.analyze_trend(candles)
 
-        # 4. TRADING LOGIC (CONFLUENCE)
-        actual_positions = max(positions, len(getattr(self.connector, 'open_positions', [])))
-        if self.active and actual_positions < self.max_positions:
+        # 3. TRADING LOGIC
+        actual_positions = max(positions, len(self.connector.open_positions))
+        if self.active and actual_positions < 1:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
                 self.check_signals_confluence(symbol, bid, ask, candles)
 
-        # 5. STATUS LOGGING (Improved)
-        if current_time - self.last_status_time >= 10:
-            self.last_status_time = current_time
-            conf_score, conf_txt = self.get_prediction_score(symbol, bid, ask, candles)
-            near_supp = self._get_nearest_zone(bid, is_support=True)
-            s_val = f"{near_supp['top']:.2f}" if near_supp else "None"
-            active_txt = "🟢 ON " if self.active else "🔴 OFF"
-            
-            # Cleaner formatting
-            log_msg = (
-                f"📊 {active_txt} | {symbol} [{tf_minutes}m] | "
-                f"Trend: {self.trend.replace('_STRONG', '++').replace('_WEAK', '+')} | "
-                f"Supp: {s_val} | "
-                f"Signal: {conf_txt} | "
-                f"PnL: {profit:+.2f}"
-            )
-            logger.info(log_msg)
-
-        # 6. PNL TRACKING
-        current_positions_list = getattr(self.connector, 'open_positions', [])
-        if not hasattr(self, 'last_positions_list'): self.last_positions_list = current_positions_list
-
-        if hasattr(self, 'last_balance') and self.last_balance != 0:
-             realized_pnl = balance - self.last_balance
-             last_tickets = {p['ticket']: p for p in self.last_positions_list}
-             curr_tickets = {p['ticket']: p for p in current_positions_list}
-             closed_tickets = [t_data for t_id, t_data in last_tickets.items() if t_id not in curr_tickets]
-             if closed_tickets and self.webhook:
-                 self.webhook.notify_close(symbol, realized_pnl, f"Closed {len(closed_tickets)} ticket(s)")
-        
-        self.last_positions_list = current_positions_list
-        self.last_positions_count = positions
-        self.last_balance = balance
-
-        if positions > 0 and self.use_profit_management:
-            self.check_and_close_profit(symbol)
-
-    # --- CORE INDICATORS (KEPT) ---
-    def calculate_atr(self, candles, window=14):
-        try:
-            if len(candles) < window + 1: return 0.0
-            df = pd.DataFrame(candles)
-            high_low = df['high'] - df['low']
-            high_pc = (df['high'] - df['close'].shift(1)).abs()
-            low_pc = (df['low'] - df['close'].shift(1)).abs()
-            tr = pd.concat([high_low, high_pc, low_pc], axis=1).max(axis=1)
-            atr = tr.rolling(window=window).mean().iloc[-1]
-            return float(atr)
-        except: return 0.0
-
-    def calculate_indicators(self, candles):
-        try:
-            df = pd.DataFrame(candles)
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
-            short_ema = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
-            long_ema = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
-            df['macd'] = short_ema - long_ema
-            df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
-            last = df.iloc[-1] 
-            return last['rsi'], last['macd'], last['macd_signal']
-        except: return 50, 0, 0
-
-    def detect_candle_patterns(self, candles):
-        if len(candles) < 3: return "NONE"
-        c1 = candles[-2]; c2 = candles[-1]
-        # Engulfing
-        if c1['close'] < c1['open'] and c2['close'] > c2['open']:
-            if c2['close'] > c1['open'] and c2['open'] < c1['close']: return "BULLISH_ENGULFING"
-        if c1['close'] > c1['open'] and c2['close'] < c2['open']:
-            if c2['close'] < c1['open'] and c2['open'] > c1['close']: return "BEARISH_ENGULFING"
-        
-        # Pinbars
-        body = abs(c2['close'] - c2['open'])
-        lower_wick = min(c2['close'], c2['open']) - c2['low']
-        upper_wick = c2['high'] - max(c2['close'], c2['open'])
-        if lower_wick > (body * 2) and upper_wick < body: return "HAMMER"
-        if upper_wick > (body * 2) and lower_wick < body: return "SHOOTING_STAR"
-        return "NONE"
+        self.current_profit = profit
+        if positions > 0: self.check_and_close_profit(symbol)
 
     def analyze_trend(self, candles):
-        """Uses 200 EMA to determine global trend. Logs changes."""
-        previous_trend = self.trend
         try:
             df = pd.DataFrame(candles)
             ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             current = df['close'].iloc[-1]
-            
-            new_trend = "NEUTRAL"
-            if current > ema200:
-                new_trend = "BULLISH_STRONG" if current > (ema200 * 1.001) else "BULLISH_WEAK"
-            else:
-                new_trend = "BEARISH_STRONG" if current < (ema200 * 0.999) else "BEARISH_WEAK"
-            
-            self.trend = new_trend
-            
-            # Log Trend Change
-            if self.trend != previous_trend:
-                 logger.info(f"🌊 TREND SHIFT: {previous_trend} ➔ {self.trend} | Price: {current:.2f} | EMA200: {ema200:.2f}")
-                 
-        except: 
-            self.trend = "NEUTRAL"
+            self.trend = "BULLISH" if current > ema200 else "BEARISH"
+        except: self.trend = "NEUTRAL"
 
-    # --- STRUCTURE / ZONES (KEPT) ---
     def analyze_structure_zones(self, symbol, candles):
         if not candles: return
+        
+        # PERFORMANCE: Only calculate when new candle closes
+        last_time = candles[-1]['time']
+        if self.last_zone_analysis_time == last_time: return
+        self.last_zone_analysis_time = last_time
+
         ts_candles = candles
         current_price = ts_candles[-1]['close']
-        self.zone_tolerance = current_price * 0.0005 
+        zone_tolerance = current_price * 0.0005 
 
         highs, lows = self._get_fractals(ts_candles)
-        all_swings = highs + lows
-        zones = self._cluster_levels(all_swings, threshold=self.zone_tolerance)
+        zones = self._cluster_levels(highs + lows, zone_tolerance)
         
-        self.support_zones = []
-        self.resistance_zones = []
-        for zone in zones:
-            if zone['count'] >= self.zone_min_touches:
-                if zone['top'] < current_price: self.support_zones.append(zone)
-                elif zone['bottom'] > current_price: self.resistance_zones.append(zone)
+        self.support_zones = [z for z in zones if z['top'] < current_price]
+        self.resistance_zones = [z for z in zones if z['bottom'] > current_price]
         self.support_zones.sort(key=lambda x: x['top'], reverse=True)
         self.resistance_zones.sort(key=lambda x: x['bottom'])
         
-        if time.time() - self.last_draw_time > 5.0:
-            self._draw_zones(symbol); self.last_draw_time = time.time()
+        self._draw_zones(symbol)
 
     def _draw_zones(self, symbol):
-        for i, zone in enumerate(self.support_zones[:3]):
-            self.connector.send_draw_command(f"Supp_{i}", zone['top'], zone['bottom'], 100, 0, "0x008000") 
-        for i, zone in enumerate(self.resistance_zones[:3]):
-            self.connector.send_draw_command(f"Res_{i}", zone['top'], zone['bottom'], 100, 0, "0x000080") 
+        for i, zone in enumerate(self.support_zones[:2]):
+            self.connector.send_draw_command(f"Supp_{i}", zone['top'], zone['bottom'], 100, 0, "3498db") 
+        for i, zone in enumerate(self.resistance_zones[:2]):
+            self.connector.send_draw_command(f"Res_{i}", zone['top'], zone['bottom'], 100, 0, "e74c3c") 
 
     def _get_fractals(self, candles, window=2):
         highs = []; lows = []
         if len(candles) < (window * 2 + 1): return [], []
         for i in range(window, len(candles) - window):
             curr = candles[i]
-            is_high = all(candles[i-j]['high'] <= curr['high'] and candles[i+j]['high'] <= curr['high'] for j in range(1, window + 1))
-            if is_high: highs.append(curr['high'])
-            is_low = all(candles[i-j]['low'] >= curr['low'] and candles[i+j]['low'] >= curr['low'] for j in range(1, window + 1))
-            if is_low: lows.append(curr['low'])
+            if all(candles[i-j]['high'] <= curr['high'] for j in range(1, window + 1)): highs.append(curr['high'])
+            if all(candles[i-j]['low'] >= curr['low'] for j in range(1, window + 1)): lows.append(curr['low'])
         return highs, lows
 
     def _cluster_levels(self, levels, threshold):
         if not levels: return []
         levels.sort()
-        zones = []; current_cluster = [levels[0]]
+        zones = []; current = [levels[0]]
         for i in range(1, len(levels)):
-            price = levels[i]
-            if price - current_cluster[-1] <= threshold:
-                current_cluster.append(price)
+            if levels[i] - current[-1] <= threshold: current.append(levels[i])
             else:
-                zones.append(self._make_zone_dict(current_cluster))
-                current_cluster = [price]
-        if current_cluster: zones.append(self._make_zone_dict(current_cluster))
+                zones.append({'top': max(current), 'bottom': min(current), 'center': sum(current)/len(current)})
+                current = [levels[i]]
+        if current: zones.append({'top': max(current), 'bottom': min(current), 'center': sum(current)/len(current)})
         return zones
 
     def _make_zone_dict(self, cluster):

@@ -54,7 +54,7 @@ class TradingBotUI(tb.Window):
 
         # Dashboard Manual Inputs
         self.symbol_var = tk.StringVar()
-        self.tf_var = tk.StringVar(value="5min") 
+        self.tf_var = tk.StringVar(value="M5") # Default UI value
         self.manual_sl_var = tk.DoubleVar(value=0.0)
         self.manual_tp_var = tk.DoubleVar(value=0.0)
         
@@ -126,8 +126,6 @@ class TradingBotUI(tb.Window):
                 self.strategy.use_time_filter = self.use_time_filter_var.get()
                 self.strategy.start_hour = self._safe_get(self.start_hour_var, 8)
                 self.strategy.end_hour = self._safe_get(self.end_hour_var, 20)
-
-                logging.info(f"⚙️ Settings Sync: Active={self.strategy.active}")
             except Exception as e: logging.debug(f"Sync error: {e}")
         
     def _on_tick_received(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
@@ -257,15 +255,18 @@ class TradingBotUI(tb.Window):
         symbol = self.symbol_var.get()
         tf = self.tf_var.get()
         if symbol and tf:
-            # Map simplified UI TFs to strategy strings
-            tf_map = {"M1": "1min", "M5": "5min", "M15": "15min", "M30": "30min", "H1": "H1", "H4": "H4"}
+            # FIX: Map simplified UI strings to Strategy-compatible strings
+            # This ensures "M15" (UI) -> "15min" (Strategy)
+            tf_map = {
+                "M1": "1min", "M5": "5min", "M15": "15min", 
+                "M30": "30min", "H1": "H1", "H4": "H4"
+            }
             strat_tf = tf_map.get(tf, "5min")
             
-            # Update Strategy directly
+            # Send the CORRECT format to the strategy
             if self.strategy:
+                logging.info(f"UI requesting timeframe: {tf} -> Strategy: {strat_tf}")
                 self.strategy.update_timeframe(strat_tf)
-                
-            logging.info(f"Requested Timeframe change: {symbol} -> {tf}")
     
     def _on_symbol_change(self, event=None):
         symbol = self.symbol_var.get()
@@ -324,37 +325,27 @@ class TradingBotUI(tb.Window):
         self.after(1000, self._update_header_time)
 
     def _create_widgets(self):
-        main_frame = ttk.Frame(self)
-        main_frame.pack(fill=BOTH, expand=True)
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill='both', expand=True)
         
-        header_frame = ttk.Frame(main_frame, relief="flat")
-        header_frame.pack(fill=X, padx=10, pady=5)
-        ttk.Label(header_frame, text="🛡️ Confluence Bot", font=("Segoe UI", 14, "bold"), bootstyle="inverse-primary").pack(side=LEFT)
-        self.lbl_mt5 = ttk.Label(header_frame, text="MT5: Connecting...", bootstyle="warning")
-        self.lbl_mt5.pack(side=LEFT, padx=20)
-        self.lbl_time = ttk.Label(header_frame, text="", font=("Segoe UI", 9))
-        self.lbl_time.pack(side=RIGHT)
+        # Dashboard
+        self.lbl_balance = ttk.Label(main_frame, text="💰 Balance: $0.00", font=("", 14))
+        self.lbl_balance.pack(anchor='w')
+        self.lbl_profit = ttk.Label(main_frame, text="📈 P/L: $0.00", font=("", 12))
+        self.lbl_profit.pack(anchor='w')
+        self.lbl_sync = ttk.Label(main_frame, text="Sync: Waiting...")
+        self.lbl_sync.pack(anchor='w')
 
-        notebook = ttk.Notebook(main_frame, padding=5)
-        notebook.pack(fill=BOTH, expand=True, padx=5, pady=5)
-
-        dashboard_tab = ttk.Frame(notebook)
-        notebook.add(dashboard_tab, text="📈 Dashboard")
-        self._build_dashboard_tab(dashboard_tab)
-
-        settings_tab = ttk.Frame(notebook)
-        notebook.add(settings_tab, text="⚙️ Settings")
-        self._build_settings_tab(settings_tab)
-
-        logs_tab = ttk.Frame(notebook)
-        notebook.add(logs_tab, text="📝 Logs")
-        self.log_text = scrolledtext.ScrolledText(logs_tab, height=15, font=('Consolas', 9))
-        self.log_text.pack(fill=BOTH, expand=True)
-
-        news_tab = ttk.Frame(notebook)
-        notebook.add(news_tab, text="📰 News")
-        self.news_text = scrolledtext.ScrolledText(news_tab, height=15, font=('Consolas', 9))
-        self.news_text.pack(fill=BOTH, expand=True)
+        # Controls
+        ctl = ttk.LabelFrame(main_frame, text="Controls", padding=10)
+        ctl.pack(fill='x', pady=10)
+        
+        self.combo_tf = ttk.Combobox(ctl, textvariable=self.tf_var, values=["M1", "M5", "M15", "M30", "H1"], state="readonly")
+        self.combo_tf.pack(side='left')
+        self.combo_tf.bind("<<ComboboxSelected>>", self._on_tf_change)
+        
+        ttk.Button(ctl, text="Buy", command=lambda: self.mt5_connector.send_command("BUY", self.symbol_var.get())).pack(side='left', padx=5)
+        ttk.Button(ctl, text="Sell", command=lambda: self.mt5_connector.send_command("SELL", self.symbol_var.get())).pack(side='left', padx=5)
 
     def _build_dashboard_tab(self, parent):
         parent.grid_columnconfigure(0, weight=1)
