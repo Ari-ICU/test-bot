@@ -17,7 +17,6 @@ class MT5Connector:
         self.command_queue = []
         self.on_tick_received = None 
         self.on_symbols_received = None
-        # --- FIX: Callback for timeframe changes ---
         self.on_timeframe_changed = None 
         self.open_positions = [] 
         self.account_info = {}   
@@ -92,11 +91,20 @@ class MT5Connector:
         self._queue_simple("GET_SYMBOLS|ALL")
 
     def change_timeframe(self, symbol, tf_str):
-        tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
-        minutes = tf_map.get(tf_str, 1) 
+        # FIX: Added mapping for "15min", "30min", etc. to support Strategy/UI formats
+        tf_map = {
+            "M1": 1, "1min": 1,
+            "M5": 5, "5min": 5,
+            "M15": 15, "15min": 15,
+            "M30": 30, "30min": 30,
+            "H1": 60, "60min": 60, "1H": 60,
+            "H4": 240, "240min": 240, "4H": 240,
+            "D1": 1440
+        }
+        
+        minutes = tf_map.get(tf_str, 5) # Default to 5 instead of 1 if not found
         self._queue_simple(f"CHANGE_TF|{symbol}|{minutes}")
         
-        # --- FIX: Notify the strategy via main.py wiring ---
         if self.on_timeframe_changed:
             self.on_timeframe_changed(tf_str)
 
@@ -120,9 +128,9 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length).decode('utf-8')
             data = {k: v[0] for k, v in parse_qs(post_data).items()}
             
-            # Pulse Log
+            # Pulse Log (Keep console clean)
             current_time = time.time()
-            if current_time - MT5RequestHandler.last_log_time > 5:
+            if current_time - MT5RequestHandler.last_log_time > 30:
                 MT5RequestHandler.last_log_time = current_time
 
             # Symbols
