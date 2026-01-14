@@ -1,11 +1,6 @@
 {
   "sources": [
     {
-      "name": "ForexFactory",
-      "url": "https://www.forexfactory.com/news/rss",
-      "category": "Forex"
-    },
-    {
       "name": "Investing.com",
       "url": "https://www.investing.com/rss/news_25.rss",
       "category": "General"
@@ -14,11 +9,6 @@
       "name": "CryptoNews",
       "url": "https://cryptopotato.com/feed/",
       "category": "Crypto"
-    },
-    {
-      "name": "FF_Calendar",
-      "url": "https://www.forexfactory.com/ffcal_week_this.xml",
-      "category": "Economic"
     }
   ],
   "sentiment": {
@@ -30,7 +20,7 @@
     "bot_token": "8591944783:AAFJ33zxoEZZlUN0zzUvdNKQK__D4_X3kP4",
     "chat_id": "6287254880"
   },
-  "update_interval_seconds": 10,
+  "update_interval_seconds": 60,
   "mt5": {
     "host": "127.0.0.1",
     "port": 8001,
