@@ -162,7 +162,6 @@ class TradingStrategy:
             parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
         return " | ".join(parts)
 
-    # --- FIX: Added Missing update_timeframe method ---
     def update_timeframe(self, new_tf):
         """Called by UI/Webhook via Connector to switch timeframe."""
         if self.target_timeframe == new_tf:
@@ -171,16 +170,13 @@ class TradingStrategy:
         logger.info(f"🔄 Strategy sync: TF changed to {new_tf}")
         self.target_timeframe = new_tf
         
-        # Notify connector if needed (avoids infinite loop if connector called this)
-        # In this specific flow (UI -> Connector -> Main -> Strategy), Connector already knows.
-        # But if Webhook calls this, we must tell Connector.
-        # Safe to call change_timeframe again as connector queues it.
         if hasattr(self, 'last_symbol') and self.last_symbol:
              self.connector.change_timeframe(self.last_symbol, new_tf)
         
         # Reset internal data
         self.last_candles = None
-        self.last_hist_req = 0 
+        # Set to current time to give MT5 a grace period before spamming history requests
+        self.last_hist_req = time.time() 
         self.reset_state()
         
         if self.webhook:
@@ -195,22 +191,25 @@ class TradingStrategy:
         self.last_candles = candles
         self.last_symbol = symbol
         
-        # --- FIX: Robust Timeframe Detection ---
-        if candles and len(candles) > 2:
-            diff = (candles[1]['time'] - candles[0]['time']) // 60
-            tf_minutes = diff if diff > 0 else 5
-        else:
-            tf_map = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}
-            tf_minutes = tf_map.get(self.target_timeframe, 5)
+        # [FIX START] -----------------------------------------------------------
+        # 1. Force logic to use your TARGET setting first
+        tf_map = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}
+        tf_minutes = tf_map.get(self.target_timeframe, 5)
 
-        # Sync target if we detected a solid change from incoming data
-        current_tf_str = "5min"
-        for k, v in {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}.items():
-            if v == tf_minutes: current_tf_str = k
+        # 2. Check if the incoming data actually matches your target
+        if candles and len(candles) > 2:
+            data_diff = (candles[1]['time'] - candles[0]['time']) // 60
+            data_minutes = data_diff if data_diff > 0 else 5
             
-        # If incoming candles clearly match a different TF, update target to match reality
-        if len(candles or []) > 50 and self.target_timeframe != current_tf_str:
-             self.target_timeframe = current_tf_str
+            # 3. If Data != Target, PAUSE and wait
+            if data_minutes != tf_minutes:
+                # Only log every 5 seconds to avoid spam
+                if current_time - self.last_hist_req > 5:
+                    logger.info(f"⏳ Syncing data... Target: {self.target_timeframe} | Received: {data_minutes}min candles")
+                    self.connector.request_history(symbol, 1000)
+                    self.last_hist_req = current_time
+                return  # <--- STOP processing here. Wait for correct data.
+        # [FIX END] -------------------------------------------------------------
         
         # Adjust min_needed based on TF
         if tf_minutes <= 1: min_needed = 1440 
