@@ -17,6 +17,8 @@ class MT5Connector:
         self.command_queue = []
         self.on_tick_received = None 
         self.on_symbols_received = None
+        # --- FIX: Callback for timeframe changes ---
+        self.on_timeframe_changed = None 
         self.open_positions = [] 
         self.account_info = {}   
 
@@ -49,6 +51,27 @@ class MT5Connector:
         self._queue_simple(command)
         return True
 
+    def send_text_command(self, name, bar_index, price, color_code, text):
+        command = f"DRAW_TEXT|{name}|{bar_index}|{price}|{color_code}|{text}"
+        self._queue_simple(command)
+        return True
+
+    def send_trend_command(self, name, b1, p1, b2, p2, color_code, width=1):
+        command = f"DRAW_TREND|{name}|{b1}|{p1}|{b2}|{p2}|{color_code}|{width}"
+        self._queue_simple(command)
+
+    def send_hline_command(self, name, price, color_code, style=0):
+        command = f"DRAW_LINE|{name}|{price}|{color_code}|{style}"
+        self._queue_simple(command)
+
+    def send_label_command(self, name, text, color_code, y_pos):
+        command = f"DRAW_LABEL|{name}|{text}|{color_code}|{y_pos}"
+        self._queue_simple(command)
+
+    def close_position(self, symbol):
+        self._queue_simple(f"CLOSE_ALL|{symbol}")
+        return True
+
     def close_profit(self, symbol):
         self._queue_simple(f"CLOSE_WIN|{symbol}")
         return True
@@ -65,26 +88,17 @@ class MT5Connector:
         self._queue_simple(f"CLOSE_TICKET|{ticket_id}")
         return True
     
-    def close_position(self, symbol):
-        self._queue_simple(f"CLOSE_ALL|{symbol}")
-        return True
-    
     def request_symbols(self):
         self._queue_simple("GET_SYMBOLS|ALL")
 
     def change_timeframe(self, symbol, tf_str):
-        # FIX: Full mapping for consistency
-        tf_map = {
-            "M1": 1, "1min": 1,
-            "M5": 5, "5min": 5,
-            "M15": 15, "15min": 15,
-            "M30": 30, "30min": 30,
-            "H1": 60, "60min": 60, "1H": 60,
-            "H4": 240, "240min": 240, "4H": 240,
-            "D1": 1440
-        }
-        minutes = tf_map.get(tf_str, 5) 
+        tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+        minutes = tf_map.get(tf_str, 1) 
         self._queue_simple(f"CHANGE_TF|{symbol}|{minutes}")
+        
+        # --- FIX: Notify the strategy via main.py wiring ---
+        if self.on_timeframe_changed:
+            self.on_timeframe_changed(tf_str)
 
     def request_history(self, symbol, count):
         self._queue_simple(f"GET_HISTORY|{symbol}|{count}")
@@ -108,22 +122,39 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             
             # Pulse Log
             current_time = time.time()
-            if current_time - MT5RequestHandler.last_log_time > 30:
+            if current_time - MT5RequestHandler.last_log_time > 5:
                 MT5RequestHandler.last_log_time = current_time
 
+            # Symbols
+            if 'all_symbols' in data and self.connector.on_symbols_received:
+                self.connector.on_symbols_received([s.strip() for s in data['all_symbols'].split(',') if s.strip()])
+
+            # Tick Data
             if 'symbol' in data and 'bid' in data:
                 if self.connector.on_tick_received:
                     clean_symbol = data['symbol'].replace('\x00', '').strip()
                     
                     def clean_float(val):
-                        try: return float(val.replace('\x00', '')) if val else 0.0
-                        except: return 0.0
+                        if not val: return 0.0
+                        if isinstance(val, str):
+                            val = val.replace('\x00', '').strip()
+                            if val == "": return 0.0
+                            try:
+                                return float(val)
+                            except:
+                                return 0.0
+                        return float(val)
 
-                    bid = clean_float(data.get('bid', 0))
-                    ask = clean_float(data.get('ask', 0))
-                    balance = clean_float(data.get('balance', 0))
-                    profit = clean_float(data.get('profit', 0))
-                    
+                    try:
+                        bid = clean_float(data.get('bid', 0))
+                        ask = clean_float(data.get('ask', 0))
+                        balance = clean_float(data.get('balance', 0))
+                        profit = clean_float(data.get('profit', 0))
+                        avg_entry = clean_float(data.get('avg_entry', 0))
+                    except ValueError as e:
+                        logger.error(f"Float Parse Error: {e}")
+                        return
+
                     acct_name = data.get('acct_name', 'Unknown').replace('\x00', '').strip()
                     positions = int(data.get('positions', 0))
                     buy_count = int(data.get('buy_count', 0)) 
@@ -131,8 +162,13 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     
                     self.connector.account_info = {
                         'name': acct_name,
+                        'login': data.get('acct_login', '').replace('\x00', '').strip(),
+                        'server': data.get('acct_server', '').replace('\x00', '').strip(),
+                        'company': data.get('acct_company', '').replace('\x00', '').strip(),
+                        'leverage': data.get('acct_leverage', '0').replace('\x00', '').strip(),
                         'equity': clean_float(data.get('acct_equity', 0)),
-                        'balance': balance
+                        'balance': balance,
+                        'profit': profit
                     }
 
                     candles = []
@@ -155,22 +191,24 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         raw_trades = data['active_trades']
                         parsed_trades = []
                         if raw_trades:
-                            for t_str in raw_trades.split('|'):
-                                p = t_str.split(',')
-                                if len(p) >= 5:
-                                    try:
-                                        parsed_trades.append({
-                                            'ticket': p[0].strip(),
-                                            'symbol': p[1].strip(),
-                                            'type': p[2].strip(), 
-                                            'volume': float(p[3].strip()),
-                                            'profit': float(p[4].strip())
-                                        })
-                                    except ValueError: pass
+                            raw_trades = raw_trades.replace('\x00', '').strip()
+                            if raw_trades:
+                                for t_str in raw_trades.split('|'):
+                                    p = t_str.split(',')
+                                    if len(p) >= 5:
+                                        try:
+                                            parsed_trades.append({
+                                                'ticket': p[0].strip(),
+                                                'symbol': p[1].strip(),
+                                                'type': p[2].strip(), 
+                                                'volume': float(p[3].strip()),
+                                                'profit': float(p[4].strip())
+                                            })
+                                        except ValueError: pass
                         self.connector.open_positions = parsed_trades
 
                     self.connector.on_tick_received(
-                        clean_symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, 0, candles
+                        clean_symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles
                     )
 
             self.send_response(200)
