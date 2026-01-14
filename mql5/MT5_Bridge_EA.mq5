@@ -62,7 +62,7 @@ void OnTimer()
     for(int i=0; i<total_symbols; i++) symbols_list += SymbolName(i, true) + (i < total_symbols - 1 ? "," : "");
 
     string candle_history = "";
-    int candles_to_send = 200; 
+    int candles_to_send = 1000; 
     if(GlobalVariableCheck("Py_Req_History")) {
         candles_to_send = (int)GlobalVariableGet("Py_Req_History");
     }

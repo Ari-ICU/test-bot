@@ -207,7 +207,7 @@ class TradingStrategy:
         current_tf_str = "5min"
         for k, v in {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}.items():
             if v == tf_minutes: current_tf_str = k
-        
+            
         # If incoming candles clearly match a different TF, update target to match reality
         if len(candles or []) > 50 and self.target_timeframe != current_tf_str:
              self.target_timeframe = current_tf_str
