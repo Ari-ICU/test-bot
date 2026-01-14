@@ -36,11 +36,19 @@ def main():
     news_engine = NewsEngine(webhook=webhook)
     
     # 4. PASS WEBHOOK TO STRATEGY
-    # Note: Strategy constructor now accepts 'webhook' argument
     strategy = TradingStrategy(connector, news_engine, config, webhook=webhook)
     
     app = TradingBotUI(news_engine, connector)
     app.strategy = strategy
+    
+    # --- FIX START: Wire UI/Connector changes back to Strategy ---
+    # This ensures that when the UI calls connector.change_timeframe(),
+    # the strategy gets notified and updates its internal state.
+    def on_tf_change_callback(new_tf):
+        strategy.update_timeframe(new_tf)
+        
+    connector.on_timeframe_changed = on_tf_change_callback
+    # --- FIX END ---
 
     def tick_router(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
         strategy.on_tick(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles)

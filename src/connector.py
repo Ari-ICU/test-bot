@@ -17,6 +17,8 @@ class MT5Connector:
         self.command_queue = []
         self.on_tick_received = None 
         self.on_symbols_received = None
+        # --- FIX: Callback for timeframe changes ---
+        self.on_timeframe_changed = None 
         self.open_positions = [] 
         self.account_info = {}   
 
@@ -66,7 +68,6 @@ class MT5Connector:
         command = f"DRAW_LABEL|{name}|{text}|{color_code}|{y_pos}"
         self._queue_simple(command)
 
-    # --- FIX START: Added 'return True' to these methods ---
     def close_position(self, symbol):
         self._queue_simple(f"CLOSE_ALL|{symbol}")
         return True
@@ -86,7 +87,6 @@ class MT5Connector:
     def close_ticket(self, ticket_id):
         self._queue_simple(f"CLOSE_TICKET|{ticket_id}")
         return True
-    # --- FIX END ---
     
     def request_symbols(self):
         self._queue_simple("GET_SYMBOLS|ALL")
@@ -95,6 +95,10 @@ class MT5Connector:
         tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
         minutes = tf_map.get(tf_str, 1) 
         self._queue_simple(f"CHANGE_TF|{symbol}|{minutes}")
+        
+        # --- FIX: Notify the strategy via main.py wiring ---
+        if self.on_timeframe_changed:
+            self.on_timeframe_changed(tf_str)
 
     def request_history(self, symbol, count):
         self._queue_simple(f"GET_HISTORY|{symbol}|{count}")
@@ -119,11 +123,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             # Pulse Log
             current_time = time.time()
             if current_time - MT5RequestHandler.last_log_time > 5:
-                # Optional: Uncomment if you want pulse logs
-                # if 'symbol' in data:
-                #     s = data['symbol'].replace('\x00', '').strip()
-                #     p = data.get('profit', '0')
-                #     logger.info(f"❤️ Pulse: {s} | P/L: {p}")
                 MT5RequestHandler.last_log_time = current_time
 
             # Symbols
@@ -161,7 +160,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     buy_count = int(data.get('buy_count', 0)) 
                     sell_count = int(data.get('sell_count', 0))
                     
-                    # Parse extended account info
                     self.connector.account_info = {
                         'name': acct_name,
                         'login': data.get('acct_login', '').replace('\x00', '').strip(),
@@ -188,16 +186,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                         'time': int(parts[4])
                                     })
                                 except ValueError: pass
-                            elif len(parts) == 4:
-                                try:
-                                    candles.append({
-                                        'high': float(parts[0]), 
-                                        'low': float(parts[1]),
-                                        'open': float(parts[2]), 
-                                        'close': float(parts[3]),
-                                        'time': 0
-                                    })
-                                except ValueError: pass
 
                     if 'active_trades' in data:
                         raw_trades = data['active_trades']
@@ -216,8 +204,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                                 'volume': float(p[3].strip()),
                                                 'profit': float(p[4].strip())
                                             })
-                                        except ValueError:
-                                            pass
+                                        except ValueError: pass
                         self.connector.open_positions = parsed_trades
 
                     self.connector.on_tick_received(

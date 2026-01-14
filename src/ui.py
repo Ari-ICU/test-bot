@@ -26,13 +26,9 @@ class TradingBotUI(tb.Window):
         self.mt5_connector = mt5_connector
         self.strategy = None
         
-        # --- UI Callback Setup ---
-        self.strategy_ui_callback = None
-        
         self.last_price_update = time.time()
         self.symbols_loaded = False
-        self.known_symbols = set() # Track symbols we've seen
-        self.open_positions = []  
+        self.known_symbols = set()
         self.profit_history = []  
         
         # --- UI Variables ---
@@ -41,19 +37,17 @@ class TradingBotUI(tb.Window):
         self.lot_size_var = tk.DoubleVar(value=0.01)
         self.cooldown_var = tk.DoubleVar(value=15.0)
 
-        # Strategies & Toggles
         self.strategy_mode_var = tk.StringVar(value="U16_STRATEGY")
         self.use_trend_filter_var = tk.BooleanVar(value=True) 
         self.use_zone_filter_var = tk.BooleanVar(value=True) 
 
-        # Profit Settings
         self.auto_close_sec_var = tk.DoubleVar(value=2.0)
         self.use_profit_mgmt_var = tk.BooleanVar(value=True)
         self.rr_ratio_var = tk.DoubleVar(value=1.5)
         self.min_profit_var = tk.DoubleVar(value=0.10)
 
         # Indicators
-        self.rsi_period_var = tk.IntVar(value=9)
+        self.rsi_period_var = tk.IntVar(value=14)
         self.rsi_buy_var = tk.IntVar(value=35)
         self.rsi_sell_var = tk.IntVar(value=65)
         
@@ -69,9 +63,9 @@ class TradingBotUI(tb.Window):
         self.ichi_kijun_var = tk.IntVar(value=26)
         self.ichi_senkou_var = tk.IntVar(value=52)
 
-        self.macd_fast_var = tk.IntVar(value=8)
-        self.macd_slow_var = tk.IntVar(value=21)
-        self.macd_signal_var = tk.IntVar(value=5)
+        self.macd_fast_var = tk.IntVar(value=12)
+        self.macd_slow_var = tk.IntVar(value=26)
+        self.macd_signal_var = tk.IntVar(value=9)
 
         self.bb_period_var = tk.IntVar(value=20)
         self.bb_dev_var = tk.DoubleVar(value=2.0)
@@ -92,16 +86,15 @@ class TradingBotUI(tb.Window):
         self.end_hour_var = tk.IntVar(value=20)
         
         # CRT Settings
-        self.crt_htf_var = tk.IntVar(value=240)       # Big Timeframe (e.g. 4H)
-        self.crt_lookback_var = tk.IntVar(value=10)   # Small Timeframe Lookback (Candles)
-        self.crt_zone_var = tk.DoubleVar(value=0.50)  # Entry Zone % of Range (e.g. 0.50 = 50%)
+        self.crt_htf_var = tk.IntVar(value=240)
+        self.crt_lookback_var = tk.IntVar(value=10)
+        self.crt_zone_var = tk.DoubleVar(value=0.50)
         
         self._bind_traces()
 
         self.mt5_connector.on_tick_received = self._on_tick_received
         self.mt5_connector.on_symbols_received = self._on_symbols_received
         
-        # Request symbol list from MT5 immediately
         self.mt5_connector.request_symbols()
         
         self._setup_logging()
@@ -113,7 +106,6 @@ class TradingBotUI(tb.Window):
         self._update_header_time()
 
     def _bind_traces(self):
-        """Syncs UI changes to Strategy instantly"""
         vars_to_trace = [
             self.max_pos_var, self.lot_size_var, self.cooldown_var,
             self.strategy_mode_var, self.use_trend_filter_var, self.use_zone_filter_var,
@@ -154,7 +146,6 @@ class TradingBotUI(tb.Window):
                 self.strategy.risk_reward_ratio = self._safe_get(self.rr_ratio_var, 1.5)
                 self.strategy.min_profit_target = self._safe_get(self.min_profit_var, 0.10)
 
-                # Indicators
                 self.strategy.rsi_period = self._safe_get(self.rsi_period_var, 14)
                 self.strategy.rsi_buy_threshold = self._safe_get(self.rsi_buy_var, 30)
                 self.strategy.rsi_sell_threshold = self._safe_get(self.rsi_sell_var, 70)
@@ -191,14 +182,11 @@ class TradingBotUI(tb.Window):
                 self.strategy.crt_zone_size = self._safe_get(self.crt_zone_var, 0.25)
 
                 logging.info(f"Settings Updated: Mode={self.strategy.strategy_mode}")
-            except (tk.TclError, ValueError, TypeError):
-                pass
-            except Exception as e:
-                logging.debug(f"Sync error: {e}")
+            except (tk.TclError, ValueError, TypeError): pass
+            except Exception as e: logging.debug(f"Sync error: {e}")
 
     def _update_strategy_logic_text(self):
         if not hasattr(self, 'lbl_buy_logic'): return
-        
         mode = self.strategy_mode_var.get()
         if mode == "U16_STRATEGY":
             self.lbl_buy_logic.config(text=f"🟢 BUY: Score ≥ 4 (Indics + PA + SMC/ICT + CRT)")
@@ -216,10 +204,8 @@ class TradingBotUI(tb.Window):
              if len(self.profit_history) > 50: self.profit_history.pop(0)
 
     def _on_strategy_callback(self, event_type, data):
-        """Handles callbacks from strategy (e.g., profit close, break-even)"""
         try:
             if event_type == "profit_update":
-                # Update profit label in real-time
                 profit = data.get("profit", 0)
                 positions = data.get("positions", 0)
                 pl_style = "success" if profit >= 0 else "danger"
@@ -231,10 +217,7 @@ class TradingBotUI(tb.Window):
             elif event_type == "profit_closed":
                 Messagebox.show_success("Profit Closed", f"Closed ${data['profit']:.2f} on {data['symbol']}")
                 self.lbl_profit.config(text="📈 P/L: $0.00", bootstyle="success")
-            elif event_type == "error":
-                pass
-        except Exception as e:
-            logging.error(f"UI callback error: {e}")
+        except Exception as e: logging.error(f"UI callback error: {e}")
     
     def _on_symbols_received(self, symbols_list):
         if not self.symbols_loaded:
@@ -243,36 +226,26 @@ class TradingBotUI(tb.Window):
 
     def _update_ui_data(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, candles):
         try:
-            # --- FIX: Two-Way Sync (Telegram -> UI) ---
             if self.strategy:
-                # 1. Sync Active/Pause State
                 if self.auto_trade_var.get() != self.strategy.active:
                     self.auto_trade_var.set(self.strategy.active)
-                
-                # 2. Sync Lot Size (if changed via Telegram)
                 if abs(self.lot_size_var.get() - self.strategy.lot_size) > 0.001:
                     self.lot_size_var.set(self.strategy.lot_size)
-
-                # 3. Sync Strategy Mode (if changed via Telegram)
                 if self.strategy_mode_var.get() != self.strategy.strategy_mode:
                     self.strategy_mode_var.set(self.strategy.strategy_mode)
 
             clean_symbol = str(symbol).replace('\x00', '').strip()
             
-            # --- FIX: Auto-populate symbol list if missing ---
             if clean_symbol not in self.known_symbols:
                 self.known_symbols.add(clean_symbol)
                 current_values = list(self.combo_symbol['values'])
                 if clean_symbol not in current_values:
                     current_values.append(clean_symbol)
                     self.combo_symbol['values'] = current_values
-                    logging.info(f"UI: Discovered new symbol {clean_symbol}")
             
-            # --- FIX: Auto-select if empty ---
             if not self.symbol_var.get(): 
                 self.symbol_var.set(clean_symbol)
 
-            # --- GLOBAL ACCOUNT STATS (Update Always) ---
             bal_style = "success" if balance > 5000 else "info"
             self.lbl_balance.config(text=f"💰 Balance: ${balance:,.2f}", bootstyle=bal_style)
             
@@ -282,7 +255,6 @@ class TradingBotUI(tb.Window):
             self.lbl_positions.config(text=f"📦 Positions: {positions}/{self.max_pos_var.get()}")
             self.lbl_buysell.config(text=f"🟢 {buy_count} | 🔴 {sell_count}")
 
-            # Retrieve profit stats from connector
             info = self.mt5_connector.account_info
             p_today = info.get('today', 0.0)
             p_week = info.get('week', 0.0)
@@ -292,7 +264,6 @@ class TradingBotUI(tb.Window):
             self.lbl_prof_week.config(text=f"Week: ${p_week:+,.2f}", bootstyle="success" if p_week >= 0 else "danger")
             self.lbl_prof_month.config(text=f"Month: ${p_month:+,.2f}", bootstyle="success" if p_month >= 0 else "danger")
 
-            # --- SYMBOL SPECIFIC UPDATES (Only if selected matches incoming) ---
             if clean_symbol == self.symbol_var.get():
                 tf_display = self.tf_var.get()
                 mode_display = self.strategy_mode_var.get()
@@ -300,7 +271,6 @@ class TradingBotUI(tb.Window):
                 self.lbl_bid.config(text=f"BID: {bid:.2f}")
                 self.lbl_ask.config(text=f"ASK: {ask:.2f}")
 
-                # --- Sync Status ---
                 min_needed = 200
                 count = len(candles)
                 if count >= min_needed:
@@ -308,7 +278,6 @@ class TradingBotUI(tb.Window):
                 else:
                     self.lbl_sync.config(text=f"🔄 Sync: {count}/{min_needed}", foreground="#f39c12")
 
-                # --- Server Time ---
                 if count > 0:
                     last_time = candles[-1]['time']
                     st_str = datetime.fromtimestamp(last_time).strftime('%H:%M:%S')
@@ -317,36 +286,26 @@ class TradingBotUI(tb.Window):
                 if self.strategy and len(candles) > 20:
                     rsi, macd, signal = self.strategy.calculate_indicators(candles)
                     
-                    # --- Current Signal Display ---
                     conf_score, pred_dir = self.strategy.get_prediction_score(symbol, bid, ask, candles)
                     
-                    # Check active positions for override
                     is_in_sell = sell_count > 0 and buy_count == 0
                     is_in_buy = buy_count > 0 and sell_count == 0
                     if is_in_sell:
-                        pred_dir = "SELL"  
-                        conf_score = max(conf_score, 70) 
+                        pred_dir = "SELL"; conf_score = max(conf_score, 70) 
                     elif is_in_buy:
-                        pred_dir = "BUY"
-                        conf_score = max(conf_score, 70)
+                        pred_dir = "BUY"; conf_score = max(conf_score, 70)
                     
                     dir_emoji = "🟢" if pred_dir == "BUY" else "🔴" if pred_dir == "SELL" else "⚪"
                     dir_style = "success" if pred_dir == "BUY" else "danger" if pred_dir == "SELL" else "secondary"
-                    self.lbl_current_signal.config(
-                        text=f"{dir_emoji} {pred_dir} ({conf_score}%)",
-                        bootstyle=dir_style
-                    )
+                    self.lbl_current_signal.config(text=f"{dir_emoji} {pred_dir} ({conf_score}%)", bootstyle=dir_style)
                     
-                    # Align RSI/MACD colors
                     rsi_color = "success" if (pred_dir == "BUY" or rsi < self.rsi_buy_var.get()) else "danger"
-                    if pred_dir == "SELL" and rsi > self.rsi_sell_var.get():
-                        rsi_color = "danger"
+                    if pred_dir == "SELL" and rsi > self.rsi_sell_var.get(): rsi_color = "danger"
                     self.lbl_live_rsi.config(text=f"RSI: {rsi:.2f}", bootstyle=rsi_color)
                     
                     macd_color = "success" if (pred_dir == "BUY" and macd > signal) or (pred_dir == "SELL" and macd < signal) else "danger"
                     self.lbl_live_macd.config(text=f"MACD: {macd:.5f}", bootstyle=macd_color)
 
-                    # --- CRT Progress Update ---
                     htf_mins = self.crt_htf_var.get()
                     if htf_mins > 0:
                         last_time = candles[-1]['time']
@@ -354,25 +313,20 @@ class TradingBotUI(tb.Window):
                         remaining = htf_mins - elapsed
                         self.crt_progress_lbl.config(text=f"Range Age: {int(elapsed)}m / {htf_mins}m (Renew in {int(remaining)}m)")
 
-                    # --- Zone Display ---
                     if self.use_zone_filter_var.get():
                         supp_txt = "None"
                         if hasattr(self.strategy, 'support_zones') and self.strategy.support_zones:
                             zone = self.strategy.support_zones[0]
                             supp_txt = f"{zone['top']:.2f}"
-                        
                         res_txt = "None"
                         if hasattr(self.strategy, 'resistance_zones') and self.strategy.resistance_zones:
                             zone = self.strategy.resistance_zones[0]
                             res_txt = f"{zone['bottom']:.2f}"
-                            
                         self.lbl_detected_zone.config(text=f"S: {supp_txt} | R: {res_txt}", bootstyle="primary")
                     else:
                         self.lbl_detected_zone.config(text="Zone: DISABLED", bootstyle="secondary")
 
-        except Exception as e:
-            # logging.error(f"UI Update Error: {e}")
-            pass
+        except Exception: pass
 
     def _update_card(self, label, text, bootstyle):
         label.config(text=text, bootstyle=bootstyle)
@@ -454,7 +408,6 @@ class TradingBotUI(tb.Window):
         self.combo_symbol['values'] = symbols_list
         for s in symbols_list:
             self.known_symbols.add(s)
-            
         if symbols_list and not self.symbol_var.get(): 
             self.symbol_var.set(symbols_list[0])
 
@@ -486,9 +439,13 @@ class TradingBotUI(tb.Window):
     def _update_header_time(self):
         now = time.strftime("%H:%M:%S")
         market_info = ""
+        # --- FIX: Check for method existence before calling ---
         if self.strategy:
-            session = self.strategy.active_session_name
-            all_times = self.strategy.get_session_times()
+            session = getattr(self.strategy, 'active_session_name', 'Unknown')
+            if hasattr(self.strategy, 'get_session_times'):
+                all_times = self.strategy.get_session_times()
+            else:
+                all_times = "Loading..."
             market_info = f" | {session} Session | {all_times}"
             
         if hasattr(self, 'lbl_time'): 
@@ -583,7 +540,6 @@ class TradingBotUI(tb.Window):
         self.lbl_sync = ttk.Label(ind_frame, text="🔄 Sync: Waiting...", font=("Segoe UI", 9), foreground="#888")
         self.lbl_sync.pack(anchor=W, pady=2)
 
-        # Current Signal Frame
         signal_frame = ttk.LabelFrame(left_frame, text="🎯 Current Signal", padding=10, bootstyle="primary")
         signal_frame.pack(fill=X, pady=5)
         self.lbl_current_signal = ttk.Label(signal_frame, text="Signal: NEUTRAL (0%)", font=("Segoe UI", 11, "bold"))

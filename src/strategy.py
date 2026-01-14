@@ -14,7 +14,6 @@ warnings.filterwarnings("ignore", message=".*'T' is deprecated.*")
 logger = logging.getLogger("Strategy")
 
 class TradingStrategy:
-    # UPDATED INIT: Accepts webhook
     def __init__(self, connector, news_engine, config, webhook=None):
         self.connector = connector
         self.news_engine = news_engine
@@ -26,22 +25,17 @@ class TradingStrategy:
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
         self.trade_cooldown = 15.0       
         
-        # --- TIMEFRAME STATE (FIX) ---
-        self.target_timeframe = "5min" # Remembers your choice
-        
         # --- MODES & FILTERS ---
-        self.strategy_mode = "U16_STRATEGY"  # Combined strategy
+        self.strategy_mode = "U16_STRATEGY"
         self.use_trend_filter = True
         self.use_zone_filter = True
         
         # Store config
         self.config = config
         
-        # USE THE SHARED WEBHOOK
+        # WEBHOOK
         self.webhook = webhook
-
         if self.webhook:
-            # Existing hooks...
             self.webhook.on_status_command = self._handle_telegram_status_command
             self.webhook.on_positions_command = self._handle_telegram_positions_command
             self.webhook.on_mode_command = self._handle_telegram_mode_command
@@ -50,17 +44,13 @@ class TradingStrategy:
             self.webhook.on_news_command = self._handle_telegram_news_command
             self.webhook.on_accounts_command = self._handle_telegram_accounts_command
             self.webhook.on_account_select = self._handle_telegram_select_account
-            
-            # NEW HOOKS
             self.webhook.on_analysis_command = self._handle_telegram_analysis
             self.webhook.on_strategy_select = self._handle_telegram_strategy_select
             self.webhook.on_lot_change = self._handle_telegram_lot_change
-            self.webhook.on_timeframe_select = self.update_timeframe # <--- WIRED UP
         
-        # --- UI CALLBACK (for profit/protection updates) ---
         self.ui_callback = None 
         
-        # --- MARKET SESSIONS (Local Hours) ---
+        # --- MARKET SESSIONS ---
         self.SESSIONS = {
             "London": {"start": 8, "end": 17, "tz": "Europe/London"},
             "New York": {"start": 8, "end": 17, "tz": "America/New_York"},
@@ -134,7 +124,6 @@ class TradingStrategy:
         self.last_positions_count = 0    
         self.last_balance = 0.0
         self.last_positions_list = []
-        self.last_candles = None
         
         # --- TRADE PROTECTION ---
         self.break_even_activation = 0.50  
@@ -159,35 +148,13 @@ class TradingStrategy:
         self.resistance_zones = []
         self.peak_profit = 0.0
         self.last_positions_list = []
-        logging.info("Strategy state reset for new symbol/timeframe.")
+        logging.info("Strategy state reset for new symbol.")
 
     def get_session_times(self):
         parts = []
         for city, data in self.SESSIONS.items():
             parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
         return " | ".join(parts)
-
-    # --- NEW METHOD: Force Update Timeframe ---
-    def update_timeframe(self, new_tf):
-        if self.target_timeframe == new_tf:
-            return
-
-        logger.info(f"🔄 Switching Timeframe: {self.target_timeframe} -> {new_tf}")
-        self.target_timeframe = new_tf
-        
-        # 1. Update Connector (Push the change)
-        if hasattr(self.connector, 'set_timeframe'):
-             self.connector.set_timeframe(new_tf)
-        elif hasattr(self.connector, 'timeframe'):
-             self.connector.timeframe = new_tf
-        
-        # 2. Reset internal data
-        self.last_candles = None
-        self.last_hist_req = 0 
-        self.reset_state()
-        
-        if self.webhook:
-            self.webhook.send_message(f"⌛ **Timeframe Changed**\nTarget: `{new_tf}`\nBuffering new data...")
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         current_time = time.time()
@@ -198,17 +165,12 @@ class TradingStrategy:
         self.last_candles = candles
         self.last_symbol = symbol
         
-        # --- FIX: USE TARGET TF IF CANDLES ARE LOADING ---
+        tf_minutes = 5 
         if candles and len(candles) > 2:
             diff = (candles[1]['time'] - candles[0]['time']) // 60
-            tf_minutes = diff if diff > 0 else 5
-        else:
-            # Fallback to target so logs are correct while waiting
-            tf_map = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}
-            tf_minutes = tf_map.get(self.target_timeframe, 5)
+            if diff > 0: tf_minutes = diff
         
-        # Adjust min_needed based on TF
-        if tf_minutes <= 1: min_needed = 1440 
+        if tf_minutes <= 1: min_needed = 1440  
         elif tf_minutes <= 5: min_needed = 300
         elif tf_minutes <= 30: min_needed = 150
         elif tf_minutes <= 60: min_needed = 100
@@ -222,10 +184,9 @@ class TradingStrategy:
         
         if not candles or len(candles) < total_needed:
             if current_time - self.last_hist_req > 5:
-                # Ensure connector knows the target TF
                 self.connector.request_history(symbol, total_needed + 50)
                 self.last_hist_req = current_time
-                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (Target: {self.target_timeframe})...")
+                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (TF: {tf_minutes}min)...")
             if candles and len(candles) > 0:
                 self._log_skip(f"Gathering data... ({len(candles)}/{total_needed} candles)")
             return
@@ -251,7 +212,6 @@ class TradingStrategy:
         
         if self.active and actual_positions < self.max_positions:
             if (time.time() - self.last_trade_time) > self.trade_cooldown:
-                # Always use combined U16 strategy, adaptive to TF
                 self.check_signals_u16(symbol, bid, ask, candles, tf_minutes)
 
         if current_time - self.last_status_time >= 10:
@@ -397,7 +357,6 @@ class TradingStrategy:
         except: return 0, 0, 0, 0
 
     def get_htf_trend(self, candles, htf_minutes=240):
-        """Calculate trend on higher timeframe via resampling."""
         try:
             if len(candles) < 200: return "NEUTRAL"
             df = pd.DataFrame(candles)
@@ -414,9 +373,8 @@ class TradingStrategy:
         except:
             return "NEUTRAL"
 
-    # --- COMBINED U16 STRATEGY (Incorporates all other strategies, multi-TF adaptive) ---
     def check_signals_u16(self, symbol, bid, ask, candles, tf_minutes):
-        if len(candles) < 50: return  # Need sufficient data
+        if len(candles) < 50: return 
         buy_score = 0; sell_score = 0; reasons = []
         rsi, macd, macd_sig = self.calculate_indicators(candles)
         k, d = self.calculate_stochastic(candles)
@@ -426,7 +384,6 @@ class TradingStrategy:
         current_close = candles[-1]['close']
         df = pd.DataFrame(candles)
         
-        # LTF Core indicators (current TF)
         if rsi < 40: buy_score += 1
         elif rsi > 60: sell_score += 1
         if macd > macd_sig: buy_score += 1
@@ -462,8 +419,6 @@ class TradingStrategy:
         if crt_signal == "BUY": buy_score += 3; reasons.append("CRT_Sweep")
         elif crt_signal == "SELL": sell_score += 3; reasons.append("CRT_Sweep")
 
-        # Additional confluence from other strategies (LTF)
-        # Bollinger Bands (Mean Reversion & Breakout)
         upper, lower, sma, bandwidth = self.calculate_bollinger_bands(candles, self.bb_period, self.bb_dev)
         if current_close < lower: buy_score += 2; reasons.append("BB_Lower")
         if current_close > upper: sell_score += 2; reasons.append("BB_Upper")
@@ -475,40 +430,34 @@ class TradingStrategy:
             elif current_close < lower and current_close < prev_close - (atr * self.breakout_threshold):
                 sell_score += 2; reasons.append("Breakout_Bear")
 
-        # EMA Cross
         df['fast_ema'] = df['close'].ewm(span=self.ema_fast, adjust=False).mean()
         df['slow_ema'] = df['close'].ewm(span=self.ema_slow, adjust=False).mean()
         if df.iloc[-1]['fast_ema'] > df.iloc[-1]['slow_ema']: buy_score += 1
         else: sell_score += 1
 
-        # Mean Reversion (low ADX)
         if adx < 25:
             if current_close <= lower and rsi < (100 - self.mr_rsi_extreme): buy_score += 2; reasons.append("MR_Buy")
             elif current_close >= upper and rsi > self.mr_rsi_extreme: sell_score += 2; reasons.append("MR_Sell")
 
-        # SMC Order Blocks
         bullish_ob, bearish_ob = self.calculate_order_blocks(candles)
         if bullish_ob and bullish_ob['bottom'] <= ask <= bullish_ob['top']: buy_score += 2; reasons.append("Bull_OB")
         if bearish_ob and bearish_ob['bottom'] <= bid <= bearish_ob['top']: sell_score += 2; reasons.append("Bear_OB")
 
-        # Silver Bullet Time Bonus
         if self._is_silver_bullet_time() and fvg_type != "NONE":
             if fvg_type == "BULLISH": buy_score += 1; reasons.append("Silver_Bull")
             elif fvg_type == "BEARISH": sell_score += 1; reasons.append("Silver_Bear")
 
-        # Momentum (MACD Histogram expansion)
         short_ema_val = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
         long_ema_val = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
         df['macd'] = short_ema_val - long_ema_val
         df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
-
+        
         prev_macd_hist = (df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']) if len(df) > 1 else 0
         curr_macd_hist = macd - macd_sig
         if adx > 25 and curr_macd_hist > prev_macd_hist: buy_score += 1
         elif adx > 25 and curr_macd_hist < prev_macd_hist: sell_score += 1
 
-        # HTF Confluence (always check higher TF for alignment, adaptive to current TF)
-        target_htf = min(1440, max(60, tf_minutes * 12))  # Adaptive HTF: 12x current or cap at D1
+        target_htf = min(1440, max(60, tf_minutes * 12)) 
         htf_trend = self.get_htf_trend(candles, target_htf)
         if "BULLISH" in htf_trend:
             buy_score += 2 if "STRONG" in htf_trend else 1
@@ -517,28 +466,23 @@ class TradingStrategy:
             sell_score += 2 if "STRONG" in htf_trend else 1
             reasons.append(f"HTF_{htf_trend}")
 
-        # TF-Adaptive Threshold: Lower for LTF (scalping), higher for HTF (swing)
         base_threshold = 7
-        if tf_minutes <= 5:  # LTF: Easier entry for quick scalps
-            THRESHOLD = base_threshold - 1
-        elif tf_minutes >= 240:  # HTF: Stricter for longer holds
-            THRESHOLD = base_threshold + 2
-        else:
-            THRESHOLD = base_threshold
+        if tf_minutes <= 5: THRESHOLD = base_threshold - 1
+        elif tf_minutes >= 240: THRESHOLD = base_threshold + 2
+        else: THRESHOLD = base_threshold
 
-        # TF-Adaptive Risk: Tighter on LTF, wider on HTF
         if tf_minutes <= 5:
-            atr_mult = self.scalp_atr_mult * 0.8  # Even tighter SL for LTF
+            atr_mult = self.scalp_atr_mult * 0.8  
             tp_base = 1.2
         else:
-            atr_mult = self.scalp_atr_mult * 1.5  # Wider for HTF
+            atr_mult = self.scalp_atr_mult * 1.5  
             tp_base = 2.0
 
         if buy_score >= THRESHOLD and buy_score > sell_score:
             if self._check_filters("BUY", ask):
                 sl_dist = atr * atr_mult
                 sl = ask - sl_dist
-                tp_mult = min(tp_base + (buy_score - THRESHOLD) * 0.2, 3.0)  # Dynamic TP, capped higher for HTF
+                tp_mult = min(tp_base + (buy_score - THRESHOLD) * 0.2, 3.0) 
                 tp = ask + (sl_dist * tp_mult)
                 reason_str = ",".join(reasons)
                 logger.info(f"🌟 BUY (U16) | TF:{tf_minutes}min | Score: {buy_score} | Reasons: {reason_str}")
@@ -547,13 +491,12 @@ class TradingStrategy:
             if self._check_filters("SELL", bid):
                 sl_dist = atr * atr_mult
                 sl = bid + sl_dist
-                tp_mult = min(tp_base + (sell_score - THRESHOLD) * 0.2, 3.0)  # Dynamic TP
+                tp_mult = min(tp_base + (sell_score - THRESHOLD) * 0.2, 3.0) 
                 tp = bid - (sl_dist * tp_mult)
                 reason_str = ",".join(reasons)
                 logger.info(f"🌟 SELL (U16) | TF:{tf_minutes}min | Score: {sell_score} | Reasons: {reason_str}")
                 self.execute_trade("SELL", symbol, self.lot_size, "U16_STRATEGY", sl, tp)
 
-    # --- STRUCTURE HELPERS ---
     def analyze_structure_zones(self, symbol, candles):
         if not candles: return
         ts_candles = candles
@@ -697,7 +640,6 @@ class TradingStrategy:
             return h in [10, 14]
         except: return False
 
-    # --- FILTERS & UTILS ---
     def get_prediction_score(self, symbol, bid, ask, candles):
         if not candles or len(candles) < 50: return 0, "NEUTRAL"
         rsi, macd, macd_sig = self.calculate_indicators(candles)
@@ -756,26 +698,6 @@ class TradingStrategy:
         if time.time() - self.last_log_time > 15:
             logger.info(f"❌ {message}")
             self.last_log_time = time.time()
-
-    def calculate_safe_risk(self, direction, entry_price, candles):
-        atr = self.calculate_atr(candles)
-        if atr == 0: atr = entry_price * 0.001
-        sl_dist = atr * 1.5
-        if direction == "BUY":
-            nearest_supp = self._get_nearest_zone(entry_price, is_support=True)
-            if nearest_supp and (entry_price - nearest_supp['bottom']) < (sl_dist * 1.5):
-                sl = nearest_supp['bottom'] - (atr * 0.2)
-            else: sl = entry_price - sl_dist
-            raw_tp = entry_price + ((entry_price - sl) * self.risk_reward_ratio)
-            tp = raw_tp - (atr * 0.05)
-        elif direction == "SELL":
-            nearest_res = self._get_nearest_zone(entry_price, is_support=False)
-            if nearest_res and (nearest_res['top'] - entry_price) < (sl_dist * 1.5):
-                sl = nearest_res['top'] + (atr * 0.2)
-            else: sl = entry_price + sl_dist
-            raw_tp = entry_price - ((sl - entry_price) * self.risk_reward_ratio)
-            tp = raw_tp + (atr * 0.05)
-        return float(sl), float(tp)
 
     def execute_trade(self, direction, symbol, volume, reason, sl, tp):
         self.last_trade_time = time.time()
