@@ -25,6 +25,9 @@ class TradingStrategy:
         self.lot_size = config.get('auto_trading', {}).get('lot_size', 0.01)
         self.trade_cooldown = 15.0       
         
+        # --- TIMEFRAME STATE (FIXED) ---
+        self.target_timeframe = "5min" # Initialize default
+        
         # --- MODES & FILTERS ---
         self.strategy_mode = "U16_STRATEGY"
         self.use_trend_filter = True
@@ -47,6 +50,8 @@ class TradingStrategy:
             self.webhook.on_analysis_command = self._handle_telegram_analysis
             self.webhook.on_strategy_select = self._handle_telegram_strategy_select
             self.webhook.on_lot_change = self._handle_telegram_lot_change
+            # NEW: Timeframe hook
+            self.webhook.on_timeframe_select = self.update_timeframe
         
         self.ui_callback = None 
         
@@ -124,6 +129,7 @@ class TradingStrategy:
         self.last_positions_count = 0    
         self.last_balance = 0.0
         self.last_positions_list = []
+        self.last_candles = None
         
         # --- TRADE PROTECTION ---
         self.break_even_activation = 0.50  
@@ -148,13 +154,37 @@ class TradingStrategy:
         self.resistance_zones = []
         self.peak_profit = 0.0
         self.last_positions_list = []
-        logging.info("Strategy state reset for new symbol.")
+        logging.info("Strategy state reset for new symbol/timeframe.")
 
     def get_session_times(self):
         parts = []
         for city, data in self.SESSIONS.items():
             parts.append(f"{city[:3]}:{data['start']:02d}-{data['end']:02d}")
         return " | ".join(parts)
+
+    # --- FIX: Added Missing update_timeframe method ---
+    def update_timeframe(self, new_tf):
+        """Called by UI/Webhook via Connector to switch timeframe."""
+        if self.target_timeframe == new_tf:
+            return
+
+        logger.info(f"🔄 Strategy sync: TF changed to {new_tf}")
+        self.target_timeframe = new_tf
+        
+        # Notify connector if needed (avoids infinite loop if connector called this)
+        # In this specific flow (UI -> Connector -> Main -> Strategy), Connector already knows.
+        # But if Webhook calls this, we must tell Connector.
+        # Safe to call change_timeframe again as connector queues it.
+        if hasattr(self, 'last_symbol') and self.last_symbol:
+             self.connector.change_timeframe(self.last_symbol, new_tf)
+        
+        # Reset internal data
+        self.last_candles = None
+        self.last_hist_req = 0 
+        self.reset_state()
+        
+        if self.webhook:
+            self.webhook.send_message(f"⌛ **Timeframe Changed**\nTarget: `{new_tf}`\nBuffering new data...")
 
     def on_tick(self, symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles=None):
         current_time = time.time()
@@ -165,12 +195,25 @@ class TradingStrategy:
         self.last_candles = candles
         self.last_symbol = symbol
         
-        tf_minutes = 5 
+        # --- FIX: Robust Timeframe Detection ---
         if candles and len(candles) > 2:
             diff = (candles[1]['time'] - candles[0]['time']) // 60
-            if diff > 0: tf_minutes = diff
+            tf_minutes = diff if diff > 0 else 5
+        else:
+            tf_map = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}
+            tf_minutes = tf_map.get(self.target_timeframe, 5)
+
+        # Sync target if we detected a solid change from incoming data
+        current_tf_str = "5min"
+        for k, v in {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "H1": 60, "H4": 240}.items():
+            if v == tf_minutes: current_tf_str = k
         
-        if tf_minutes <= 1: min_needed = 1440  
+        # If incoming candles clearly match a different TF, update target to match reality
+        if len(candles or []) > 50 and self.target_timeframe != current_tf_str:
+             self.target_timeframe = current_tf_str
+        
+        # Adjust min_needed based on TF
+        if tf_minutes <= 1: min_needed = 1440 
         elif tf_minutes <= 5: min_needed = 300
         elif tf_minutes <= 30: min_needed = 150
         elif tf_minutes <= 60: min_needed = 100
@@ -186,7 +229,7 @@ class TradingStrategy:
             if current_time - self.last_hist_req > 5:
                 self.connector.request_history(symbol, total_needed + 50)
                 self.last_hist_req = current_time
-                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (TF: {tf_minutes}min)...")
+                logging.info(f"Requesting {total_needed + 50} candles for {symbol} (Target: {self.target_timeframe})...")
             if candles and len(candles) > 0:
                 self._log_skip(f"Gathering data... ({len(candles)}/{total_needed} candles)")
             return

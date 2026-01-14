@@ -439,13 +439,13 @@ class TradingBotUI(tb.Window):
     def _update_header_time(self):
         now = time.strftime("%H:%M:%S")
         market_info = ""
-        # --- FIX: Check for method existence before calling ---
+        # --- FIX: Safe call to get_session_times ---
         if self.strategy:
             session = getattr(self.strategy, 'active_session_name', 'Unknown')
             if hasattr(self.strategy, 'get_session_times'):
                 all_times = self.strategy.get_session_times()
             else:
-                all_times = "Loading..."
+                all_times = ""
             market_info = f" | {session} Session | {all_times}"
             
         if hasattr(self, 'lbl_time'): 
