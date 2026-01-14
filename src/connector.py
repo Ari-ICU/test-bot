@@ -66,17 +66,27 @@ class MT5Connector:
         command = f"DRAW_LABEL|{name}|{text}|{color_code}|{y_pos}"
         self._queue_simple(command)
 
+    # --- FIX START: Added 'return True' to these methods ---
     def close_position(self, symbol):
         self._queue_simple(f"CLOSE_ALL|{symbol}")
+        return True
+
     def close_profit(self, symbol):
         self._queue_simple(f"CLOSE_WIN|{symbol}")
+        return True
+
     def close_loss(self, symbol):
         self._queue_simple(f"CLOSE_LOSS|{symbol}")
+        return True
+    
     def change_symbol(self, symbol):
         self._queue_simple(f"CHANGE_SYMBOL|{symbol}")
+        return True
     
     def close_ticket(self, ticket_id):
         self._queue_simple(f"CLOSE_TICKET|{ticket_id}")
+        return True
+    # --- FIX END ---
     
     def request_symbols(self):
         self._queue_simple("GET_SYMBOLS|ALL")
@@ -109,10 +119,11 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             # Pulse Log
             current_time = time.time()
             if current_time - MT5RequestHandler.last_log_time > 5:
-                if 'symbol' in data:
-                    s = data['symbol'].replace('\x00', '').strip()
-                    p = data.get('profit', '0')
-                    # logger.info(f"❤️ Pulse: {s} | P/L: {p}")
+                # Optional: Uncomment if you want pulse logs
+                # if 'symbol' in data:
+                #     s = data['symbol'].replace('\x00', '').strip()
+                #     p = data.get('profit', '0')
+                #     logger.info(f"❤️ Pulse: {s} | P/L: {p}")
                 MT5RequestHandler.last_log_time = current_time
 
             # Symbols

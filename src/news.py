@@ -10,8 +10,6 @@ import nltk
 import threading
 import requests  # Added for robust HTTP handling
 from time import sleep  # For backoff
-# Note: We no longer need to import WebhookAlert here for instantiation, 
-# but we keep it if you use type hinting, otherwise it's fine to remove.
 
 # Initialize Logging
 logging.basicConfig(
@@ -22,7 +20,6 @@ logging.basicConfig(
 logger = logging.getLogger("NewsEngine")
 
 class NewsEngine:
-    # UPDATED INIT: Accepts webhook as an argument
     def __init__(self, config_path="config.json", webhook=None):
         self.load_config(config_path)
         self.sia = self.init_analyzer()
@@ -75,24 +72,23 @@ class NewsEngine:
                         found_new += new_from_cal
                         break  # Calendar fetch doesn't need retries per se
 
-                    # For RSS/API feeds: Use requests for robustness (better error handling than feedparser alone)
+                    # For RSS/API feeds
                     url = source['url']
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
                         'Accept': 'application/rss+xml,application/xml,text/xml,*/*;q=0.9'
                     }
                     
-                    # Sanitize any 'macd' params if present (quick hack for the leak)
                     if 'params' in source:
                         params = source['params'].copy()
-                        params.pop('macd', None)  # Remove if it's causing the issue
+                        params.pop('macd', None)
                         response = requests.get(url, params=params, headers=headers, timeout=10)
                     else:
                         response = requests.get(url, headers=headers, timeout=10)
                     
                     response.raise_for_status()  # Raise on HTTP errors (4xx/5xx)
                     
-                    feed = feedparser.parse(response.text)  # Parse with feedparser after fetch
+                    feed = feedparser.parse(response.text)
                     
                     for entry in feed.entries:
                         if entry.title not in self.seen_news:
@@ -111,12 +107,11 @@ class NewsEngine:
                             elif 'updated_parsed' in entry and entry.updated_parsed:
                                 pub_time = time.strftime('%Y-%m-%d %H:%M:%S', entry.updated_parsed)
 
-                            # FIX: Safe access to 'link' – check if attribute exists
-                            link = getattr(entry, 'link', '')  # Default to empty string if no 'link'
+                            link = getattr(entry, 'link', '')
 
                             news_item = {
                                 'title': entry.title,
-                                'summary': getattr(entry, 'summary', entry.title),  # Safe summary access too
+                                'summary': getattr(entry, 'summary', entry.title),
                                 'time': pub_time,
                                 'sentiment': sentiment,
                                 'score': f"{score:+.2f}",
@@ -131,8 +126,15 @@ class NewsEngine:
                     
                 except requests.exceptions.HTTPError as e:
                     if e.response.status_code == 403:
-                        logger.error(f"403 Forbidden on {source_name}: Source blocked (e.g., geo/IP restriction). Skipping permanently.")
-                        break  # Don't retry 403s – they're hard blocks
+                        logger.error(f"❌ 403 Forbidden on {source_name}: Source blocked. PAUSING TRADING.")
+                        # --- FIX START: Fail-safe logic ---
+                        self.trading_pause = True
+                        self.last_pause_time = time.time()
+                        if self.webhook:
+                            self.webhook.send_message(f"⚠️ **CRITICAL**: {source_name} blocked access (403). Trading PAUSED for safety.")
+                        # --- FIX END ---
+                        break 
+                    
                     error_msg = str(e).replace('macd', '[REDACTED]')
                     if attempt < max_retries - 1:
                         wait_time = 2 ** attempt
@@ -146,20 +148,16 @@ class NewsEngine:
                     error_msg = str(e).replace('macd', '[REDACTED]')
                     if attempt < max_retries - 1:
                         wait_time = 2 ** attempt
-                        logger.warning(f"HTTP Error on {source_name} (attempt {attempt+1}/{max_retries}): {error_msg}. Retrying in {wait_time}s...")
+                        logger.warning(f"Connection Error on {source_name} (attempt {attempt+1}/{max_retries}): {error_msg}. Retrying in {wait_time}s...")
                         sleep(wait_time)
                     else:
                         logger.error(f"Failed {source_name} after {max_retries} retries: {error_msg}. Skipping source.")
                         continue
                         
-                except ET.ParseError as e:
-                    logger.error(f"XML Parse Error in {source_name}: {e}. Skipping.")
-                    break  # Don't retry parse errors
-                    
                 except Exception as e:
                     error_msg = str(e).replace('macd', '[REDACTED]')
                     logger.error(f"Unexpected error in {source_name}: {error_msg}")
-                    break  # Don't retry unknowns to avoid loops
+                    break 
 
         if found_new > 0:
             logger.info(f"Processed {found_new} new headlines.")
@@ -183,7 +181,6 @@ class NewsEngine:
 
         for url in urls_to_try:
             try:
-                # Use requests for consistency and better error handling
                 response = requests.get(url, headers=headers, timeout=8)
                 response.raise_for_status()
                 xml_data = response.content
@@ -223,25 +220,30 @@ class NewsEngine:
                             })
                             self.seen_news.add(full_title)
                             new_count += 1
-                return new_count  # Success, return count
+                return new_count 
                 
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 403:
-                    logger.error(f"403 Forbidden on FF Calendar ({url}): Blocked. Skipping calendar fetch.")
-                    break  # Hard skip for 403
+                    logger.error(f"❌ 403 Forbidden on FF Calendar ({url}): Blocked. PAUSING TRADING.")
+                    # --- FIX START: Fail-safe logic ---
+                    self.trading_pause = True
+                    self.last_pause_time = time.time()
+                    if self.webhook:
+                        self.webhook.send_message("⚠️ **CRITICAL**: Calendar source blocked (403). Trading PAUSED.")
+                    # --- FIX END ---
+                    break 
+                
                 error_msg = str(e).replace('macd', '[REDACTED]')
                 logger.warning(f"FF Calendar fetch error ({url}): {error_msg}")
                 continue
             except requests.exceptions.RequestException as e:
-                error_msg = str(e).replace('macd', '[REDACTED]')
-                logger.warning(f"FF Calendar fetch error ({url}): {error_msg}")
+                logger.warning(f"FF Calendar fetch error ({url}): {e}")
                 continue
             except ET.ParseError as e:
                 logger.error(f"FF Calendar XML parse error: {e}")
-                break  # Don't retry parse issues
+                break 
             except Exception as e:
-                error_msg = str(e).replace('macd', '[REDACTED]')
-                logger.error(f"Unexpected FF Calendar error ({url}): {error_msg}")
+                logger.error(f"Unexpected FF Calendar error ({url}): {e}")
                 continue
         
         logger.debug("Automatic Calendar fetch skipped (all URLs failed)")
@@ -270,9 +272,12 @@ class NewsEngine:
     def _periodic_fetch(self):
         while True:
             self.fetch_latest()
+            # If paused due to news/errors, check if time has passed to retry/unpause
             if self.trading_pause and time.time() - self.last_pause_time > 300:
                 self.trading_pause = False
-                logger.info("Trading pause lifted.")
+                logger.info("Trading pause timer expired. Attempting to resume (next fetch will confirm safety).")
+                if self.webhook:
+                    self.webhook.send_message("⏳ Pause timer expired. Resuming checks...")
             time.sleep(self.update_interval)
 
     def run(self):

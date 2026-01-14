@@ -467,6 +467,13 @@ class TradingStrategy:
             elif fvg_type == "BEARISH": sell_score += 1; reasons.append("Silver_Bear")
 
         # Momentum (MACD Histogram expansion)
+        # --- FIX APPLIED HERE: Calculate MACD columns for DataFrame before access ---
+        short_ema_val = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
+        long_ema_val = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
+        df['macd'] = short_ema_val - long_ema_val
+        df['macd_signal'] = df['macd'].ewm(span=self.macd_signal, adjust=False).mean()
+        # --------------------------------------------------------------------------
+
         prev_macd_hist = (df.iloc[-2]['macd'] - df.iloc[-2]['macd_signal']) if len(df) > 1 else 0
         curr_macd_hist = macd - macd_sig
         if adx > 25 and curr_macd_hist > prev_macd_hist: buy_score += 1
