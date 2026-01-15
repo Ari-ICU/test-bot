@@ -13,30 +13,34 @@ class NewsFilter:
         self.crypto_keywords = ["BITCOIN", "BTC", "ETH", "ETHEREUM", "SOLANA", "CRYPTO"]
         self.forex_keywords = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "GOLD", "XAU", "OIL"]
         
-        # Economic Events (Affects EVERYTHING -> FOREX usually)
-        self.econ_keywords = ["CPI", "GDP", "FOMC", "FED", "RATE HIKE", "INFLATION"]
+        # Economic Events (Affects EVERYTHING)
+        self.econ_keywords = ["CPI", "GDP", "FOMC", "FED", "RATE HIKE", "INFLATION", "JOB"]
 
         self.bullish_keywords = ["surge", "soar", "jump", "rally", "record", "bull", "gain"]
         self.bearish_keywords = ["crash", "plunge", "drop", "slump", "bear", "loss", "fall"]
 
     def get_news_category(self, title):
-        """Determines if news is CRYPTO, FOREX, or ALL"""
+        """Determines if news is CRYPTO, FOREX, or ECON"""
         t = title.upper()
+        # Check Econ first (affects all)
+        if any(k in t for k in self.econ_keywords):
+            return "ECON"
         if any(k in t for k in self.crypto_keywords):
             return "CRYPTO"
         if any(k in t for k in self.forex_keywords):
             return "FOREX"
-        if any(k in t for k in self.econ_keywords):
-            return "FOREX" # Economic news usually trades on Forex pairs (USD)
         return "UNKNOWN"
 
-    def get_sentiment_signal(self):
+    def get_sentiment_signal(self, current_symbol="XAUUSD"):
         """
         Returns: ("BUY"|"SELL"|"NEUTRAL", "Reason", "CATEGORY")
         """
         if (datetime.now() - self.last_signal_time).seconds < 300:
             return "NEUTRAL", "", "NONE"
 
+        # 1. Determine what we are trading
+        is_crypto_symbol = any(x in current_symbol.upper() for x in ["BTC", "ETH", "BITCOIN", "CRYPTO"])
+        
         for source in self.sources:
             try:
                 if not source.get('url'): continue
@@ -46,7 +50,17 @@ class NewsFilter:
                     title = entry.title
                     category = self.get_news_category(title)
                     
-                    if category == "UNKNOWN": continue # Skip irrelevant news
+                    if category == "UNKNOWN": continue 
+
+                    # --- FILTERING LOGIC ---
+                    # If trading Gold/Forex, IGNORE Crypto news
+                    if not is_crypto_symbol and category == "CRYPTO":
+                        continue
+                        
+                    # If trading Crypto, IGNORE Forex specific news (unless it's ECON)
+                    if is_crypto_symbol and category == "FOREX":
+                        continue
+                    # -----------------------
 
                     # SELL Logic
                     for kw in self.bearish_keywords:

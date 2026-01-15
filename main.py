@@ -29,7 +29,7 @@ def bot_logic(app):
     risk = app.risk
     news_filter = NewsFilter(conf.get('sources', []))
     
-    logger.info("Bot logic initialized.") # Becomes: ✅ SYSTEM: Bot logic initialized
+    logger.info("Bot logic initialized.") 
     
     # --- TRADE MONITOR VARIABLES ---
     last_balance = 0.0
@@ -55,7 +55,6 @@ def bot_logic(app):
                     pnl = curr_balance - last_balance
                     
                     if abs(pnl) > 0.01: 
-                        # We send a simple string; the Handler adds the emoji/bolding
                         if pnl > 0:
                             logger.info(f"TP Hit: +${pnl:.2f} (Bal: ${curr_balance:,.2f})")
                         else:
@@ -78,10 +77,16 @@ def bot_logic(app):
                 time.sleep(1)
                 continue
 
+            # --- CRITICAL FIX: Get Symbol EARLY for context ---
+            # We need the symbol BEFORE checking news to filter correctly
+            symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
+
             # --- Strategies ---
             decisions = []
             
-            news_action, news_reason, news_category = news_filter.get_sentiment_signal()
+            # Fix: Pass symbol to news filter to prevent Cross-Asset errors
+            # (e.g. BTC news won't trigger XAUUSD trade)
+            news_action, news_reason, news_category = news_filter.get_sentiment_signal(symbol)
             if news_action != "NEUTRAL":
                 decisions.append((news_action, f"News: {news_reason}"))
             
@@ -104,7 +109,6 @@ def bot_logic(app):
                     try: lot = float(app.lot_var.get())
                     except: lot = 0.01
                 
-                symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
                 current_price = info.get('ask') if final_action == "BUY" else info.get('bid')
                 
                 sl, tp = risk.calculate_sl_tp(current_price, final_action, 1.0)
