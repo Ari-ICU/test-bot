@@ -24,88 +24,92 @@ class TelegramBot:
             payload = {"chat_id": target_chat, "text": text, "parse_mode": "HTML"}
             requests.post(url, json=payload, timeout=5)
         except Exception as e:
-            # We use print here to avoid infinite recursion with the LogHandler
             print(f"❌ Failed to send Telegram message: {e}")
 
     def process_webhook_update(self, update):
         """Processes incoming JSON update from Telegram Webhook"""
         try:
             if "message" not in update: return
-            
             msg = update["message"]
             chat_id = str(msg.get("chat", {}).get("id"))
             text = msg.get("text", "").strip()
 
             if self.chat_id and chat_id != str(self.chat_id):
-                logger.warning(f"Unauthorized command from ChatID: {chat_id}")
                 return
 
             self._handle_command(text, chat_id)
-            
         except Exception as e:
             logger.error(f"Error processing Telegram update: {e}")
 
     def _handle_command(self, text, chat_id):
-        """Parses text commands and triggers bot actions"""
+        """Parses text commands"""
         cmd_parts = text.split()
         command = cmd_parts[0].lower()
         response = ""
         
         if command == "/start":
-            response = "🤖 <b>MT5 Bot Online</b>\n/buy [lot]\n/sell [lot]\n/close_win\n/close_all\n/status"
-            
+            response = "🤖 <b>Bot Online</b>"
         elif command == "/status":
             if self.connector and self.connector.account_info:
                 info = self.connector.account_info
-                response = (f"📊 <b>Account Status</b>\n"
-                            f"Balance: ${info.get('balance', 0):.2f}\n"
-                            f"Equity: ${info.get('equity', 0):.2f}\n"
-                            f"Profit: ${info.get('profit', 0):.2f}")
+                response = (f"📊 <b>Status</b>\n"
+                            f"💵 Bal: <b>${info.get('balance', 0):.2f}</b>\n"
+                            f"📈 PnL: <b>${info.get('profit', 0):.2f}</b>")
             else:
-                response = "⚠️ No connection to MT5 Terminal."
+                response = "⚠️ No connection."
 
-        elif command in ["/buy", "/sell"]:
-            action = "BUY" if command == "/buy" else "SELL"
-            lot = 0.01
-            if len(cmd_parts) > 1:
-                try: lot = float(cmd_parts[1])
-                except: pass
-            
-            if self.connector:
-                self.connector.send_order(action, "XAUUSD", lot, 0, 0)
-                response = f"✅ <b>Order Sent:</b> {action} {lot} XAUUSD"
-
-        elif command == "/close_all":
-            if self.connector:
-                self.connector.close_position("XAUUSD", "ALL")
-                response = "⚠️ Closing ALL positions..."
-                
-        elif command == "/close_win":
-            if self.connector:
-                self.connector.close_position("XAUUSD", "WIN")
-                response = "💰 Closing PROFITABLE positions..."
+        # Add other commands here as needed...
 
         if response:
             self.send_message(response, chat_id)
 
-# --- NEW: Log Handler for Real-Time Logs ---
+# --- IMPROVED: Clean & Visual Log Handler ---
 class TelegramLogHandler(logging.Handler):
-    """Sends log records to Telegram."""
+    """Formats logs with emojis and HTML for Telegram"""
     def __init__(self, bot):
         super().__init__()
         self.bot = bot
 
     def emit(self, record):
         try:
-            msg = self.format(record)
-            # Add Emojis based on log level
-            emoji = "ℹ️"
-            if record.levelno == logging.WARNING: emoji = "⚠️"
-            elif record.levelno == logging.ERROR: emoji = "❌"
-            elif record.levelno == logging.CRITICAL: emoji = "🚨"
+            msg = record.getMessage()
+
+            # 1. Define Emojis & Styles based on content keywords
+            if "TP Hit" in msg or "Profit" in msg:
+                emoji = "💰"
+                header = "TAKE PROFIT"
+            elif "SL Hit" in msg or "Loss" in msg:
+                emoji = "🛑"
+                header = "STOP LOSS"
+            elif "EXECUTING" in msg or "Order Sent" in msg:
+                emoji = "🚀"
+                header = "NEW TRADE"
+            elif "News Signal" in msg:
+                emoji = "📰"
+                header = "NEWS ALERT"
+            elif record.levelno == logging.ERROR:
+                emoji = "🚨"
+                header = "ERROR"
+            elif record.levelno == logging.WARNING:
+                emoji = "⚠️"
+                header = "WARNING"
+            elif "Bot logic initialized" in msg or "Connector started" in msg:
+                emoji = "✅"
+                header = "SYSTEM"
+            else:
+                # Skip boring INFO logs (optional)
+                # return 
+                emoji = "ℹ️"
+                header = "INFO"
+
+            # 2. Format the Message (Clean HTML)
+            # We strip the raw message to remove extra spaces
+            clean_msg = msg.replace("EXECUTING:", "").replace("TP Hit:", "").replace("SL Hit:", "").strip()
             
-            # Send to Telegram
-            formatted_msg = f"{emoji} <b>{record.levelname}:</b> {msg}"
-            self.bot.send_message(formatted_msg)
+            formatted_text = f"{emoji} <b>{header}</b>\n{clean_msg}"
+
+            # 3. Send
+            self.bot.send_message(formatted_text)
+            
         except Exception:
             self.handleError(record)

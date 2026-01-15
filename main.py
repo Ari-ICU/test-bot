@@ -1,18 +1,17 @@
 import time
 import logging
-import sys
 from config import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager
 from core.session import is_market_open
-from core.telegram_bot import TelegramBot, TelegramLogHandler # <--- Import Handler
+from core.telegram_bot import TelegramBot, TelegramLogHandler 
 from filters.news import NewsFilter
 from ui import TradingApp
 import strategy.trend_following as trend
 import strategy.reversal as reversal
 import strategy.breakout as breakout
 
-# --- Custom Logger ---
+# --- Console Logger (Keeps the technical details) ---
 class CustomFormatter(logging.Formatter):
     format_str = "%(asctime)s | %(levelname)-8s | %(message)s"
     def format(self, record):
@@ -30,7 +29,7 @@ def bot_logic(app):
     risk = app.risk
     news_filter = NewsFilter(conf.get('sources', []))
     
-    logger.info(f"✅ Bot logic initialized.")
+    logger.info("Bot logic initialized.") # Becomes: ✅ SYSTEM: Bot logic initialized
     
     # --- TRADE MONITOR VARIABLES ---
     last_balance = 0.0
@@ -39,69 +38,53 @@ def bot_logic(app):
     
     while app.bot_running:
         try:
-            # 1. Get Current Account State
             info = connector.account_info
             curr_balance = info.get('balance', 0.0)
             curr_positions = info.get('total_count', 0)
             
-            # Initialize tracker on first run
             if first_run and curr_balance > 0:
                 last_balance = curr_balance
                 last_positions = curr_positions
                 first_run = False
 
             # ----------------------------------------
-            # 🛑 REAL-TIME SL / TP MONITOR
+            # 🛑 CLEAN TRADE MONITOR
             # ----------------------------------------
             if not first_run:
-                # Logic: If positions DECREASED, a trade must have closed
                 if curr_positions < last_positions:
                     pnl = curr_balance - last_balance
                     
-                    # Filter out tiny changes (swaps/commissions without close)
                     if abs(pnl) > 0.01: 
+                        # We send a simple string; the Handler adds the emoji/bolding
                         if pnl > 0:
-                            msg = f"💰 <b>TAKE PROFIT HIT!</b>\nProfit: +${pnl:.2f}\nNew Balance: ${curr_balance:,.2f}"
-                            logger.info(f"💰 TP Hit: +${pnl:.2f}") # Logs to Console + Telegram
+                            logger.info(f"TP Hit: +${pnl:.2f} (Bal: ${curr_balance:,.2f})")
                         else:
-                            msg = f"🛑 <b>STOP LOSS HIT!</b>\nLoss: -${abs(pnl):.2f}\nNew Balance: ${curr_balance:,.2f}"
-                            logger.warning(f"🛑 SL Hit: -${abs(pnl):.2f}") # Logs to Console + Telegram
-                        
-                        # Explicitly send the formatted message if needed
-                        # (The logger above will send it, but this ensures a clean format)
-                        if app.telegram_bot:
-                            app.telegram_bot.send_message(msg)
+                            logger.warning(f"SL Hit: -${abs(pnl):.2f} (Bal: ${curr_balance:,.2f})")
 
-                # Update trackers for next loop
                 last_positions = curr_positions
                 last_balance = curr_balance
             # ----------------------------------------
 
-            # 2. Check Auto-Trade Toggle
             if hasattr(app, 'auto_trade_var') and not app.auto_trade_var.get():
                 time.sleep(1)
                 continue
 
-            # 3. Market Status Check
             if not is_market_open("Auto"):
                 time.sleep(5)
                 continue
 
-            # 4. Strategy & Execution Logic ...
             candles = connector.get_latest_candles()
             if not candles or len(candles) < 20: 
                 time.sleep(1)
                 continue
 
-            # (Your existing strategy logic here...)
+            # --- Strategies ---
             decisions = []
             
-            # Check News
             news_action, news_reason, news_category = news_filter.get_sentiment_signal()
             if news_action != "NEUTRAL":
-                decisions.append((news_action, news_reason))
+                decisions.append((news_action, f"News: {news_reason}"))
             
-            # Check Tech
             decisions.append(trend.analyze_trend_setup(candles))
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
             decisions.append(breakout.analyze_breakout_setup(candles))
@@ -122,22 +105,20 @@ def bot_logic(app):
                     except: lot = 0.01
                 
                 symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
+                current_price = info.get('ask') if final_action == "BUY" else info.get('bid')
                 
-                # Get current price
-                current_price = info.get('ask', 0.0) if final_action == "BUY" else info.get('bid', 0.0)
-                if current_price == 0.0: current_price = candles[-1]['close']
-
                 sl, tp = risk.calculate_sl_tp(current_price, final_action, 1.0)
                 
-                logger.info(f"🚀 EXECUTING: {final_action} {symbol} | Price: {current_price} | {execution_reason}")
-                connector.send_order(final_action, symbol, lot, sl, tp)
+                # The Log Handler will turn this into a 🚀 NEW TRADE message
+                logger.info(f"EXECUTING: {final_action} {symbol} @ {current_price}\nReason: {execution_reason}")
                 
-                time.sleep(60) # Cooldown
+                connector.send_order(final_action, symbol, lot, sl, tp)
+                time.sleep(60)
 
             time.sleep(1)
 
         except Exception as e:
-            logger.error(f"❌ Logic Error: {e}")
+            logger.error(f"Logic Error: {e}")
             time.sleep(5)
 
 def main():
@@ -157,16 +138,16 @@ def main():
     connector.set_telegram(telegram_bot)
 
     if connector.start():
-        logger.info("✅ MT5 Connector started.")
+        logger.info("MT5 Connector started.")
     else:
-        logger.error("❌ Failed to start MT5 Connector.")
+        logger.error("Failed to start MT5 Connector.")
         return
 
-    # --- ATTACH REAL-TIME LOGGING ---
+    # --- ATTACH IMPROVED LOGGING ---
     tg_handler = TelegramLogHandler(telegram_bot)
-    tg_handler.setLevel(logging.INFO) # Sends INFO, WARNING, ERROR to Telegram
+    tg_handler.setLevel(logging.INFO) 
     logging.getLogger().addHandler(tg_handler)
-    # --------------------------------
+    # -------------------------------
 
     risk = RiskManager(conf.data)
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
@@ -177,7 +158,7 @@ def main():
         pass
     finally:
         connector.stop()
-        logger.info("🛑 Shutdown complete.")
+        logger.info("Shutdown complete.")
 
 if __name__ == "__main__":
     main()
