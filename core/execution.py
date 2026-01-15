@@ -17,7 +17,7 @@ class MT5Connector:
         self.account_info = {}
         self.last_candles = []
         self.running = False
-        self.telegram_bot = None  # Reference to Telegram
+        self.telegram_bot = None
 
     def set_telegram(self, tg_bot):
         """Sets the Telegram Bot instance for sending notifications."""
@@ -62,6 +62,13 @@ class MT5Connector:
         
         if self.telegram_bot:
             self.telegram_bot.send_message(f"🔄 <b>Close Command:</b> {mode} {symbol}")
+
+    def change_symbol(self, symbol):
+        """Sends command to change the chart symbol on MT5."""
+        cmd = f"CHANGE_SYMBOL|{symbol}"
+        with self.lock:
+            self.command_queue.append(cmd)
+        logger.info(f"Symbol Change Queued: {symbol}")
 
     def get_latest_candles(self):
         return self.last_candles
@@ -146,7 +153,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     'profit': float(data.get('profit', [0])[0]),
                     'buy_count': b_count,
                     'sell_count': s_count,
-                    'total_count': b_count + s_count # Calculated here
+                    'total_count': b_count + s_count
                 }
 
             # Send Commands

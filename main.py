@@ -12,12 +12,11 @@ import strategy.trend_following as trend
 import strategy.reversal as reversal
 import strategy.breakout as breakout
 
-# Configure main logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Main")
 
 def bot_logic(app):
-    """Logic loop running in background thread"""
+    """Main logic loop"""
     conf = Config()
     connector = app.connector
     risk = app.risk
@@ -27,7 +26,15 @@ def bot_logic(app):
     
     while app.bot_running:
         try:
-            # 1. Check Filters
+            # 1. Check Auto-Trade Toggle
+            if not app.auto_trade_var.get():
+                time.sleep(1)
+                continue
+
+            # 2. Get Active Symbol from UI
+            active_symbol = app.symbol_var.get()
+
+            # 3. Check Filters
             if news_filter.fetch_news():
                 logger.warning("High impact news. Pausing 60s...")
                 time.sleep(60)
@@ -37,13 +44,13 @@ def bot_logic(app):
                 time.sleep(5)
                 continue
 
-            # 2. Process Data
+            # 4. Process Data
             candles = connector.get_latest_candles()
             if not candles or len(candles) < 20: 
                 time.sleep(1)
                 continue
 
-            # 3. Strategy Analysis
+            # 5. Run Strategies
             decisions = []
             decisions.append(trend.analyze_trend_setup(candles))
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
@@ -56,12 +63,13 @@ def bot_logic(app):
                     logger.info(f"Signal: {action} | Reasons: {reasons}")
                     break
             
-            # 4. Execution
+            # 6. Execute Trade
             if final_action in ["BUY", "SELL"]:
                 lot = risk.get_lot_size(1000)
-                sl, tp = risk.calculate_sl_tp(candles[-1]['close'], final_action, 1.0)
-                connector.send_order(final_action, "XAUUSD", lot, sl, tp)
-                logger.info(f"Trade Executed: {final_action}")
+                
+                # Execute on active symbol
+                connector.send_order(final_action, active_symbol, lot, 0, 0)
+                logger.info(f"Auto-Trade: {final_action} {active_symbol} | Vol: {lot}")
                 time.sleep(15)
 
             time.sleep(1)
@@ -73,16 +81,12 @@ def bot_logic(app):
 def main():
     conf = Config()
     
-    # 1. Setup Connector
     connector = MT5Connector(
         host=conf.get('mt5', {}).get('host', '127.0.0.1'),
         port=conf.get('mt5', {}).get('port', 8001)
     )
     
-    # 2. Setup Telegram
     tg_conf = conf.get('telegram', {})
-    
-    # FIX: Changed 'token' to 'bot_token' to match config.json key
     telegram_bot = TelegramBot(
         token=tg_conf.get('bot_token', ''), 
         authorized_chat_id=tg_conf.get('chat_id', ''),
@@ -98,7 +102,6 @@ def main():
 
     risk = RiskManager(conf.data)
     
-    # 3. Setup UI
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
     try:
