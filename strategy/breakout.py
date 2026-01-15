@@ -1,15 +1,25 @@
-from core.indicators import calculate_bollinger_bands, calculate_atr
+import pandas as pd
+from core.indicators import Indicators
 
 def analyze_breakout_setup(candles):
-    upper, lower, sma = calculate_bollinger_bands(candles)
-    current = candles[-1]['close']
-    prev = candles[-2]['close']
-    atr = calculate_atr(candles)
+    if not candles or len(candles) < 20: return "NEUTRAL", ""
     
-    # Breakout with momentum
-    if current > upper and current > prev + atr:
-        return "BUY", ["BB_Breakout"]
-    elif current < lower and current < prev - atr:
-        return "SELL", ["BB_Breakout"]
+    df = pd.DataFrame(candles)
+    
+    # Donchian Channels (20-period High/Low)
+    high_20 = df['high'].rolling(window=20).max()
+    low_20 = df['low'].rolling(window=20).min()
+    
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    # 1. Breakout UP
+    # Price broke 20-day high AND volume is increasing (simple check)
+    if curr['close'] > high_20.iloc[-2]:
+        return "BUY", "Breakout: New 20-period High"
         
-    return "NEUTRAL", []
+    # 2. Breakout DOWN
+    if curr['close'] < low_20.iloc[-2]:
+        return "SELL", "Breakout: New 20-period Low"
+        
+    return "NEUTRAL", ""

@@ -1,46 +1,60 @@
-def detect_engulfing(candles):
-    if len(candles) < 2: return "NONE"
-    c1, c2 = candles[-2], candles[-1]
+import pandas as pd
+
+def detect_patterns(candles):
+    """
+    Analyzes candlestick data for advanced patterns.
+    Returns a dictionary of boolean signals.
+    """
+    df = pd.DataFrame(candles)
+    if len(df) < 5: return {}
+
+    c = df.iloc[-1]   # Current candle
+    p1 = df.iloc[-2]  # Previous
+    p2 = df.iloc[-3]  # 2 candles ago
+    p3 = df.iloc[-4]  # 3 candles ago (Used for FVG)
+
+    signals = {
+        'bullish_engulfing': False,
+        'bearish_engulfing': False,
+        'bullish_pinbar': False,
+        'bearish_pinbar': False,
+        'bullish_fvg': False,
+        'bearish_fvg': False
+    }
+
+    # 1. Engulfing Patterns (Strong Reversal)
+    body_c = abs(c['close'] - c['open'])
+    body_p1 = abs(p1['close'] - p1['open'])
     
-    # Bullish Engulfing
-    if c1['close'] < c1['open'] and c2['close'] > c2['open']:
-        if c2['close'] > c1['open'] and c2['open'] < c1['close']:
-            return "BULLISH"
+    if c['close'] > c['open'] and p1['close'] < p1['open']:
+        if c['close'] > p1['open'] and c['open'] < p1['close']:
+            signals['bullish_engulfing'] = True
+
+    if c['close'] < c['open'] and p1['close'] > p1['open']:
+        if c['close'] < p1['open'] and c['open'] > p1['close']:
+            signals['bearish_engulfing'] = True
+
+    # 2. Pinbars (Rejection wicks)
+    total_len = c['high'] - c['low']
+    if total_len > 0:
+        lower_wick = min(c['close'], c['open']) - c['low']
+        upper_wick = c['high'] - max(c['close'], c['open'])
+        
+        # Bullish Pinbar (Long lower wick rejecting lows)
+        if lower_wick > (total_len * 0.6) and upper_wick < (total_len * 0.2):
+            signals['bullish_pinbar'] = True
             
-    # Bearish Engulfing
-    if c1['close'] > c1['open'] and c2['close'] < c2['open']:
-        if c2['close'] < c1['open'] and c2['open'] > c1['close']:
-            return "BEARISH"
-    return "NONE"
+        # Bearish Pinbar (Long upper wick rejecting highs)
+        if upper_wick > (total_len * 0.6) and lower_wick < (total_len * 0.2):
+            signals['bearish_pinbar'] = True
 
-def detect_fvg(candles):
-    """Detects Fair Value Gaps in the last 3 candles."""
-    if len(candles) < 3: return "NONE", 0, 0
-    curr, prev2 = candles[-1], candles[-3]
+    # 3. Fair Value Gaps (FVG) - Smart Money Concept
+    # Bullish FVG: Gap between Candle 1 High and Candle 3 Low
+    if p3['high'] < p1['low']:
+        signals['bullish_fvg'] = True
     
-    if curr['low'] > prev2['high']:
-        return "BULLISH", curr['low'], prev2['high']
-    if curr['high'] < prev2['low']:
-        return "BEARISH", prev2['low'], curr['high']
-    return "NONE", 0, 0
+    # Bearish FVG: Gap between Candle 1 Low and Candle 3 High
+    if p3['low'] > p1['high']:
+        signals['bearish_fvg'] = True
 
-def detect_fractals(candles, window=2):
-    """Identifies swing highs and lows."""
-    highs, lows = [], []
-    if len(candles) < (window * 2 + 1): return [], []
-    for i in range(window, len(candles) - window):
-        curr = candles[i]
-        is_high = all(candles[i-j]['high'] <= curr['high'] and candles[i+j]['high'] <= curr['high'] for j in range(1, window + 1))
-        if is_high: highs.append(curr['high'])
-        is_low = all(candles[i-j]['low'] >= curr['low'] and candles[i+j]['low'] >= curr['low'] for j in range(1, window + 1))
-        if is_low: lows.append(curr['low'])
-    return highs, lows
-
-def detect_structure(candles):
-    """Determines basic market structure (Higher Highs/Lower Lows)."""
-    highs, lows = detect_fractals(candles)
-    if not highs or not lows: return "NEUTRAL"
-    current_close = candles[-1]['close']
-    if current_close > highs[-1]: return "BULLISH"
-    elif current_close < lows[-1]: return "BEARISH"
-    return "NEUTRAL"
+    return signals
