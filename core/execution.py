@@ -19,9 +19,11 @@ class MT5Connector:
         self.available_symbols = []
         self.running = False
         self.telegram_bot = None
+        
+        # New: Track the actual symbol reporting from MT5
+        self.active_symbol = None 
 
     def set_telegram(self, tg_bot):
-        """Sets the Telegram Bot instance for sending notifications."""
         self.telegram_bot = tg_bot
 
     def start(self):
@@ -45,33 +47,26 @@ class MT5Connector:
             logger.info("Execution Engine Stopped")
 
     def send_order(self, action, symbol, volume, sl, tp):
-        # MT5 Format: ACTION|SYMBOL|VOLUME|SL|TP|DEVIATION
         cmd = f"{action}|{symbol}|{volume}|{sl}|{tp}|10"
         with self.lock: 
             self.command_queue.append(cmd)
         logger.info(f"Order Queued: {cmd}")
-        
         if self.telegram_bot:
             self.telegram_bot.send_message(f"🚀 <b>Signal Sent:</b> {action} {symbol} {volume}")
 
     def close_position(self, symbol, mode="ALL"):
-        # Modes: ALL, WIN, LOSS
         cmd = f"CLOSE_{mode}|{symbol}"
         with self.lock: 
             self.command_queue.append(cmd)
         logger.info(f"Close Command Queued: {cmd}")
-        
         if self.telegram_bot:
             self.telegram_bot.send_message(f"🔄 <b>Close Command:</b> {mode} {symbol}")
 
     def change_symbol(self, symbol):
-        """Sends command to change the chart symbol on MT5."""
         cmd = f"CHANGE_SYMBOL|{symbol}"
         with self.lock:
             self.command_queue.append(cmd)
         logger.info(f"Symbol Change Queued: {symbol}")
-        
-        # --- FIX: Added Telegram Notification ---
         if self.telegram_bot:
             self.telegram_bot.send_message(f"🔀 <b>Symbol Changed:</b> Now trading {symbol}")
 
@@ -90,14 +85,13 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get('Content-Length', 0))
             
-            # --- TELEGRAM WEBHOOK (/telegram) ---
+            # --- TELEGRAM WEBHOOK ---
             if self.path == '/telegram':
                 body = self.rfile.read(length).decode('utf-8')
                 try:
                     data = json.loads(body)
                     if self.connector.telegram_bot:
                         self.connector.telegram_bot.process_webhook_update(data)
-                        
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b"OK")
@@ -106,19 +100,16 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     self.send_error(400)
                 return
 
-            # --- TRADINGVIEW WEBHOOK (/webhook) ---
+            # --- TRADINGVIEW WEBHOOK ---
             if self.path == '/webhook':
                 try:
                     body = self.rfile.read(length).decode('utf-8')
                     data = json.loads(body)
-                    
                     action = data.get('action', '').upper()
                     symbol = data.get('symbol', 'XAUUSD')
                     volume = float(data.get('volume', 0.01))
-                    
                     if action in ['BUY', 'SELL']:
                         self.connector.send_order(action, symbol, volume, 0, 0)
-                        
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(json.dumps({"status": "queued"}).encode())
@@ -126,11 +117,17 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     self.send_error(400)
                 return
 
-            # --- MT5 DATA SYNC (Form Data) ---
+            # --- MT5 DATA SYNC ---
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
-            # Candle Data
+            # 1. Capture Symbol from EA (This fixes the mismatch)
+            if 'symbol' in data:
+                ea_symbol = data['symbol'][0]
+                if ea_symbol:
+                    self.connector.active_symbol = ea_symbol
+
+            # 2. Candle Data
             if 'candles' in data:
                 raw_candles = data['candles'][0]
                 if raw_candles:
@@ -147,21 +144,17 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                             })
                     self.connector.last_candles = parsed_candles
 
-            # Parse Available Symbols
+            # 3. Available Symbols
             if 'all_symbols' in data:
                 raw_syms = data['all_symbols'][0]
                 if raw_syms:
-                    self.connector.available_symbols = raw_syms.split(',')
+                    clean_syms = [s.strip() for s in raw_syms.split(',') if s.strip()]
+                    self.connector.available_symbols = clean_syms
 
-            # Update Account Info
+            # 4. Account Info
             if 'balance' in data:
                 b_count = int(data.get('buy_count', [0])[0])
                 s_count = int(data.get('sell_count', [0])[0])
-                
-                # Extract Bid/Ask
-                bid_price = float(data.get('bid', [0.0])[0])
-                ask_price = float(data.get('ask', [0.0])[0])
-                
                 self.connector.account_info = {
                     'balance': float(data.get('balance', [0])[0]),
                     'equity': float(data.get('acct_equity', [0])[0]),
@@ -169,11 +162,11 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     'buy_count': b_count,
                     'sell_count': s_count,
                     'total_count': b_count + s_count,
-                    'bid': bid_price,
-                    'ask': ask_price
+                    'bid': float(data.get('bid', [0.0])[0]),
+                    'ask': float(data.get('ask', [0.0])[0])
                 }
 
-            # Send Commands
+            # 5. Send Queued Commands
             resp = "OK"
             with self.connector.lock:
                 if self.connector.command_queue:

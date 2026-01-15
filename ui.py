@@ -293,11 +293,13 @@ class TradingApp(ttk.Window):
         return f"[{time_str}] {record.getMessage()}"
 
     def _start_data_refresh(self):
+        # 1. Update Server Status
         if self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
         else:
             self.lbl_server.configure(text="SERVER: OFF", bootstyle="secondary-inverse")
 
+        # 2. Update Account Info
         if self.connector.account_info:
             info = self.connector.account_info
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
@@ -316,7 +318,16 @@ class TradingApp(ttk.Window):
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
             
+        # 3. FIX: Only update Dropdown if symbols actually changed
         if self.connector.available_symbols:
-             self.sym_combo['values'] = self.connector.available_symbols
+            current_values = self.sym_combo['values']
+            new_values = tuple(self.connector.available_symbols)
+            
+            # Check for difference to prevent UI reset/flicker
+            if current_values != new_values:
+                self.sym_combo['values'] = new_values
+                # Optional: If current selection is invalid, reset to first
+                if self.symbol_var.get() not in new_values and new_values:
+                    self.symbol_var.set(new_values[0])
             
         self.after(500, self._start_data_refresh)
