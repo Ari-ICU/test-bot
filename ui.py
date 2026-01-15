@@ -6,7 +6,6 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledText
-from tkinter.font import Font
 
 class QueueHandler(logging.Handler):
     """Class to send logging records to a queue"""
@@ -21,7 +20,7 @@ class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
         self.title("MT5 Algo Terminal")
-        self.geometry("1100x900") # Increased height slightly
+        self.geometry("1100x900") 
         
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
@@ -32,13 +31,12 @@ class TradingApp(ttk.Window):
         self.bot_running = False
         self.bot_thread = None
         
-        # UI Variables
+        # Defaults
         self.lot_var = tk.DoubleVar(value=0.01)
-        self.symbol_var = tk.StringVar(value="XAUUSD")
+        self.symbol_var = tk.StringVar(value="XAUUSD") # Default, will be overwritten by EA
         self.auto_trade_var = tk.BooleanVar(value=False)
-        self.max_pos_var = tk.IntVar(value=5) # Default Max Positions
+        self.max_pos_var = tk.IntVar(value=5) 
         
-        # Telegram Vars
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
         
@@ -56,29 +54,24 @@ class TradingApp(ttk.Window):
         logging.getLogger().addHandler(queue_handler)
 
     def _build_ui(self):
+        # (Same as before, abbreviated for clarity)
         header = ttk.Frame(self)
         header.pack(fill=X, padx=20, pady=15)
-        
         title_lbl = ttk.Label(header, text="MT5 AUTO-TRADER", font=("Roboto", 20, "bold"), bootstyle="inverse-dark")
         title_lbl.pack(side=LEFT)
-        
         status_frame = ttk.Frame(header)
         status_frame.pack(side=RIGHT)
-        
         self.lbl_server = ttk.Label(status_frame, text="SERVER: OFF", bootstyle="secondary-inverse", font=("Helvetica", 10, "bold"))
         self.lbl_server.pack(side=LEFT, padx=5)
-
         self.status_var = tk.StringVar(value="BOT: STOPPED")
         self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="danger-inverse", font=("Helvetica", 10, "bold"))
         self.lbl_status.pack(side=LEFT, padx=5)
 
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill=BOTH, expand=YES, padx=10, pady=10)
-        
         self.tab_dashboard = ttk.Frame(self.tabs)
         self.tab_console = ttk.Frame(self.tabs)
         self.tab_settings = ttk.Frame(self.tabs)
-        
         self.tabs.add(self.tab_dashboard, text="  Dashboard  ")
         self.tabs.add(self.tab_console, text="  Live Console  ")
         self.tabs.add(self.tab_settings, text="  Settings  ")
@@ -91,7 +84,6 @@ class TradingApp(ttk.Window):
         content = ttk.Frame(self.tab_dashboard)
         content.pack(fill=BOTH, expand=YES, padx=20, pady=20)
         
-        # Helper to create styled stat cards
         def create_stat_card(parent, title, var_name, color, initial_val="$0.00"):
             frame = ttk.Frame(parent, bootstyle=f"{color}")
             frame.pack(side=LEFT, fill=X, expand=YES, padx=5)
@@ -102,92 +94,64 @@ class TradingApp(ttk.Window):
             lbl.pack(anchor=E)
             setattr(self, var_name, lbl)
 
-        # 1. Financial Stats
         stats_frame = ttk.Frame(content)
         stats_frame.pack(fill=X, pady=(0, 10))
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
         create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success")
 
-        # 2. Market Data (Bid/Ask)
         market_frame = ttk.Frame(content)
         market_frame.pack(fill=X, pady=(0, 10))
         create_stat_card(market_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(market_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
 
-        # 3. Position Counts
         pos_frame = ttk.Frame(content)
         pos_frame.pack(fill=X, pady=(0, 20))
         create_stat_card(pos_frame, "BUY POSITIONS", "lbl_buy_count", "secondary", "0")
         create_stat_card(pos_frame, "SELL POSITIONS", "lbl_sell_count", "secondary", "0")
         create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "light", "0")
 
-        # 4. Controls & Config Wrapper
         ctrl_wrapper = ttk.Frame(content)
         ctrl_wrapper.pack(fill=BOTH, expand=YES)
 
-        # -- Left: Execution Controls --
         exec_frame = ttk.Labelframe(ctrl_wrapper, text=" Execution Controls ")
         exec_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 10))
-        
         grid_frame = ttk.Frame(exec_frame)
         grid_frame.pack(fill=X, padx=20, pady=15)
-        
-        btn_buy = ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline", command=lambda: self.manual_trade("BUY"))
-        btn_buy.pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
-        
-        btn_sell = ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline", command=lambda: self.manual_trade("SELL"))
-        btn_sell.pack(side=LEFT, fill=X, expand=YES, padx=(5, 5))
-        
+        ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline", command=lambda: self.manual_trade("BUY")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline", command=lambda: self.manual_trade("SELL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
         close_frame = ttk.Frame(exec_frame)
         close_frame.pack(fill=X, padx=20, pady=(5, 15))
-        
-        btn_close_win = ttk.Button(close_frame, text="CLOSE PROFIT", bootstyle="success", command=lambda: self.manual_close("WIN"))
-        btn_close_win.pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
-        
-        btn_close_loss = ttk.Button(close_frame, text="CLOSE LOSS", bootstyle="danger", command=lambda: self.manual_close("LOSS"))
-        btn_close_loss.pack(side=LEFT, fill=X, expand=YES, padx=(5, 5))
-        
-        btn_close_all = ttk.Button(close_frame, text="CLOSE ALL", bootstyle="warning", command=lambda: self.manual_close("ALL"))
-        btn_close_all.pack(side=LEFT, fill=X, expand=YES, padx=(5, 0))
+        ttk.Button(close_frame, text="CLOSE PROFIT", bootstyle="success", command=lambda: self.manual_close("WIN")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(close_frame, text="CLOSE LOSS", bootstyle="danger", command=lambda: self.manual_close("LOSS")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(close_frame, text="CLOSE ALL", bootstyle="warning", command=lambda: self.manual_close("ALL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
 
-        # -- Right: Configuration --
         conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ")
         conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
         
-        # Auto Trade Toggle
         auto_row = ttk.Frame(conf_frame)
         auto_row.pack(fill=X, padx=20, pady=10)
         ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
-        chk_auto = ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle)
-        chk_auto.pack(side=RIGHT)
+        ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle).pack(side=RIGHT)
 
-        # Symbol Changer
         sym_row = ttk.Frame(conf_frame)
         sym_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
-        
         sym_input_frame = ttk.Frame(sym_row)
         sym_input_frame.pack(fill=X, pady=2)
-        
         self.sym_combo = ttk.Combobox(sym_input_frame, textvariable=self.symbol_var, width=15, bootstyle="secondary")
         self.sym_combo.pack(side=LEFT, fill=X, expand=YES)
         self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
-        self.sym_combo.bind("<Return>", self.update_symbol)
-
-        # Lot Size
+        
         lot_row = ttk.Frame(conf_frame)
         lot_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(lot_row, text="Trade Volume (Lot):", font=("Helvetica", 10)).pack(anchor=W)
-        spin_lot = ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01, textvariable=self.lot_var, width=10)
-        spin_lot.pack(fill=X, pady=2)
-        
-        # --- NEW: Max Positions ---
+        ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
+        ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01, textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
+
         pos_row = ttk.Frame(conf_frame)
         pos_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(pos_row, text="Max Positions:", font=("Helvetica", 10)).pack(anchor=W)
-        spin_pos = ttk.Spinbox(pos_row, from_=1, to=100, increment=1, textvariable=self.max_pos_var, width=10)
-        spin_pos.pack(fill=X, pady=2)
+        ttk.Spinbox(pos_row, from_=1, to=100, increment=1, textvariable=self.max_pos_var, width=10).pack(fill=X, pady=2)
 
     def _build_console_tab(self):
         toolbar = ttk.Frame(self.tab_console)
@@ -203,27 +167,21 @@ class TradingApp(ttk.Window):
     def _build_settings_tab(self):
         container = ttk.Frame(self.tab_settings)
         container.pack(fill=BOTH, expand=YES, padx=30, pady=30)
-        
         tg_grp = ttk.Labelframe(container, text=" Telegram Bot Integration ")
         tg_grp.pack(fill=X, pady=10)
         tg_inner = ttk.Frame(tg_grp)
         tg_inner.pack(fill=X, padx=20, pady=20)
-        
         ttk.Label(tg_inner, text="Bot Token:", font=("Helvetica", 10)).pack(anchor=W)
         ttk.Entry(tg_inner, textvariable=self.tg_token_var, show="*").pack(fill=X, pady=5)
         ttk.Label(tg_inner, text="Chat ID:", font=("Helvetica", 10)).pack(anchor=W, pady=(10, 0))
-        
         chat_frame = ttk.Frame(tg_inner)
         chat_frame.pack(fill=X, pady=5)
         ttk.Entry(chat_frame, textvariable=self.tg_chat_var).pack(side=LEFT, fill=X, expand=YES)
         ttk.Button(chat_frame, text="Test Message", bootstyle="info-outline", command=self.test_telegram).pack(side=LEFT, padx=(10, 0))
         ttk.Button(tg_inner, text="Update Telegram Credentials", bootstyle="primary", command=self.update_telegram).pack(fill=X, pady=15)
-        
         info_grp = ttk.Labelframe(container, text=" Webhook Info ")
         info_grp.pack(fill=X, pady=10)
-        inner_info = ttk.Frame(info_grp)
-        inner_info.pack(fill=X, padx=20, pady=20) 
-        ttk.Label(inner_info, text=f"Local URL: http://127.0.0.1:{self.connector.port}/telegram", font=("Consolas", 10)).pack(anchor=W)
+        ttk.Label(info_grp, text=f"Local URL: http://127.0.0.1:{self.connector.port}/telegram", font=("Consolas", 10), padding=20).pack(anchor=W)
 
     def on_auto_trade_toggle(self):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
@@ -255,8 +213,6 @@ class TradingApp(ttk.Window):
             self.bot_thread = threading.Thread(target=self.bot_loop_callback, args=(self,), daemon=True)
             self.bot_thread.start()
             logging.info("System Engine Started.")
-        else:
-            pass
 
     def manual_trade(self, action):
         try: vol = float(self.lot_var.get())
@@ -293,13 +249,11 @@ class TradingApp(ttk.Window):
         return f"[{time_str}] {record.getMessage()}"
 
     def _start_data_refresh(self):
-        # 1. Update Server Status
         if self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
         else:
             self.lbl_server.configure(text="SERVER: OFF", bootstyle="secondary-inverse")
 
-        # 2. Update Account Info
         if self.connector.account_info:
             info = self.connector.account_info
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
@@ -308,25 +262,31 @@ class TradingApp(ttk.Window):
             p_prefix = "+" if prof >= 0 else ""
             self.lbl_profit.configure(text=f"{p_prefix}${prof:,.2f}")
             
-            # Update Bid/Ask
-            bid = info.get('bid', 0.0)
-            ask = info.get('ask', 0.0)
-            self.lbl_bid.configure(text=f"{bid:.5f}")
-            self.lbl_ask.configure(text=f"{ask:.5f}")
+            self.lbl_bid.configure(text=f"{info.get('bid', 0.0):.5f}")
+            self.lbl_ask.configure(text=f"{info.get('ask', 0.0):.5f}")
             
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
             
-        # 3. FIX: Only update Dropdown if symbols actually changed
+        # --- NEW: AUTO-SYNC UI SYMBOL WITH EA ---
+        if self.connector.active_symbol:
+            current_ui_sym = self.symbol_var.get()
+            real_ea_sym = self.connector.active_symbol
+            
+            # If UI is on XAUUSD (default) but EA says BTC, update UI immediately
+            if current_ui_sym == "XAUUSD" and real_ea_sym != "XAUUSD":
+                self.symbol_var.set(real_ea_sym)
+                logging.info(f"Auto-Sync: UI updated to match EA symbol ({real_ea_sym})")
+
+        # --- NEW: CLEAN SYMBOL LIST UPDATE ---
         if self.connector.available_symbols:
             current_values = self.sym_combo['values']
             new_values = tuple(self.connector.available_symbols)
             
-            # Check for difference to prevent UI reset/flicker
             if current_values != new_values:
                 self.sym_combo['values'] = new_values
-                # Optional: If current selection is invalid, reset to first
+                # Ensure current selection is valid
                 if self.symbol_var.get() not in new_values and new_values:
                     self.symbol_var.set(new_values[0])
             
