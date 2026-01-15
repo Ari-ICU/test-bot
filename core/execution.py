@@ -16,6 +16,7 @@ class MT5Connector:
         self.lock = threading.Lock()
         self.account_info = {}
         self.last_candles = []
+        self.available_symbols = [] # Store symbols from MT5
         self.running = False
         self.telegram_bot = None
 
@@ -141,6 +142,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                 'time': int(parts[4])
                             })
                     self.connector.last_candles = parsed_candles
+
+            # Parse Available Symbols
+            if 'all_symbols' in data:
+                raw_syms = data['all_symbols'][0]
+                if raw_syms:
+                    self.connector.available_symbols = raw_syms.split(',')
 
             # Update Account Info
             if 'balance' in data:
