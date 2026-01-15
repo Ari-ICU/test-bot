@@ -1,7 +1,7 @@
 import time
 import logging
 from logging.handlers import RotatingFileHandler  # Added for real-time file logging
-from config import Config
+from bot_settings import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager
 from core.session import is_market_open

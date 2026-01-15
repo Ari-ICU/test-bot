@@ -21,6 +21,8 @@ venv/
 env/
 .env
 
+config.json
+
 # IDE specific files
 .vscode/
 .idea/
