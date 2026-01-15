@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Configuration & Secrets (IMPORTANT)
+# These files contain your API keys, bot tokens, and account details
+config.json
+config.py
+
+# Logs and databases
+*.log
+bot_activity.log
+*.sqlite3
+
+# MQL5 Compiled files
+*.ex5
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE specific files
+.vscode/
+.idea/
