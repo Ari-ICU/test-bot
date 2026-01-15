@@ -24,9 +24,11 @@ def detect_patterns(candles):
         'bearish_flag': False,
         'supply_zone': False,
         'demand_zone': False,
-        'double_top': False,    # NEW
-        'double_bottom': False, # NEW
-        'inside_bar': False     # NEW
+        'double_top': False,   
+        'double_bottom': False,  
+        'inside_bar': False,    
+        'turtle_soup_buy': False,
+        'turtle_soup_sell': False
     }
 
     # 1. Engulfing Patterns
@@ -103,5 +105,18 @@ def detect_patterns(candles):
     # Current candle is completely inside previous candle
     if c['high'] < p1['high'] and c['low'] > p1['low']:
         signals['inside_bar'] = True
+
+    # 8. Turtle Soup (CRT) - 20 Period Fakeout
+    if len(df) >= 20:
+        prev_20_high = df['high'].iloc[-21:-1].max()
+        prev_20_low = df['low'].iloc[-21:-1].min()
+        
+        # CRT Buy: Price drops below 20-period low but closes back above it
+        if p1['low'] < prev_20_low and c['close'] > prev_20_low:
+            signals['turtle_soup_buy'] = True
+            
+        # CRT Sell: Price breaks above 20-period high but closes back below it
+        if p1['high'] > prev_20_high and c['close'] < prev_20_high:
+            signals['turtle_soup_sell'] = True
 
     return signals

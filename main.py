@@ -11,6 +11,7 @@ from ui import TradingApp
 import strategy.trend_following as trend
 import strategy.reversal as reversal
 import strategy.breakout as breakout
+import strategy.tbs_turtle as tbs_turtle
 
 # --- Console Logger (Keeps the technical details) ---
 class CustomFormatter(logging.Formatter):
@@ -92,6 +93,7 @@ def bot_logic(app):
             decisions.append(trend.analyze_trend_setup(candles))
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
             decisions.append(breakout.analyze_breakout_setup(candles))
+            decisions.append(tbs_turtle.analyze_tbs_turtle_setup(candles))
             
             final_action = "NEUTRAL"
             execution_reason = ""

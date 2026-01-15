@@ -84,3 +84,22 @@ class Indicators:
         upper = sma + (std * std_dev)
         lower = sma - (std * std_dev)
         return upper, lower
+
+    @staticmethod
+    def calculate_keltner_channels(df, period=20, multiplier=1.5):
+        """Keltner Channels using ATR"""
+        ema = Indicators.calculate_ema(df['close'], period)
+        atr = Indicators.calculate_atr(df, period)
+        upper = ema + (multiplier * atr)
+        lower = ema - (multiplier * atr)
+        return upper, lower
+
+    @staticmethod
+    def is_bollinger_squeeze(df, period=20):
+        """Returns True if BB is inside Keltner Channels (The Squeeze)"""
+        bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'], period, 2)
+        kc_upper, kc_lower = Indicators.calculate_keltner_channels(df, period, 1.5)
+        
+        # Squeeze is active when BB is narrower than KC
+        squeeze = (bb_upper < kc_upper) and (bb_lower > kc_lower)
+        return squeeze
