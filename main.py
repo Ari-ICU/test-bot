@@ -21,8 +21,6 @@ class CustomFormatter(logging.Formatter):
     bold_red = "\x1b[31;1m"
     blue = "\x1b[34;20m"
     reset = "\x1b[0m"
-    
-    # Simple, clean format: [TIME] [LEVEL] Message
     format_str = "%(asctime)s | %(levelname)-8s | %(message)s"
 
     FORMATS = {
@@ -38,7 +36,6 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(log_fmt, datefmt="%H:%M:%S")
         return formatter.format(record)
 
-# Setup Logger
 handler = logging.StreamHandler()
 handler.setFormatter(CustomFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
@@ -47,9 +44,9 @@ logger = logging.getLogger("Main")
 def get_symbol_category(symbol):
     """Returns 'CRYPTO' or 'FOREX' based on symbol name."""
     s = symbol.upper()
-    if "BTC" in s or "ETH" in s or "XRP" in s or "SOL" in s:
+    if any(x in s for x in ["BTC", "ETH", "XRP", "SOL", "COIN"]):
         return "CRYPTO"
-    return "FOREX" # Default for XAU, EUR, USD, etc.
+    return "FOREX"
 
 def bot_logic(app):
     conf = Config()
@@ -57,7 +54,7 @@ def bot_logic(app):
     risk = app.risk
     news_filter = NewsFilter(conf.get('sources', []))
     
-    logger.info("✅ Bot logic loop initialized.")
+    logger.info(f"✅ Bot logic initialized.")
     
     while app.bot_running:
         try:
@@ -66,39 +63,54 @@ def bot_logic(app):
                 time.sleep(1)
                 continue
 
-            # 2. Market Status Check
+            # 2. Check Max Positions Limit (FROM UI)
+            # Retrieve max positions dynamically from the UI
+            try:
+                max_positions = int(app.max_pos_var.get())
+            except:
+                max_positions = 10 # Default fallback
+            
+            current_trades = connector.account_info.get('total_count', 0)
+            if current_trades >= max_positions:
+                # Log only once every 10 seconds to avoid spamming
+                if int(time.time()) % 10 == 0:
+                    logger.debug(f"⚠️ Max positions reached ({current_trades}/{max_positions}). Waiting...")
+                time.sleep(1)
+                continue
+
+            # 3. Market Status Check
             if not is_market_open("Auto"):
                 time.sleep(5)
                 continue
 
-            # 3. Process Data
+            # 4. Process Data
             candles = connector.get_latest_candles()
             if not candles or len(candles) < 20: 
                 time.sleep(1)
                 continue
 
-            # 4. Strategy Analysis
+            # 5. Strategy Analysis
             decisions = []
             
-            # --- A. Check News Sentiment First ---
+            # --- A. Check News Sentiment (Global Scan) ---
             news_action, news_reason, news_category = news_filter.get_sentiment_signal()
             
             if news_action != "NEUTRAL":
-                # CHECK: Does News Category match Active Symbol?
                 active_symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
                 symbol_category = get_symbol_category(active_symbol)
                 
                 if news_category == "ALL" or news_category == symbol_category:
                     decisions.append((news_action, news_reason))
+                    logger.info(f"📰 News Signal: {news_action} for {symbol_category} ({news_reason})")
                 else:
-                    logger.warning(f"⚠️ News Mismatch Ignored: {news_category} News ({news_reason}) vs Active {symbol_category} Symbol ({active_symbol})")
+                    logger.warning(f"⚠️ Skipping News: {news_category} news doesn't match active {symbol_category} symbol.")
             
-            # --- B. Technical Strategies ---
+            # --- B. Technical Strategies (Active Chart Only) ---
             decisions.append(trend.analyze_trend_setup(candles))
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
             decisions.append(breakout.analyze_breakout_setup(candles))
             
-            # 5. Aggregate Decisions
+            # 6. Aggregate Decisions
             final_action = "NEUTRAL"
             execution_reason = ""
             
@@ -106,10 +118,9 @@ def bot_logic(app):
                 if action != "NEUTRAL":
                     final_action = action
                     execution_reason = reasons
-                    logger.info(f"🔎 Signal Found: {action} | Reason: {reasons}")
                     break
             
-            # 6. Execute Trade
+            # 7. Execute Trade
             if final_action in ["BUY", "SELL"]:
                 lot = 0.01
                 if hasattr(app, 'lot_var'):
@@ -118,17 +129,15 @@ def bot_logic(app):
                 
                 symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
 
-                # Use Real-Time Price
+                # Use Live Price
                 info = connector.account_info
                 current_price = info.get('ask', 0.0) if final_action == "BUY" else info.get('bid', 0.0)
-                
-                if current_price == 0.0:
-                    current_price = candles[-1]['close']
+                if current_price == 0.0: current_price = candles[-1]['close']
 
                 sl, tp = risk.calculate_sl_tp(current_price, final_action, 1.0)
                 
-                connector.send_order(final_action, symbol, lot, sl, tp)
                 logger.info(f"🚀 EXECUTING: {final_action} {symbol} | Price: {current_price} | {execution_reason}")
+                connector.send_order(final_action, symbol, lot, sl, tp)
                 
                 cooldown = 300 if "News" in execution_reason else 60
                 time.sleep(cooldown)
@@ -139,17 +148,14 @@ def bot_logic(app):
             logger.error(f"❌ Logic Error: {e}")
             time.sleep(5)
 
-# ... (Rest of main function remains same)
 def main():
     conf = Config()
     
-    # 1. Setup Connector
     connector = MT5Connector(
         host=conf.get('mt5', {}).get('host', '127.0.0.1'),
         port=conf.get('mt5', {}).get('port', 8001)
     )
     
-    # 2. Setup Telegram
     tg_conf = conf.get('telegram', {})
     telegram_bot = TelegramBot(
         token=tg_conf.get('bot_token', ''),
@@ -165,8 +171,6 @@ def main():
         return
 
     risk = RiskManager(conf.data)
-    
-    # 3. Setup UI
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
     try:

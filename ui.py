@@ -21,7 +21,7 @@ class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
         self.title("MT5 Algo Terminal")
-        self.geometry("1100x850")
+        self.geometry("1100x900") # Increased height slightly
         
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
@@ -36,6 +36,7 @@ class TradingApp(ttk.Window):
         self.lot_var = tk.DoubleVar(value=0.01)
         self.symbol_var = tk.StringVar(value="XAUUSD")
         self.auto_trade_var = tk.BooleanVar(value=False)
+        self.max_pos_var = tk.IntVar(value=5) # Default Max Positions
         
         # Telegram Vars
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
@@ -104,15 +105,13 @@ class TradingApp(ttk.Window):
         # 1. Financial Stats
         stats_frame = ttk.Frame(content)
         stats_frame.pack(fill=X, pady=(0, 10))
-        
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
         create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success")
 
-        # 2. Market Data (Bid/Ask) - NEW SECTION
+        # 2. Market Data (Bid/Ask)
         market_frame = ttk.Frame(content)
         market_frame.pack(fill=X, pady=(0, 10))
-        
         create_stat_card(market_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(market_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
 
@@ -158,31 +157,37 @@ class TradingApp(ttk.Window):
         
         # Auto Trade Toggle
         auto_row = ttk.Frame(conf_frame)
-        auto_row.pack(fill=X, padx=20, pady=15)
+        auto_row.pack(fill=X, padx=20, pady=10)
         ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
         chk_auto = ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle)
         chk_auto.pack(side=RIGHT)
 
         # Symbol Changer
         sym_row = ttk.Frame(conf_frame)
-        sym_row.pack(fill=X, padx=20, pady=10)
+        sym_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
         
         sym_input_frame = ttk.Frame(sym_row)
-        sym_input_frame.pack(fill=X, pady=5)
+        sym_input_frame.pack(fill=X, pady=2)
         
-        self.sym_combo = ttk.Combobox(sym_input_frame, textvariable=self.symbol_var, width=13, bootstyle="secondary")
-        self.sym_combo.pack(side=LEFT, padx=(0, 5))
-        
-        btn_sym = ttk.Button(sym_input_frame, text="Set", bootstyle="info-outline", command=self.update_symbol, width=6)
-        btn_sym.pack(side=LEFT)
+        self.sym_combo = ttk.Combobox(sym_input_frame, textvariable=self.symbol_var, width=15, bootstyle="secondary")
+        self.sym_combo.pack(side=LEFT, fill=X, expand=YES)
+        self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
+        self.sym_combo.bind("<Return>", self.update_symbol)
 
         # Lot Size
         lot_row = ttk.Frame(conf_frame)
-        lot_row.pack(fill=X, padx=20, pady=10)
+        lot_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(lot_row, text="Trade Volume (Lot):", font=("Helvetica", 10)).pack(anchor=W)
         spin_lot = ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01, textvariable=self.lot_var, width=10)
-        spin_lot.pack(fill=X, pady=5)
+        spin_lot.pack(fill=X, pady=2)
+        
+        # --- NEW: Max Positions ---
+        pos_row = ttk.Frame(conf_frame)
+        pos_row.pack(fill=X, padx=20, pady=5)
+        ttk.Label(pos_row, text="Max Positions:", font=("Helvetica", 10)).pack(anchor=W)
+        spin_pos = ttk.Spinbox(pos_row, from_=1, to=100, increment=1, textvariable=self.max_pos_var, width=10)
+        spin_pos.pack(fill=X, pady=2)
 
     def _build_console_tab(self):
         toolbar = ttk.Frame(self.tab_console)
@@ -224,10 +229,11 @@ class TradingApp(ttk.Window):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
         logging.info(f"Auto-Trading {state}")
 
-    def update_symbol(self):
+    def update_symbol(self, event=None):
         sym = self.symbol_var.get()
-        self.connector.change_symbol(sym)
-        logging.info(f"Changing active symbol to {sym}...")
+        if sym:
+            self.connector.change_symbol(sym)
+            logging.info(f"Changing active symbol to {sym}...")
 
     def test_telegram(self):
         if self.telegram_bot:
