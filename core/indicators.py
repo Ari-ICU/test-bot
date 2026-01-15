@@ -47,25 +47,40 @@ class Indicators:
         atr = Indicators.calculate_atr(df, period)
         hl2 = (df['high'] + df['low']) / 2
         
-        # Calculate Basic Bands
         final_upperband = hl2 + (multiplier * atr)
         final_lowerband = hl2 - (multiplier * atr)
         
-        supertrend = [True] * len(df) # True = Green (Buy), False = Red (Sell)
+        supertrend = [True] * len(df)
         
         for i in range(1, len(df)):
-            # Trend Logic
             if df['close'].iloc[i] > final_upperband.iloc[i-1]:
                 supertrend[i] = True
             elif df['close'].iloc[i] < final_lowerband.iloc[i-1]:
                 supertrend[i] = False
             else:
                 supertrend[i] = supertrend[i-1]
-                
-                # Adjust bands to not move against the trend
                 if supertrend[i] and final_lowerband.iloc[i] < final_lowerband.iloc[i-1]:
                     final_lowerband.iloc[i] = final_lowerband.iloc[i-1]
                 if not supertrend[i] and final_upperband.iloc[i] > final_upperband.iloc[i-1]:
                     final_upperband.iloc[i] = final_upperband.iloc[i-1]
                     
         return pd.Series(supertrend, index=df.index), final_upperband, final_lowerband
+
+    @staticmethod
+    def calculate_macd(series, fast=12, slow=26, signal=9):
+        """MACD: Moving Average Convergence Divergence"""
+        exp1 = series.ewm(span=fast, adjust=False).mean()
+        exp2 = series.ewm(span=slow, adjust=False).mean()
+        macd = exp1 - exp2
+        signal_line = macd.ewm(span=signal, adjust=False).mean()
+        histogram = macd - signal_line
+        return macd, signal_line, histogram
+
+    @staticmethod
+    def calculate_bollinger_bands(series, period=20, std_dev=2):
+        """Bollinger Bands"""
+        sma = series.rolling(window=period).mean()
+        std = series.rolling(window=period).std()
+        upper = sma + (std * std_dev)
+        lower = sma - (std * std_dev)
+        return upper, lower
