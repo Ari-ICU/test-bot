@@ -6,27 +6,39 @@ class RiskManager:
         self.take_profit_pips = self.config.get('take_profit_pips', 100)
 
     def get_lot_size(self, balance):
-        # Simplified lot calculation
-        lot = self.config.get('lot_size', 0.01)
-        return lot
+        # Default to min lot
+        return self.config.get('lot_size', 0.01)
 
     def calculate_sl_tp(self, price, action, atr):
         """
-        Calculates SL and TP levels based on action and price.
-        Assumes 'price' is the entry price.
+        Calculates SL and TP levels with validation for Crypto & Forex.
+        Enforces a minimum distance to avoid Error 10016 (Invalid Stops).
         """
-        # Convert pips to points (assuming 1 pip = 10 points for standard 5-digit broker)
-        # For XAUUSD, 1 pip usually = $0.10 or $1.00 depending on contract. 
-        # Here we use a simpler points mapping: 1.00 price movement ~ 100 points
         
-        sl_dist = 5.0 # $5 move in Gold
-        tp_dist = 10.0 # $10 move in Gold
-        
-        # If ATR provided, use it for dynamic stops
+        # 1. Base Distance Calculation
         if atr > 0:
+            # Use ATR for dynamic volatility-based stops
             sl_dist = atr * 1.5
             tp_dist = atr * 3.0
+        else:
+            # Fallback if ATR is 0 (e.g., first run or error)
+            # Default to 0.1% of price (Safe for both Forex and Crypto)
+            sl_dist = price * 0.001 
+            tp_dist = price * 0.002
 
+        # 2. SAFETY CHECK: Enforce Minimum Distance
+        # Brokers reject stops that are too close (Error 10016).
+        # We enforce a minimum distance of 0.05% of the price.
+        # Example: BTC $96,000 -> Min Stop $48.
+        min_dist = price * 0.0005 
+        
+        if sl_dist < min_dist:
+            sl_dist = min_dist
+            # Adjust TP to ensure we still aim for at least 1:2 Risk/Reward
+            if tp_dist < sl_dist * 2:
+                tp_dist = sl_dist * 2
+
+        # 3. Calculate Levels
         if action == "BUY":
             sl = price - sl_dist
             tp = price + tp_dist
@@ -34,6 +46,8 @@ class RiskManager:
             sl = price + sl_dist
             tp = price - tp_dist
         else:
-            sl, tp = 0, 0
-            
-        return round(sl, 3), round(tp, 3)
+            return 0.0, 0.0
+
+        # 4. Rounding
+        # Rounding to 2 decimal places is standard/safe for most MT5 symbols
+        return round(sl, 2), round(tp, 2)
