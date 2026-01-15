@@ -58,8 +58,6 @@ class TelegramBot:
             else:
                 response = "⚠️ No connection."
 
-        # Add other commands here as needed...
-
         if response:
             self.send_message(response, chat_id)
 
@@ -97,15 +95,11 @@ class TelegramLogHandler(logging.Handler):
                 emoji = "✅"
                 header = "SYSTEM"
             else:
-                # Skip boring INFO logs (optional)
-                # return 
                 emoji = "ℹ️"
                 header = "INFO"
 
             # 2. Format the Message (Clean HTML)
-            # We strip the raw message to remove extra spaces
             clean_msg = msg.replace("EXECUTING:", "").replace("TP Hit:", "").replace("SL Hit:", "").strip()
-            
             formatted_text = f"{emoji} <b>{header}</b>\n{clean_msg}"
 
             # 3. Send

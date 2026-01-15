@@ -86,16 +86,18 @@ def bot_logic(app):
                 continue
 
             # --- Strategies ---
-            decisions = []
             news_action, news_reason, news_category = news_filter.get_sentiment_signal(symbol)
             if news_action != "NEUTRAL":
                 decisions.append((news_action, f"News: {news_reason}"))
             
+            # Then check high-conviction setups (TBS and ICT)
+            decisions.append(tbs_turtle.analyze_tbs_turtle_setup(candles)) 
+            decisions.append(ict_strat.analyze_ict_setup(candles))
+            
+            # Lastly check general strategies
             decisions.append(trend.analyze_trend_setup(candles))
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
             decisions.append(breakout.analyze_breakout_setup(candles))
-            decisions.append(tbs_turtle.analyze_tbs_turtle_setup(candles))
-            decisions.append(ict_strat.analyze_ict_setup(candles))
             
             final_action = "NEUTRAL"
             execution_reason = ""
