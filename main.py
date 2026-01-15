@@ -86,22 +86,35 @@ def bot_logic(app):
                 continue
 
             # --- Strategies ---
+            decisions = []
+            
+            # 1. News Filter (Highest priority - safety first)
             news_action, news_reason, news_category = news_filter.get_sentiment_signal(symbol)
             if news_action != "NEUTRAL":
                 decisions.append((news_action, f"News: {news_reason}"))
             
-            # Then check high-conviction setups (TBS and ICT)
-            decisions.append(tbs_turtle.analyze_tbs_turtle_setup(candles)) 
+            # 2. HIGH CONVICTION: TBS + Turtle Soup
+            # Moved up to prioritize squeeze-release fakeouts
+            decisions.append(tbs_turtle.analyze_tbs_turtle_setup(candles))
+            
+            # 3. HIGH CONVICTION: ICT Silver Bullet
+            # Moved up to prioritize Market Structure Shifts with Displacement
             decisions.append(ict_strat.analyze_ict_setup(candles))
             
-            # Lastly check general strategies
+            # 4. Standard Trend Following
             decisions.append(trend.analyze_trend_setup(candles))
+            
+            # 5. Standard Reversal
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
+            
+            # 6. Standard Breakout
             decisions.append(breakout.analyze_breakout_setup(candles))
             
+            # --- Execution Logic ---
             final_action = "NEUTRAL"
             execution_reason = ""
             
+            # The bot executes the FIRST signal that is not "NEUTRAL"
             for action, reasons in decisions:
                 if action != "NEUTRAL":
                     final_action = action
