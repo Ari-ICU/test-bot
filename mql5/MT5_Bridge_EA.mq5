@@ -1,24 +1,28 @@
 #property strict
-#property version "3.3"
+#property version "3.4"
 #property description "HTTP Bridge - Stable ZigZag & Auto Trade & CRT Monitor"
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
 
-int OnInit() { EventSetMillisecondTimer(500); return INIT_SUCCEEDED; }
-void OnDeinit(const int reason) { EventKillTimer(); ObjectsDeleteAll(0, "Py_"); }
+int OnInit() { 
+   EventSetMillisecondTimer(500); 
+   // Enable WebRequest for the URL automatically if possible (Manual step usually required)
+   return INIT_SUCCEEDED; 
+}
 
-double CalculateHistoryProfit(datetime from_date)
-{
+void OnDeinit(const int reason) { 
+   EventKillTimer(); 
+   ObjectsDeleteAll(0, "Py_"); 
+}
+
+double CalculateHistoryProfit(datetime from_date) {
     double profit = 0;
-    if(HistorySelect(from_date, TimeCurrent()))
-    {
+    if(HistorySelect(from_date, TimeCurrent())) {
         int total = HistoryDealsTotal();
-        for(int i=0; i<total; i++)
-        {
+        for(int i=0; i<total; i++) {
             ulong ticket = HistoryDealGetTicket(i);
-            if(ticket > 0)
-            {
+            if(ticket > 0) {
                 profit += HistoryDealGetDouble(ticket, DEAL_PROFIT);
                 profit += HistoryDealGetDouble(ticket, DEAL_COMMISSION);
                 profit += HistoryDealGetDouble(ticket, DEAL_SWAP);
@@ -28,8 +32,7 @@ double CalculateHistoryProfit(datetime from_date)
     return profit;
 }
 
-void OnTimer()
-{
+void OnTimer() {
     if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)) {
         Print("⚠️ Algo Trading is Disabled! Enable 'Algo Trading' button.");
     }
@@ -69,6 +72,7 @@ void OnTimer()
     
     int available = iBars(_Symbol, _Period);
     if(candles_to_send > available) candles_to_send = available;
+
     for(int i=0; i<candles_to_send; i++) {
         candle_history += DoubleToString(iHigh(_Symbol, _Period, i), _Digits) + "," +
                           DoubleToString(iLow(_Symbol, _Period, i), _Digits) + "," +
@@ -99,8 +103,6 @@ void OnTimer()
     long acct_leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
     double acct_equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-    // [FIX START] -----------------------------------------------------------
-    // Calculate Profit History (Daily, Weekly, Monthly)
     MqlDateTime dt; TimeCurrent(dt);
     dt.hour = 0; dt.min = 0; dt.sec = 0;
     datetime day_start = StructToTime(dt);
@@ -115,7 +117,6 @@ void OnTimer()
     double prof_week = CalculateHistoryProfit(week_start);
     double prof_month = CalculateHistoryProfit(month_start);
 
-    // --- VISUAL DASHBOARD ON CHART (Top Left Corner) ---
     string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE ===\n";
     dashboard += "💰 Balance: " + DoubleToString(balance, 2) + "\n";
     dashboard += "📆 Today: " + DoubleToString(prof_today, 2) + "\n";
@@ -123,8 +124,6 @@ void OnTimer()
     dashboard += "🗓️ Month: " + DoubleToString(prof_month, 2) + "\n";
     dashboard += "-----------------------------";
     Comment(dashboard);
-    // ---------------------------------------------------
-    // [FIX END] -------------------------------------------------------------
 
     string post_str = "symbol=" + _Symbol + 
                       "&bid=" + DoubleToString(bid, _Digits) + 
@@ -147,18 +146,22 @@ void OnTimer()
                       "&all_symbols=" + symbols_list +
                       "&candles=" + candle_history +
                       "&active_trades=" + active_trades;
+
     SendRequest(post_str);
 }
 
-void SendRequest(string data_str)
-{
+void SendRequest(string data_str) {
     char post_char[]; StringToCharArray(data_str, post_char);
     uchar post_uchar[]; ArrayResize(post_uchar, ArraySize(post_char));
     for(int i=0; i<ArraySize(post_char); i++) post_uchar[i] = (uchar)post_char[i];
     
     uchar result_uchar[]; string response_headers;
     int http_res = WebRequest("POST", ServerURL, "Content-Type: application/x-www-form-urlencoded\r\n", 2000, post_uchar, result_uchar, response_headers);
-    if(http_res == -1 && GetLastError() == 4060) Print("⚠️ ERROR: You must enable WebRequest for ", ServerURL, " in Tools -> Options -> Expert Advisors");
+    
+    if(http_res == -1 && GetLastError() == 4060) {
+        Print("⚠️ ERROR: Enable WebRequest for ", ServerURL, " in Tools -> Options -> Expert Advisors");
+    }
+    
     if(ArraySize(result_uchar) > 0) {
         string result_str = CharArrayToString(result_uchar);
         if(result_str != "OK" && result_str != "") {
@@ -180,11 +183,27 @@ color StringToColorRGB(string rgb_str) {
     return (color)StringToInteger(rgb_str);
 }
 
-void ProcessCommand(string cmd)
-{
+// --- FIX: Robust Filling Mode Detection ---
+ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol) {
+    long mode = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+    if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;  // Prefer FOK
+    if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;  // Then IOC
+    return ORDER_FILLING_RETURN;                                    // Default
+}
+
+void ProcessCommand(string cmd) {
     string parts[];
     if(StringSplit(cmd, '|', parts) < 2) return;
-    string action = parts[0]; string symbol = parts[1];
+    
+    string action = parts[0]; 
+    string symbol = parts[1];
+    
+    // --- FIX: Auto-correct Symbol Mismatch ---
+    // If python sends "XAUUSD" but chart is "XAUUSDm", force chart symbol
+    if(!SymbolSelect(symbol, true)) {
+        Print("⚠️ Symbol '", symbol, "' not found! Defaulting to chart symbol: ", _Symbol);
+        symbol = _Symbol;
+    }
     
     if(action == "CHANGE_TF") {
         if(ArraySize(parts) < 3) return;
@@ -198,43 +217,37 @@ void ProcessCommand(string cmd)
         return;
     }
     
+    // Visual Commands
     if(action == "DRAW_RECT") {
         if(ArraySize(parts) < 7) return;
         color c = StringToColorRGB(parts[6]); 
-        Print("[Py-Visual] DRAW_RECT: ", parts[1], " P1:", parts[2], " P2:", parts[3]);
         DrawRect(parts[1], StringToDouble(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), (int)StringToInteger(parts[5]), c);
         return;
     }
-
     if(action == "DRAW_LABEL") {
         if(ArraySize(parts) < 5) return;
         color c = StringToColorRGB(parts[3]);
-        Print("[Py-Visual] DRAW_LABEL: ", parts[1], " Text:", parts[2]);
         DrawLabel(parts[1], parts[2], c, (int)StringToInteger(parts[4]));
         return;
     }
-
     if(action == "DRAW_TEXT") {
         if(ArraySize(parts) < 6) return;
         color c = StringToColorRGB(parts[4]);
         DrawText(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), c, parts[5]);
         return;
     }
-
     if(action == "DRAW_TREND") {
         if(ArraySize(parts) < 8) return;
         color c = StringToColorRGB(parts[6]);
         DrawTrend(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), StringToDouble(parts[5]), c, (int)StringToInteger(parts[7]));
         return;
     }
-
     if(action == "DRAW_LINE") {
         if(ArraySize(parts) < 5) return;
         color c = StringToColorRGB(parts[3]);
         DrawHLine(parts[1], StringToDouble(parts[2]), c, (int)StringToInteger(parts[4]));
         return;
     }
-
     if(action == "CLEAN_CHART") { ObjectsDeleteAll(0, "Py_"); return; }
     
     if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") { 
@@ -248,7 +261,7 @@ void ProcessCommand(string cmd)
     double sl = (ArraySize(parts) >= 4) ? StringToDouble(parts[3]) : 0;
     double tp = (ArraySize(parts) >= 5) ? StringToDouble(parts[4]) : 0;
     double price = (ArraySize(parts) >= 6) ? StringToDouble(parts[5]) : 0;
-    
+
     if(action == "GET_HISTORY") {
         if(ArraySize(parts) < 3) return;
         int count = (int)StringToInteger(parts[2]);
@@ -268,38 +281,103 @@ void ProcessCommand(string cmd)
     else if(action == "CLOSE_TICKET") CloseTicket((long)StringToInteger(parts[1]));
 }
 
-ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol) {
-    long mode = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
-    if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
-    if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
-    return ORDER_FILLING_RETURN;
+// --- FIX: Added Price Normalization ---
+void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
+    MqlTradeRequest r;
+    MqlTradeResult res;
+    ZeroMemory(r); ZeroMemory(res);
+    
+    int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS); // Get correct digits for symbol
+    
+    r.action = TRADE_ACTION_DEAL; 
+    r.symbol = s; 
+    r.volume = v; 
+    r.type = t; 
+    r.price = (t==ORDER_TYPE_BUY) ? SymbolInfoDouble(s,SYMBOL_ASK) : SymbolInfoDouble(s,SYMBOL_BID); 
+    
+    // Normalize SL/TP to prevent Invalid Request (10013)
+    if(sl > 0) r.sl = NormalizeDouble(sl, digits);
+    if(tp > 0) r.tp = NormalizeDouble(tp, digits);
+    
+    r.deviation = 20;
+    r.type_filling = GetFillingMode(s); 
+    
+    Print("Sending Trade: ", s, " ", EnumToString(t), " Vol:", v, " Price:", r.price, " SL:", r.sl, " TP:", r.tp, " Fill:", EnumToString(r.type_filling));
+    
+    if(!OrderSend(r, res)) Print("❌ Trade Fail: ", res.retcode, " (", res.comment, ")");
+    else Print("✅ Trade Success! Ticket:", res.order);
+}
+
+void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
+    MqlTradeRequest r; MqlTradeResult res; 
+    ZeroMemory(r); ZeroMemory(res);
+    
+    int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
+
+    r.action = TRADE_ACTION_PENDING; 
+    r.symbol = s; 
+    r.volume = v; 
+    r.type = t; 
+    r.price = NormalizeDouble(p, digits); 
+    
+    if(sl > 0) r.sl = NormalizeDouble(sl, digits);
+    if(tp > 0) r.tp = NormalizeDouble(tp, digits);
+    
+    r.deviation = 20;
+    r.type_filling = GetFillingMode(s);
+    
+    if(!OrderSend(r, res)) Print("❌ Pending Fail: ", res.retcode);
+}
+
+void ClosePositions(string s, string m) {
+    for(int i=PositionsTotal()-1; i>=0; i--) {
+        if(PositionGetSymbol(i) == s) {
+            double p = PositionGetDouble(POSITION_PROFIT);
+            if((m=="WIN" && p<=0) || (m=="LOSS" && p>=0)) continue;
+            
+            MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
+            r.action=TRADE_ACTION_DEAL; 
+            r.position=PositionGetTicket(i); 
+            r.symbol=s; 
+            r.volume=PositionGetDouble(POSITION_VOLUME);
+            r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
+            r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID);
+            r.deviation = 20;
+            r.type_filling = GetFillingMode(s); 
+            
+            if(!OrderSend(r, res)) Print("❌ Close Fail: ", res.retcode);
+            else Print("✅ Closed Position: ", r.position);
+        }
+    }
 }
 
 void CloseTicket(long ticket) {
     if(PositionSelectByTicket(ticket)) {
         MqlTradeRequest r; MqlTradeResult res;
         ZeroMemory(r); ZeroMemory(res);
-        r.action=TRADE_ACTION_DEAL; r.position=ticket; r.symbol=PositionGetString(POSITION_SYMBOL); 
+        r.action=TRADE_ACTION_DEAL; 
+        r.position=ticket; 
+        r.symbol=PositionGetString(POSITION_SYMBOL); 
         r.volume=PositionGetDouble(POSITION_VOLUME);
         r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
         r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(r.symbol,SYMBOL_ASK):SymbolInfoDouble(r.symbol,SYMBOL_BID);
         r.deviation = 20;
         r.type_filling = GetFillingMode(r.symbol);
-        if(!OrderSend(r, res)) Print("Close Ticket Fail: ", res.retcode);
-        else Print("Closed Ticket #", ticket);
+        
+        if(!OrderSend(r, res)) Print("❌ Close Ticket Fail: ", res.retcode);
+        else Print("✅ Closed Ticket #", ticket);
     } else {
-        Print("Ticket not found: ", ticket);
+        Print("⚠️ Ticket not found: ", ticket);
     }
 }
 
+// Drawing Functions
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     string n = "Py_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_RECTANGLE, 0, 0, 0, 0, 0);
-    
     datetime t1 = iTime(_Symbol, _Period, b1);
     datetime t2 = iTime(_Symbol, _Period, b2);
     if(t1 <= 0) t1 = iTime(_Symbol, _Period, iBars(_Symbol, _Period)-1);
-    
     ObjectSetInteger(0, n, OBJPROP_TIME, 0, t1);
     ObjectSetDouble(0, n, OBJPROP_PRICE, 0, p1);
     ObjectSetInteger(0, n, OBJPROP_TIME, 1, t2);
@@ -310,7 +388,6 @@ void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     ObjectSetInteger(0, n, OBJPROP_BACK, true);
     ChartRedraw();
 }
-
 void DrawHLine(string name, double price, color c, int style) {
     string n = "Py_H_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_HLINE, 0, 0, price);
@@ -321,7 +398,6 @@ void DrawHLine(string name, double price, color c, int style) {
     ObjectSetInteger(0, n, OBJPROP_BACK, false); 
     ChartRedraw();
 }
-
 void DrawLabel(string name, string text, color c, int y) {
     string n = "Py_Lbl_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_LABEL, 0, 0, 0);
@@ -334,7 +410,6 @@ void DrawLabel(string name, string text, color c, int y) {
     ObjectSetInteger(0, n, OBJPROP_BACK, false);
     ChartRedraw();
 }
-
 void DrawText(string name, int b, double p, color c, string t) {
     string n = "Py_Txt_" + name;
     if(ObjectFind(0, n) >= 0) ObjectDelete(0, n); 
@@ -344,7 +419,6 @@ void DrawText(string name, int b, double p, color c, string t) {
     ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 10);
     ObjectSetInteger(0, n, OBJPROP_ANCHOR, ANCHOR_LEFT_LOWER);
 }
-
 void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w) {
     string n = "Py_Tr_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_TREND, 0, 0, 0, 0, 0);
@@ -355,42 +429,4 @@ void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w
     ObjectSetInteger(0, n, OBJPROP_COLOR, c);
     ObjectSetInteger(0, n, OBJPROP_WIDTH, w);
     ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, true);
-}
-
-void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
-    MqlTradeRequest r;
-    MqlTradeResult res;
-    ZeroMemory(r);
-    ZeroMemory(res);
-    r.action=TRADE_ACTION_DEAL; r.symbol=s; r.volume=v; r.type=t; 
-    r.price=(t==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID); 
-    r.sl=sl; r.tp=tp; 
-    r.deviation = 20;
-    r.type_filling = GetFillingMode(s); 
-    if(!OrderSend(r, res)) Print("Trade Fail: ", res.retcode);
-}
-
-void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
-    MqlTradeRequest r;
-    MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
-    r.action=TRADE_ACTION_PENDING; r.symbol=s; r.volume=v; r.type=t; r.price=p; r.sl=sl; r.tp=tp; 
-    r.deviation = 20;
-    r.type_filling = GetFillingMode(s);
-    if(!OrderSend(r, res)) Print("Pending Fail: ", res.retcode);
-}
-
-void ClosePositions(string s, string m) {
-    for(int i=PositionsTotal()-1; i>=0; i--) {
-        if(PositionGetSymbol(i) == s) {
-            double p = PositionGetDouble(POSITION_PROFIT);
-            if((m=="WIN" && p<=0) || (m=="LOSS" && p>=0)) continue;
-            MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
-            r.action=TRADE_ACTION_DEAL; r.position=PositionGetTicket(i); r.symbol=s; r.volume=PositionGetDouble(POSITION_VOLUME);
-            r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
-            r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID);
-            r.deviation = 20;
-            r.type_filling = GetFillingMode(s); 
-            if(!OrderSend(r, res)) Print("Close Fail: ", res.retcode);
-        }
-    }
 }
