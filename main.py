@@ -1,9 +1,11 @@
 import time
 import logging
+import sys
 from config import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager
 from core.session import is_market_open
+from core.telegram_bot import TelegramBot
 from filters.news import NewsFilter
 from ui import TradingApp
 import strategy.trend_following as trend
@@ -71,12 +73,21 @@ def bot_logic(app):
 def main():
     conf = Config()
     
-    # Init Connector
+    # 1. Setup Connector
     connector = MT5Connector(
         host=conf.get('mt5', {}).get('host', '127.0.0.1'),
         port=conf.get('mt5', {}).get('port', 8001)
     )
     
+    # 2. Setup Telegram
+    tg_conf = conf.get('telegram', {})
+    telegram_bot = TelegramBot(
+        token=tg_conf.get('token', ''),
+        authorized_chat_id=tg_conf.get('chat_id', ''),
+        connector=connector
+    )
+    connector.set_telegram(telegram_bot)
+
     if connector.start():
         logger.info("MT5 Connector started.")
     else:
@@ -85,8 +96,8 @@ def main():
 
     risk = RiskManager(conf.data)
     
-    # Init UI
-    app = TradingApp(bot_logic, connector, risk)
+    # 3. Setup UI
+    app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
     try:
         app.mainloop()

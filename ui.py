@@ -18,28 +18,31 @@ class QueueHandler(logging.Handler):
         self.log_queue.put(record)
 
 class TradingApp(ttk.Window):
-    def __init__(self, bot_loop_callback, connector, risk_manager):
+    def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
         self.title("MT5 Algo Terminal")
-        self.geometry("1100x750")
+        self.geometry("1100x800")
         
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
         self.risk = risk_manager
+        self.telegram_bot = telegram_bot
         
         self.log_queue = queue.Queue()
         self.bot_running = False
         self.bot_thread = None
         
-        # Variable for Manual Lot Size
         self.lot_var = tk.DoubleVar(value=0.01)
+        
+        # Telegram Vars
+        self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
+        self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
         
         self._setup_logging()
         self._build_ui()
         self._start_log_polling()
         self._start_data_refresh()
         
-        # --- AUTO START ---
         self.after(1000, self.toggle_bot) 
 
     def _setup_logging(self):
@@ -49,15 +52,13 @@ class TradingApp(ttk.Window):
         logging.getLogger().addHandler(queue_handler)
 
     def _build_ui(self):
-        # --- Top Header Bar ---
+        # Header
         header = ttk.Frame(self)
         header.pack(fill=X, padx=20, pady=15)
         
-        # Title
         title_lbl = ttk.Label(header, text="MT5 AUTO-TRADER", font=("Roboto", 20, "bold"), bootstyle="inverse-dark")
         title_lbl.pack(side=LEFT)
         
-        # Status Badges
         status_frame = ttk.Frame(header)
         status_frame.pack(side=RIGHT)
         
@@ -68,7 +69,7 @@ class TradingApp(ttk.Window):
         self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="danger-inverse", font=("Helvetica", 10, "bold"))
         self.lbl_status.pack(side=LEFT, padx=5)
 
-        # --- Main Tabs ---
+        # Tabs
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill=BOTH, expand=YES, padx=10, pady=10)
         
@@ -88,52 +89,52 @@ class TradingApp(ttk.Window):
         content = ttk.Frame(self.tab_dashboard)
         content.pack(fill=BOTH, expand=YES, padx=20, pady=20)
         
-        # 1. Stats Row
+        # 1. Financial Stats
         stats_frame = ttk.Frame(content)
-        stats_frame.pack(fill=X, pady=(0, 20))
+        stats_frame.pack(fill=X, pady=(0, 10))
         
-        def create_stat_card(parent, title, var_name, color):
+        def create_stat_card(parent, title, var_name, color, initial_val="$0.00"):
             frame = ttk.Frame(parent, bootstyle=f"{color}")
             frame.pack(side=LEFT, fill=X, expand=YES, padx=5)
-            
             inner = ttk.Frame(frame, bootstyle=f"{color}")
             inner.pack(fill=BOTH, padx=15, pady=15)
-            
             ttk.Label(inner, text=title, font=("Helvetica", 10), bootstyle=f"{color}-inverse").pack(anchor=W)
-            lbl = ttk.Label(inner, text="$0.00", font=("Roboto", 22, "bold"), bootstyle=f"{color}-inverse")
+            lbl = ttk.Label(inner, text=initial_val, font=("Roboto", 22, "bold"), bootstyle=f"{color}-inverse")
             lbl.pack(anchor=E)
             setattr(self, var_name, lbl)
 
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
-        create_stat_card(stats_frame, "PROFIT (SESSION)", "lbl_profit", "success")
+        create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success")
 
-        # 2. Controls Section
+        # 2. Position Counts (NEW TOTAL CARD ADDED)
+        pos_frame = ttk.Frame(content)
+        pos_frame.pack(fill=X, pady=(0, 20))
+        
+        create_stat_card(pos_frame, "BUY POSITIONS", "lbl_buy_count", "secondary", "0")
+        create_stat_card(pos_frame, "SELL POSITIONS", "lbl_sell_count", "secondary", "0")
+        create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "warning", "0")
+
+        # 3. Controls
         ctrl_frame = ttk.Labelframe(content, text=" Execution Controls ")
         ctrl_frame.pack(fill=BOTH, expand=YES, pady=10)
         
-        # --- Lot Size Configuration ---
         config_row = ttk.Frame(ctrl_frame)
         config_row.pack(fill=X, padx=20, pady=(15, 5))
         
         ttk.Label(config_row, text="Manual Lot Size:", font=("Helvetica", 10)).pack(side=LEFT)
-        
-        # Spinbox for Lot Size
         spin_lot = ttk.Spinbox(config_row, from_=0.01, to=50.0, increment=0.01, textvariable=self.lot_var, width=10, bootstyle="secondary")
         spin_lot.pack(side=LEFT, padx=10)
         
-        # --- Manual Buttons ---
         grid_frame = ttk.Frame(ctrl_frame)
         grid_frame.pack(fill=X, padx=20, pady=10)
         
-        # Buy / Sell Buttons
         btn_buy = ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline", command=lambda: self.manual_trade("BUY"))
         btn_buy.pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
         
         btn_sell = ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline", command=lambda: self.manual_trade("SELL"))
         btn_sell.pack(side=LEFT, fill=X, expand=YES, padx=(5, 5))
         
-        # --- Closing Buttons Row ---
         close_frame = ttk.Frame(ctrl_frame)
         close_frame.pack(fill=X, padx=20, pady=(5, 15))
         
@@ -149,13 +150,10 @@ class TradingApp(ttk.Window):
     def _build_console_tab(self):
         toolbar = ttk.Frame(self.tab_console)
         toolbar.pack(fill=X, padx=10, pady=10)
-        
         ttk.Label(toolbar, text="System Logs", font=("Helvetica", 12, "bold")).pack(side=LEFT)
         ttk.Button(toolbar, text="Clear Console", bootstyle="secondary", command=self.clear_logs).pack(side=RIGHT)
-        
         self.log_area = ScrolledText(self.tab_console, state='disabled', font=("Consolas", 10))
         self.log_area.pack(fill=BOTH, expand=YES, padx=10, pady=(0, 10))
-        
         self.log_area.text.tag_config('INFO', foreground='#ffffff')
         self.log_area.text.tag_config('WARNING', foreground='#f0ad4e')
         self.log_area.text.tag_config('ERROR', foreground='#d9534f')
@@ -164,46 +162,49 @@ class TradingApp(ttk.Window):
         container = ttk.Frame(self.tab_settings)
         container.pack(fill=BOTH, expand=YES, padx=30, pady=30)
         
-        info_grp = ttk.Labelframe(container, text=" Webhook Configuration ")
-        info_grp.pack(fill=X, pady=10)
+        # Telegram
+        tg_grp = ttk.Labelframe(container, text=" Telegram Bot Integration ")
+        tg_grp.pack(fill=X, pady=10)
         
+        tg_inner = ttk.Frame(tg_grp)
+        tg_inner.pack(fill=X, padx=20, pady=20)
+        
+        ttk.Label(tg_inner, text="Bot Token:", font=("Helvetica", 10)).pack(anchor=W)
+        ttk.Entry(tg_inner, textvariable=self.tg_token_var, show="*").pack(fill=X, pady=5)
+        
+        ttk.Label(tg_inner, text="Chat ID:", font=("Helvetica", 10)).pack(anchor=W, pady=(10, 0))
+        chat_frame = ttk.Frame(tg_inner)
+        chat_frame.pack(fill=X, pady=5)
+        ttk.Entry(chat_frame, textvariable=self.tg_chat_var).pack(side=LEFT, fill=X, expand=YES)
+        ttk.Button(chat_frame, text="Test Message", bootstyle="info-outline", command=self.test_telegram).pack(side=LEFT, padx=(10, 0))
+        
+        ttk.Button(tg_inner, text="Update Telegram Credentials", bootstyle="primary", command=self.update_telegram).pack(fill=X, pady=15)
+        
+        # Webhook Info
+        info_grp = ttk.Labelframe(container, text=" Webhook Info ")
+        info_grp.pack(fill=X, pady=10)
         inner_info = ttk.Frame(info_grp)
         inner_info.pack(fill=X, padx=20, pady=20) 
-        
-        ttk.Label(inner_info, text="Webhook URL (TradingView):", font=("Helvetica", 10)).pack(anchor=W)
-        
-        url_frame = ttk.Frame(inner_info)
-        url_frame.pack(fill=X, pady=5)
-        
-        url_val = f"http://127.0.0.1:{self.connector.port}/webhook"
-        entry = ttk.Entry(url_frame, bootstyle="dark")
-        entry.insert(0, url_val)
-        entry.configure(state="readonly")
-        entry.pack(side=LEFT, fill=X, expand=YES)
-        
-        ttk.Label(inner_info, text="JSON Payload Format:", font=("Helvetica", 10)).pack(anchor=W, pady=(15, 0))
-        
-        code_box = ttk.Text(inner_info, height=4, font=("Consolas", 9), foreground="#cccccc", background="#2b2b2b", relief="flat")
-        code_box.insert("1.0", '{\n  "action": "BUY",\n  "symbol": "XAUUSD",\n  "volume": 0.01\n}')
-        code_box.configure(state="disabled")
-        code_box.pack(fill=X, pady=5)
+        ttk.Label(inner_info, text=f"Local URL: http://127.0.0.1:{self.connector.port}/telegram", font=("Consolas", 10)).pack(anchor=W)
+        ttk.Label(inner_info, text="(Use ngrok to expose this for public Telegram Webhook)", font=("Helvetica", 9), bootstyle="secondary").pack(anchor=W)
 
-        risk_grp = ttk.Labelframe(container, text=" Risk Management ")
-        risk_grp.pack(fill=X, pady=20)
-        
-        inner_risk = ttk.Frame(risk_grp)
-        inner_risk.pack(fill=X, padx=20, pady=20)
-        
-        ttk.Label(inner_risk, text="Risk settings are loaded from config.json", bootstyle="secondary").pack(anchor=W)
+    def test_telegram(self):
+        if self.telegram_bot:
+            self.telegram_bot.send_message("🔔 <b>Test Message</b> from MT5 Bot", self.tg_chat_var.get())
+            logging.info("Sent test message to Telegram")
 
-    # --- Logic ---
+    def update_telegram(self):
+        if self.telegram_bot:
+            self.telegram_bot.token = self.tg_token_var.get()
+            self.telegram_bot.chat_id = self.tg_chat_var.get()
+            self.telegram_bot.api_url = f"https://api.telegram.org/bot{self.telegram_bot.token}"
+            logging.info("Telegram credentials updated")
 
     def toggle_bot(self):
         if not self.bot_running:
             self.bot_running = True
             self.status_var.set("BOT: RUNNING")
             self.lbl_status.configure(bootstyle="success-inverse")
-            
             self.bot_thread = threading.Thread(target=self.bot_loop_callback, args=(self,), daemon=True)
             self.bot_thread.start()
             logging.info("Auto-Trading session started automatically.")
@@ -214,17 +215,12 @@ class TradingApp(ttk.Window):
             logging.info("Auto-Trading session stopped.")
 
     def manual_trade(self, action):
-        try:
-            # Get volume from spinbox
-            vol = float(self.lot_var.get())
-        except ValueError:
-            vol = 0.01
-            
+        try: vol = float(self.lot_var.get())
+        except: vol = 0.01
         self.connector.send_order(action, "XAUUSD", vol, 0, 0)
         logging.info(f"Manual {action} ({vol} lots) command sent to Bridge.")
 
     def manual_close(self, mode):
-        # mode can be "ALL", "WIN", or "LOSS"
         self.connector.close_position("XAUUSD", mode)
         logging.info(f"Manual Close ({mode}) command sent.")
 
@@ -238,7 +234,6 @@ class TradingApp(ttk.Window):
             try:
                 record = self.log_queue.get_nowait()
                 msg = self.log_formatter(record)
-                
                 self.log_area.text.configure(state='normal')
                 self.log_area.text.insert(tk.END, msg + "\n", record.levelname) 
                 self.log_area.text.see(tk.END)
@@ -259,15 +254,21 @@ class TradingApp(ttk.Window):
 
         if self.connector.account_info:
             info = self.connector.account_info
-            
             bal = info.get('balance', 0)
             eq = info.get('equity', 0)
             prof = info.get('profit', 0)
+            buy_c = info.get('buy_count', 0)
+            sell_c = info.get('sell_count', 0)
+            total_c = info.get('total_count', 0)
             
             self.lbl_balance.configure(text=f"${bal:,.2f}")
             self.lbl_equity.configure(text=f"${eq:,.2f}")
             
             p_prefix = "+" if prof >= 0 else ""
             self.lbl_profit.configure(text=f"{p_prefix}${prof:,.2f}")
+            
+            self.lbl_buy_count.configure(text=str(buy_c))
+            self.lbl_sell_count.configure(text=str(sell_c))
+            self.lbl_total_count.configure(text=str(total_c))
             
         self.after(500, self._start_data_refresh)

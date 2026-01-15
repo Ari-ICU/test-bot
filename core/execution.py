@@ -14,10 +14,14 @@ class MT5Connector:
         self.server = None
         self.command_queue = []
         self.lock = threading.Lock()
-        self.data_callback = None
         self.account_info = {}
         self.last_candles = []
         self.running = False
+        self.telegram_bot = None  # Reference to Telegram
+
+    def set_telegram(self, tg_bot):
+        """Sets the Telegram Bot instance for sending notifications."""
+        self.telegram_bot = tg_bot
 
     def start(self):
         try:
@@ -44,7 +48,10 @@ class MT5Connector:
         cmd = f"{action}|{symbol}|{volume}|{sl}|{tp}|10"
         with self.lock: 
             self.command_queue.append(cmd)
-        logger.info(f"Order Queued via Bridge: {cmd}")
+        logger.info(f"Order Queued: {cmd}")
+        
+        if self.telegram_bot:
+            self.telegram_bot.send_message(f"🚀 <b>Signal Sent:</b> {action} {symbol} {volume}")
 
     def close_position(self, symbol, mode="ALL"):
         # Modes: ALL, WIN, LOSS
@@ -52,6 +59,9 @@ class MT5Connector:
         with self.lock: 
             self.command_queue.append(cmd)
         logger.info(f"Close Command Queued: {cmd}")
+        
+        if self.telegram_bot:
+            self.telegram_bot.send_message(f"🔄 <b>Close Command:</b> {mode} {symbol}")
 
     def get_latest_candles(self):
         return self.last_candles
@@ -60,7 +70,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
     connector = None
 
     def log_message(self, format, *args):
-        # Suppress default HTTP logging to keep console clean
         pass
 
     def do_POST(self):
@@ -69,46 +78,48 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get('Content-Length', 0))
             
-            # --- WEBHOOK HANDLING (JSON) ---
+            # --- TELEGRAM WEBHOOK (/telegram) ---
+            if self.path == '/telegram':
+                body = self.rfile.read(length).decode('utf-8')
+                try:
+                    data = json.loads(body)
+                    if self.connector.telegram_bot:
+                        self.connector.telegram_bot.process_webhook_update(data)
+                        
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"OK")
+                except Exception as e:
+                    logger.error(f"Telegram processing error: {e}")
+                    self.send_error(400)
+                return
+
+            # --- TRADINGVIEW WEBHOOK (/webhook) ---
             if self.path == '/webhook':
                 try:
                     body = self.rfile.read(length).decode('utf-8')
                     data = json.loads(body)
                     
-                    # Expected JSON: {"action": "BUY", "symbol": "XAUUSD", "volume": 0.01, "sl": 0, "tp": 0}
                     action = data.get('action', '').upper()
                     symbol = data.get('symbol', 'XAUUSD')
                     volume = float(data.get('volume', 0.01))
-                    sl = float(data.get('sl', 0.0))
-                    tp = float(data.get('tp', 0.0))
                     
                     if action in ['BUY', 'SELL']:
-                        self.connector.send_order(action, symbol, volume, sl, tp)
-                        response = {"status": "success", "message": f"Order {action} queued"}
-                    elif action.startswith('CLOSE'):
-                        self.connector.close_position(symbol, action.replace('CLOSE_', ''))
-                        response = {"status": "success", "message": f"Close {action} queued"}
-                    else:
-                        response = {"status": "error", "message": "Invalid action"}
+                        self.connector.send_order(action, symbol, volume, 0, 0)
                         
                     self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(json.dumps(response).encode())
-                    logger.info(f"Webhook received: {data}")
-                    
-                except Exception as e:
-                    logger.error(f"Webhook error: {e}")
-                    self.send_error(400, "Invalid JSON")
+                    self.wfile.write(json.dumps({"status": "queued"}).encode())
+                except:
+                    self.send_error(400)
                 return
 
             # --- MT5 DATA SYNC (Form Data) ---
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
-            # Extract Candle Data if available
+            # Candle Data
             if 'candles' in data:
-                # Format: Open,High,Low,Close,Time|...
                 raw_candles = data['candles'][0]
                 if raw_candles:
                     parsed_candles = []
@@ -126,23 +137,28 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
             # Update Account Info
             if 'balance' in data:
+                b_count = int(data.get('buy_count', [0])[0])
+                s_count = int(data.get('sell_count', [0])[0])
+                
                 self.connector.account_info = {
                     'balance': float(data.get('balance', [0])[0]),
                     'equity': float(data.get('acct_equity', [0])[0]),
-                    'profit': float(data.get('profit', [0])[0])
+                    'profit': float(data.get('profit', [0])[0]),
+                    'buy_count': b_count,
+                    'sell_count': s_count,
+                    'total_count': b_count + s_count # Calculated here
                 }
 
-            # Send Commands Back to MT5
+            # Send Commands
             resp = "OK"
             with self.connector.lock:
                 if self.connector.command_queue:
                     resp = ";".join(self.connector.command_queue)
-                    self.connector.command_queue = [] # Clear queue after sending
+                    self.connector.command_queue = [] 
             
             self.send_response(200)
             self.end_headers()
             self.wfile.write(resp.encode())
             
         except Exception as e:
-            # logger.error(f"HTTP Request Error: {e}")
             self.send_error(500)
