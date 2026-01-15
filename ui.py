@@ -46,7 +46,6 @@ class TradingApp(ttk.Window):
         self._start_log_polling()
         self._start_data_refresh()
         
-        # Auto-start connection (but not trading logic until toggled)
         self.after(1000, self.toggle_bot) 
 
     def _setup_logging(self):
@@ -116,7 +115,7 @@ class TradingApp(ttk.Window):
         create_stat_card(pos_frame, "SELL POSITIONS", "lbl_sell_count", "secondary", "0")
         create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "warning", "0")
 
-        # 3. Controls & Config Wrapper
+        # 3. Controls & Config
         ctrl_wrapper = ttk.Frame(content)
         ctrl_wrapper.pack(fill=BOTH, expand=YES)
 
@@ -124,7 +123,6 @@ class TradingApp(ttk.Window):
         exec_frame = ttk.Labelframe(ctrl_wrapper, text=" Execution Controls ")
         exec_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 10))
         
-        # Manual Buttons
         grid_frame = ttk.Frame(exec_frame)
         grid_frame.pack(fill=X, padx=20, pady=15)
         
@@ -150,16 +148,14 @@ class TradingApp(ttk.Window):
         conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ")
         conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
         
-        # Auto Trade Toggle
+        # Auto Trade
         auto_row = ttk.Frame(conf_frame)
         auto_row.pack(fill=X, padx=20, pady=15)
         ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
-        
-        # Round Toggle Switch
         chk_auto = ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle)
         chk_auto.pack(side=RIGHT)
 
-        # Symbol Changer
+        # Symbol Changer (COMBOBOX)
         sym_row = ttk.Frame(conf_frame)
         sym_row.pack(fill=X, padx=20, pady=10)
         ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
@@ -167,8 +163,9 @@ class TradingApp(ttk.Window):
         sym_input_frame = ttk.Frame(sym_row)
         sym_input_frame.pack(fill=X, pady=5)
         
-        ent_sym = ttk.Entry(sym_input_frame, textvariable=self.symbol_var, width=15)
-        ent_sym.pack(side=LEFT, padx=(0, 5))
+        # Changed from Entry to Combobox
+        self.sym_combo = ttk.Combobox(sym_input_frame, textvariable=self.symbol_var, width=13, bootstyle="secondary")
+        self.sym_combo.pack(side=LEFT, padx=(0, 5))
         
         btn_sym = ttk.Button(sym_input_frame, text="Set", bootstyle="info-outline", command=self.update_symbol, width=6)
         btn_sym.pack(side=LEFT)
@@ -246,8 +243,6 @@ class TradingApp(ttk.Window):
             self.bot_thread.start()
             logging.info("System Engine Started.")
         else:
-            # We don't stop the thread, just visually indicate status
-            # In a real app, you might want a graceful shutdown flag
             pass
 
     def manual_trade(self, action):
@@ -285,22 +280,26 @@ class TradingApp(ttk.Window):
         return f"[{time_str}] {record.getMessage()}"
 
     def _start_data_refresh(self):
+        # Update server status
         if self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
         else:
             self.lbl_server.configure(text="SERVER: OFF", bootstyle="secondary-inverse")
 
+        # Update stats
         if self.connector.account_info:
             info = self.connector.account_info
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
-            
             prof = info.get('profit', 0)
             p_prefix = "+" if prof >= 0 else ""
             self.lbl_profit.configure(text=f"{p_prefix}${prof:,.2f}")
-            
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
+            
+        # Update symbols dropdown if available
+        if self.connector.available_symbols:
+             self.sym_combo['values'] = self.connector.available_symbols
             
         self.after(500, self._start_data_refresh)
