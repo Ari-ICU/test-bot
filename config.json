@@ -1,57 +1,69 @@
 {
-  "sources": [
-    {
-      "name": "Investing.com",
-      "url": "https://www.investing.com/rss/news_25.rss",
-      "category": "General"
+    "mt5": {
+        "host": "127.0.0.1",
+        "port": 8001,
+        "enabled": true,
+        "active_account": 0
     },
-    {
-      "name": "CryptoNews",
-      "url": "https://cryptopotato.com/feed/",
-      "category": "Crypto"
-    }
-  ],
-  "sentiment": {
-    "enabled": true,
-    "min_score": 0.2
-  },
-  "telegram": {
-    "enabled": true,
-    "bot_token": "8591944783:AAFJ33zxoEZZlUN0zzUvdNKQK__D4_X3kP4",
-    "chat_id": "6287254880"
-  },
-  "update_interval_seconds": 60,
-  "mt5": {
-    "host": "127.0.0.1",
-    "port": 8001,
-    "enabled": true,
-    "active_account": 0
-  },
-  "mt5_accounts": [
-    {
-      "name": "Demo Account",
-      "login": "123456",
-      "server": "Demo-Server"
+    "telegram": {
+        "enabled": true,
+        "bot_token": "8591944783:AAFJ33zxoEZZlUN0zzUvdNKQK__D4_X3kP4",
+        "chat_id": "6287254880"
     },
-    {
-      "name": "Live Account",
-      "login": "789012",
-      "server": "Live-Server"
-    }
-  ],
-  "auto_trading": {
-    "enabled": true,
-    "max_positions": 1,
-    "lot_size": 0.01,
-    "price_range": {
-      "min": 100,
-      "max": 200
-    }
-  },
-  "scalping": {
-    "rsi_period": 14,
-    "tp_amount": 0.50,
-    "max_spread": 20,
-    "crt_htf_minutes": 240
-  }
+    "risk": {
+        "max_drawdown": 5.0,
+        "daily_loss_limit": 2.0,
+        "lot_size": 0.01,
+        "max_trades": 5
+    },
+    "sources": [
+        {
+            "name": "Investing.com Forex",
+            "url": "https://www.investing.com/rss/news_1.rss"
+        },
+        {
+            "name": "FXStreet",
+            "url": "https://www.fxstreet.com/rss/news"
+        },
+        {
+            "name": "CoinDesk",
+            "url": "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml"
+        },
+        {
+            "name": "CoinTelegraph",
+            "url": "https://cointelegraph.com/rss"
+        }
+    ],
+    "sentiment": {
+        "enabled": true,
+        "min_score": 0.2
+    },
+    "auto_trading": {
+        "enabled": true,
+        "max_positions": 1,
+        "lot_size": 0.01,
+        "price_range": {
+            "min": 100,
+            "max": 200
+        }
+    },
+    "scalping": {
+        "rsi_period": 14,
+        "tp_amount": 0.50,
+        "max_spread": 20,
+        "crt_htf_minutes": 240
+    },
+    "update_interval_seconds": 60,
+    "mt5_accounts": [
+        {
+            "name": "Demo Account",
+            "login": "123456",
+            "server": "Demo-Server"
+        },
+        {
+            "name": "Live Account",
+            "login": "789012",
+            "server": "Live-Server"
+        }
+    ]
 }
