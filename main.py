@@ -1,83 +1,74 @@
-import threading
 import time
 import logging
-import json
-from src.connector import MT5Connector
-from src.strategy import TradingStrategy
-from src.news import NewsEngine
-from src.ui import TradingBotUI
-from src.webhook import WebhookAlert
+from config import Config
+from core.execution import MT5Connector
+from core.risk import RiskManager
+from core.session import is_market_open
+from filters.news import NewsFilter
+from filters.volatility import is_volatility_safe
+# Import strategies
+from strategy import trend_following, reversal, breakout
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger("Main")
+logging.basicConfig(level=logging.INFO)
 
 def main():
-    # 1. LOAD CONFIG FIRST
+    # 1. Setup
+    conf = Config()
+    connector = MT5Connector(
+        host=conf.get('mt5', {}).get('host', '127.0.0.1'),
+        port=conf.get('mt5', {}).get('port', 8001)
+    )
+    risk = RiskManager(conf.data)
+    news_filter = NewsFilter(conf.get('sources', []))
+    
+    connector.start()
+    
+    # 2. Main Loop
     try:
-        with open('config.json', 'r') as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        logger.error("config.json not found! Please ensure it exists.")
-        return
+        while True:
+            # Check Filters
+            if news_filter.fetch_news():
+                time.sleep(60) # Pause on high impact news
+                continue
+                
+            if not is_market_open("Auto"):
+                time.sleep(60)
+                continue
 
-    # 2. INITIALIZE WEBHOOK ONCE
-    tg_config = config.get('telegram', {})
-    webhook = None
-    if tg_config.get('enabled'):
-        webhook = WebhookAlert(
-            bot_token=tg_config.get('bot_token'),
-            chat_id=tg_config.get('chat_id')
-        )
-        logger.info("Webhook initialized in main.py")
+            # Process Data
+            candles = connector.get_latest_candles()
+            if not candles: 
+                time.sleep(1)
+                continue
 
-    connector = MT5Connector()
-    
-    # 3. PASS WEBHOOK TO NEWS ENGINE
-    news_engine = NewsEngine(webhook=webhook)
-    
-    # 4. PASS WEBHOOK TO STRATEGY
-    strategy = TradingStrategy(connector, news_engine, config, webhook=webhook)
-    
-    app = TradingBotUI(news_engine, connector)
-    app.strategy = strategy
-    
-    # --- FIX START: Wire UI/Connector changes back to Strategy ---
-    # This ensures that when the UI calls connector.change_timeframe(),
-    # the strategy gets notified and updates its internal state.
-    def on_tf_change_callback(new_tf):
-        strategy.update_timeframe(new_tf)
-        
-    connector.on_timeframe_changed = on_tf_change_callback
-    # --- FIX END ---
+            # Run Strategies (Weighted Mix)
+            decisions = []
+            decisions.append(trend_following.analyze_trend_setup(candles))
+            decisions.append(reversal.analyze_reversal_setup(candles, 0, 0)) # pass bid/ask in real flow
+            decisions.append(breakout.analyze_breakout_setup(candles))
+            
+            # Aggregate Logic (Simplified)
+            final_action = "NEUTRAL"
+            for action, reasons in decisions:
+                if action != "NEUTRAL":
+                    final_action = action
+                    logging.info(f"Signal: {action} | Reasons: {reasons}")
+                    break
+            
+            # Execute
+            if final_action in ["BUY", "SELL"]:
+                symbol = "XAUUSDm" # Dynamic in real app
+                lot = risk.get_lot_size(1000)
+                atr = 1.0 # Calculate real ATR
+                sl, tp = risk.calculate_sl_tp(candles[-1]['close'], final_action, atr)
+                
+                connector.send_order(final_action, symbol, lot, sl, tp)
+                time.sleep(15) # Cooldown
 
-    def tick_router(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles):
-        strategy.on_tick(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles)
-        app._on_tick_received(symbol, bid, ask, balance, profit, acct_name, positions, buy_count, sell_count, avg_entry, candles)
+            time.sleep(1)
 
-    connector.on_tick_received = tick_router
-
-    if connector.start():
-        logger.info("MT5 Connector Started")
-    else:
-        logger.error("Failed to start MT5 Connector")
-        return
-
-    # START STRATEGY
-    strategy.start()
-
-    # FORCE UI SYNC TO ENSURE IT'S OFF
-    app._sync_ui_to_strategy()
-
-    try:
-        app.mainloop()
     except KeyboardInterrupt:
-        pass
-    finally:
-        # If webhook has a stop event, trigger it
-        if webhook and hasattr(webhook, 'stop_event'):
-            webhook.stop_event.set()
-        connector.stop()
-        logger.info("Shutdown complete.")
+        logger.info("Shutting down...")
 
 if __name__ == "__main__":
     main()
