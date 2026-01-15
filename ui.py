@@ -125,11 +125,10 @@ class TradingApp(ttk.Window):
         log_frame = ttk.LabelFrame(log_container, text="") 
         log_frame.pack(fill=BOTH, expand=YES)
 
-        # ScrolledText acts as a container. We access the actual text widget via .text property later.
         self.log_area = ScrolledText(log_frame, state='disabled', font=("Consolas", 9), height=30)
         self.log_area.pack(fill=BOTH, expand=YES, padx=2, pady=2)
         
-        # FIX: Access .text for tag configuration
+        # FIX: Added .text here
         self.log_area.text.tag_config('INFO', foreground='#ffffff')        
         self.log_area.text.tag_config('WARNING', foreground='#f0ad4e')     
         self.log_area.text.tag_config('ERROR', foreground='#d9534f')       
@@ -162,7 +161,7 @@ class TradingApp(ttk.Window):
         logging.info("Manual Close All command sent.")
         
     def clear_logs(self):
-        # FIX: Access .text for configure and delete
+        # FIX: Added .text here
         self.log_area.text.configure(state='normal')
         self.log_area.text.delete(1.0, tk.END)
         self.log_area.text.configure(state='disabled')
@@ -173,7 +172,7 @@ class TradingApp(ttk.Window):
                 record = self.log_queue.get_nowait()
                 msg = self.log_formatter(record)
                 
-                # FIX: Access .text for all text operations
+                # FIX: Added .text here for all operations
                 self.log_area.text.configure(state='normal')
                 self.log_area.text.insert(tk.END, msg + "\n", record.levelname) 
                 self.log_area.text.see(tk.END)
