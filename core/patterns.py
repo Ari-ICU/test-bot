@@ -120,14 +120,10 @@ def detect_patterns(candles):
     if c['close'] < recent_low: signals['ict_bearish_mss'] = True
 
     # 10. ICT: Fair Value Gap with Displacement
-    def body(k): return abs(k['close'] - k['open'])
     avg_body = df['close'].diff().abs().rolling(14).mean().iloc[-1]
-    
-    # Bullish: Gap + Middle candle (p2) is an explosive move
-    if p3['high'] < p1['low'] and body(p2) > (avg_body * 1.5):
+    if p3['high'] < p1['low'] and abs(p2['close'] - p2['open']) > (avg_body * 1.5):
         signals['ict_bullish_fvg'] = True
-    # Bearish: Gap + Middle candle (p2) is an explosive move
-    if p3['low'] > p1['high'] and body(p2) > (avg_body * 1.5):
+    if p3['low'] > p1['high'] and abs(p2['close'] - p2['open']) > (avg_body * 1.5):
         signals['ict_bearish_fvg'] = True
 
     return signals
