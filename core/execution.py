@@ -70,6 +70,10 @@ class MT5Connector:
         with self.lock:
             self.command_queue.append(cmd)
         logger.info(f"Symbol Change Queued: {symbol}")
+        
+        # --- FIX: Added Telegram Notification ---
+        if self.telegram_bot:
+            self.telegram_bot.send_message(f"🔀 <b>Symbol Changed:</b> Now trading {symbol}")
 
     def get_latest_candles(self):
         return self.last_candles
