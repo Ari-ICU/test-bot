@@ -81,8 +81,10 @@ def main():
     
     # 2. Setup Telegram
     tg_conf = conf.get('telegram', {})
+    
+    # FIX: Changed 'token' to 'bot_token' to match config.json key
     telegram_bot = TelegramBot(
-        token=tg_conf.get('token', ''),
+        token=tg_conf.get('bot_token', ''), 
         authorized_chat_id=tg_conf.get('chat_id', ''),
         connector=connector
     )
