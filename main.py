@@ -56,25 +56,63 @@ def bot_logic(app):
     
     logger.info(f"✅ Bot logic initialized.")
     
+    # --- TRADE MONITOR VARIABLES ---
+    last_balance = 0.0
+    last_positions = 0
+    first_run = True
+    
     while app.bot_running:
         try:
+            # Get Current Account State
+            info = connector.account_info
+            curr_balance = info.get('balance', 0.0)
+            curr_positions = info.get('total_count', 0)
+            
+            # Initialize on first run to avoid fake alerts
+            if first_run and curr_balance > 0:
+                last_balance = curr_balance
+                last_positions = curr_positions
+                first_run = False
+
+            # ----------------------------------------
+            # 🛑 TRADE MONITOR (Detects SL/TP)
+            # ----------------------------------------
+            if not first_run:
+                # If positions DECREASED, a trade closed
+                if curr_positions < last_positions:
+                    pnl = curr_balance - last_balance
+                    
+                    # Ignore tiny changes (swaps/commissions without close)
+                    if abs(pnl) > 0.01: 
+                        if pnl > 0:
+                            msg = f"💰 <b>TAKE PROFIT HIT!</b>\nProfit: +${pnl:.2f}\nNew Balance: ${curr_balance:,.2f}"
+                            logger.info(f"💰 TP Hit: +${pnl:.2f}")
+                        else:
+                            msg = f"🛑 <b>STOP LOSS HIT!</b>\nLoss: -${abs(pnl):.2f}\nNew Balance: ${curr_balance:,.2f}"
+                            logger.warning(f"🛑 SL Hit: -${abs(pnl):.2f}")
+                        
+                        if app.telegram_bot:
+                            app.telegram_bot.send_message(msg)
+
+                # Update trackers
+                last_positions = curr_positions
+                last_balance = curr_balance
+            # ----------------------------------------
+
             # 1. Check Auto-Trade Toggle
             if hasattr(app, 'auto_trade_var') and not app.auto_trade_var.get():
                 time.sleep(1)
                 continue
 
             # 2. Check Max Positions Limit (FROM UI)
-            # Retrieve max positions dynamically from the UI
             try:
                 max_positions = int(app.max_pos_var.get())
             except:
-                max_positions = 10 # Default fallback
+                max_positions = 10
             
-            current_trades = connector.account_info.get('total_count', 0)
-            if current_trades >= max_positions:
-                # Log only once every 10 seconds to avoid spamming
+            if curr_positions >= max_positions:
                 if int(time.time()) % 10 == 0:
-                    logger.debug(f"⚠️ Max positions reached ({current_trades}/{max_positions}). Waiting...")
+                    logger.debug(f"⚠️ Max positions reached ({curr_positions}/{max_positions}). Waiting...")
                 time.sleep(1)
                 continue
 
@@ -92,7 +130,7 @@ def bot_logic(app):
             # 5. Strategy Analysis
             decisions = []
             
-            # --- A. Check News Sentiment (Global Scan) ---
+            # --- A. Check News Sentiment ---
             news_action, news_reason, news_category = news_filter.get_sentiment_signal()
             
             if news_action != "NEUTRAL":
@@ -105,7 +143,7 @@ def bot_logic(app):
                 else:
                     logger.warning(f"⚠️ Skipping News: {news_category} news doesn't match active {symbol_category} symbol.")
             
-            # --- B. Technical Strategies (Active Chart Only) ---
+            # --- B. Technical Strategies ---
             decisions.append(trend.analyze_trend_setup(candles))
             decisions.append(reversal.analyze_reversal_setup(candles, 0, 0))
             decisions.append(breakout.analyze_breakout_setup(candles))
@@ -130,7 +168,6 @@ def bot_logic(app):
                 symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
 
                 # Use Live Price
-                info = connector.account_info
                 current_price = info.get('ask', 0.0) if final_action == "BUY" else info.get('bid', 0.0)
                 if current_price == 0.0: current_price = candles[-1]['close']
 
