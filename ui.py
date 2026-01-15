@@ -90,10 +90,7 @@ class TradingApp(ttk.Window):
         content = ttk.Frame(self.tab_dashboard)
         content.pack(fill=BOTH, expand=YES, padx=20, pady=20)
         
-        # 1. Financial Stats
-        stats_frame = ttk.Frame(content)
-        stats_frame.pack(fill=X, pady=(0, 10))
-        
+        # Helper to create styled stat cards
         def create_stat_card(parent, title, var_name, color, initial_val="$0.00"):
             frame = ttk.Frame(parent, bootstyle=f"{color}")
             frame.pack(side=LEFT, fill=X, expand=YES, padx=5)
@@ -104,18 +101,29 @@ class TradingApp(ttk.Window):
             lbl.pack(anchor=E)
             setattr(self, var_name, lbl)
 
+        # 1. Financial Stats
+        stats_frame = ttk.Frame(content)
+        stats_frame.pack(fill=X, pady=(0, 10))
+        
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
         create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success")
 
-        # 2. Position Counts
+        # 2. Market Data (Bid/Ask) - NEW SECTION
+        market_frame = ttk.Frame(content)
+        market_frame.pack(fill=X, pady=(0, 10))
+        
+        create_stat_card(market_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
+        create_stat_card(market_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
+
+        # 3. Position Counts
         pos_frame = ttk.Frame(content)
         pos_frame.pack(fill=X, pady=(0, 20))
         create_stat_card(pos_frame, "BUY POSITIONS", "lbl_buy_count", "secondary", "0")
         create_stat_card(pos_frame, "SELL POSITIONS", "lbl_sell_count", "secondary", "0")
-        create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "warning", "0")
+        create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "light", "0")
 
-        # 3. Controls & Config
+        # 4. Controls & Config Wrapper
         ctrl_wrapper = ttk.Frame(content)
         ctrl_wrapper.pack(fill=BOTH, expand=YES)
 
@@ -148,14 +156,14 @@ class TradingApp(ttk.Window):
         conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ")
         conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
         
-        # Auto Trade
+        # Auto Trade Toggle
         auto_row = ttk.Frame(conf_frame)
         auto_row.pack(fill=X, padx=20, pady=15)
         ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
         chk_auto = ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle)
         chk_auto.pack(side=RIGHT)
 
-        # Symbol Changer (COMBOBOX)
+        # Symbol Changer
         sym_row = ttk.Frame(conf_frame)
         sym_row.pack(fill=X, padx=20, pady=10)
         ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
@@ -163,7 +171,6 @@ class TradingApp(ttk.Window):
         sym_input_frame = ttk.Frame(sym_row)
         sym_input_frame.pack(fill=X, pady=5)
         
-        # Changed from Entry to Combobox
         self.sym_combo = ttk.Combobox(sym_input_frame, textvariable=self.symbol_var, width=13, bootstyle="secondary")
         self.sym_combo.pack(side=LEFT, padx=(0, 5))
         
@@ -280,13 +287,11 @@ class TradingApp(ttk.Window):
         return f"[{time_str}] {record.getMessage()}"
 
     def _start_data_refresh(self):
-        # Update server status
         if self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
         else:
             self.lbl_server.configure(text="SERVER: OFF", bootstyle="secondary-inverse")
 
-        # Update stats
         if self.connector.account_info:
             info = self.connector.account_info
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
@@ -294,11 +299,17 @@ class TradingApp(ttk.Window):
             prof = info.get('profit', 0)
             p_prefix = "+" if prof >= 0 else ""
             self.lbl_profit.configure(text=f"{p_prefix}${prof:,.2f}")
+            
+            # Update Bid/Ask
+            bid = info.get('bid', 0.0)
+            ask = info.get('ask', 0.0)
+            self.lbl_bid.configure(text=f"{bid:.5f}")
+            self.lbl_ask.configure(text=f"{ask:.5f}")
+            
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
             
-        # Update symbols dropdown if available
         if self.connector.available_symbols:
              self.sym_combo['values'] = self.connector.available_symbols
             

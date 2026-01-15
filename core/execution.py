@@ -16,7 +16,7 @@ class MT5Connector:
         self.lock = threading.Lock()
         self.account_info = {}
         self.last_candles = []
-        self.available_symbols = [] # Store symbols from MT5
+        self.available_symbols = []
         self.running = False
         self.telegram_bot = None
 
@@ -154,13 +154,19 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 b_count = int(data.get('buy_count', [0])[0])
                 s_count = int(data.get('sell_count', [0])[0])
                 
+                # Extract Bid/Ask
+                bid_price = float(data.get('bid', [0.0])[0])
+                ask_price = float(data.get('ask', [0.0])[0])
+                
                 self.connector.account_info = {
                     'balance': float(data.get('balance', [0])[0]),
                     'equity': float(data.get('acct_equity', [0])[0]),
                     'profit': float(data.get('profit', [0])[0]),
                     'buy_count': b_count,
                     'sell_count': s_count,
-                    'total_count': b_count + s_count
+                    'total_count': b_count + s_count,
+                    'bid': bid_price,
+                    'ask': ask_price
                 }
 
             # Send Commands
