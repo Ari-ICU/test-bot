@@ -54,7 +54,7 @@ class TradingApp(ttk.Window):
         self.lbl_status.pack(side=RIGHT)
         
         # --- Main Content (Paned Window) ---
-        # FIX: Changed PanedWindow to Panedwindow (lowercase 'w')
+        # Note: Using Panedwindow (lowercase 'w') for compatibility
         pane = ttk.Panedwindow(self, orient=HORIZONTAL)
         pane.pack(fill=BOTH, expand=YES, padx=10, pady=10)
         
@@ -63,7 +63,8 @@ class TradingApp(ttk.Window):
         pane.add(left_frame, weight=1)
         
         # 1. Account Info Card
-        info_frame = ttk.LabelFrame(left_frame, text="Account Info", padding=10)
+        # FIX: Replaced 'padding=10' with 'padx=10, pady=10' for LabelFrame
+        info_frame = ttk.LabelFrame(left_frame, text="Account Info", padx=10, pady=10)
         info_frame.pack(fill=X, pady=5)
         
         self.lbl_balance = ttk.Label(info_frame, text="Balance: $0.00", font=("Consolas", 12))
@@ -74,7 +75,8 @@ class TradingApp(ttk.Window):
         self.lbl_profit.pack(anchor=W)
 
         # 2. Controls Card
-        ctrl_frame = ttk.LabelFrame(left_frame, text="Bot Controls", padding=10)
+        # FIX: Replaced 'padding=10' with 'padx=10, pady=10'
+        ctrl_frame = ttk.LabelFrame(left_frame, text="Bot Controls", padx=10, pady=10)
         ctrl_frame.pack(fill=X, pady=10)
         
         self.btn_start = ttk.Button(ctrl_frame, text="START BOT", bootstyle="success", command=self.toggle_bot)
@@ -93,14 +95,16 @@ class TradingApp(ttk.Window):
         ttk.Button(ctrl_frame, text="CLOSE ALL POSITIONS", bootstyle="warning", command=lambda: self.manual_close("ALL")).pack(fill=X, pady=5)
 
         # 3. Webhook Info
-        web_frame = ttk.LabelFrame(left_frame, text="Webhook Config", padding=10)
+        # FIX: Replaced 'padding=10' with 'padx=10, pady=10'
+        web_frame = ttk.LabelFrame(left_frame, text="Webhook Config", padx=10, pady=10)
         web_frame.pack(fill=X, pady=10)
         ttk.Label(web_frame, text=f"URL: http://127.0.0.1:{self.connector.port}/webhook").pack(anchor=W)
         ttk.Label(web_frame, text="Format: JSON").pack(anchor=W)
         ttk.Label(web_frame, text='{"action": "BUY", "symbol": "XAUUSD"}', font=("Consolas", 8), bootstyle="secondary").pack(anchor=W)
 
         # Right Side: Logs
-        log_frame = ttk.LabelFrame(pane, text="System Logs", padding=10)
+        # FIX: Replaced 'padding=10' with 'padx=10, pady=10'
+        log_frame = ttk.LabelFrame(pane, text="System Logs", padx=10, pady=10)
         pane.add(log_frame, weight=3)
         
         self.log_area = ScrolledText(log_frame, state='disabled', font=("Consolas", 9))
