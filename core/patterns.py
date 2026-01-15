@@ -14,21 +14,15 @@ def detect_patterns(candles):
     p3 = df.iloc[-4]  # 3 candles ago
 
     signals = {
-        'bullish_engulfing': False,
-        'bearish_engulfing': False,
-        'bullish_pinbar': False,
-        'bearish_pinbar': False,
-        'bullish_fvg': False,
-        'bearish_fvg': False,
-        'bullish_flag': False,
-        'bearish_flag': False,
-        'supply_zone': False,
-        'demand_zone': False,
-        'double_top': False,   
-        'double_bottom': False,  
-        'inside_bar': False,    
-        'turtle_soup_buy': False,
-        'turtle_soup_sell': False
+        'bullish_engulfing': False, 'bearish_engulfing': False,
+        'bullish_pinbar': False, 'bearish_pinbar': False,
+        'bullish_fvg': False, 'bearish_fvg': False,
+        'bullish_flag': False, 'bearish_flag': False,
+        'supply_zone': False, 'demand_zone': False,
+        'double_top': False, 'double_bottom': False,
+        'inside_bar': False, 'turtle_soup_buy': False, 'turtle_soup_sell': False,
+        'ict_bullish_mss': False, 'ict_bearish_mss': False, 
+        'ict_bullish_fvg': False, 'ict_bearish_fvg': False
     }
 
     # 1. Engulfing Patterns
@@ -118,5 +112,22 @@ def detect_patterns(candles):
         # CRT Sell: Price breaks above 20-period high but closes back below it
         if p1['high'] > prev_20_high and c['close'] < prev_20_high:
             signals['turtle_soup_sell'] = True
+
+    # 9. ICT: Market Structure Shift (MSS)
+    recent_high = df['high'].iloc[-15:-2].max()
+    recent_low = df['low'].iloc[-15:-2].min()
+    if c['close'] > recent_high: signals['ict_bullish_mss'] = True
+    if c['close'] < recent_low: signals['ict_bearish_mss'] = True
+
+    # 10. ICT: Fair Value Gap with Displacement
+    def body(k): return abs(k['close'] - k['open'])
+    avg_body = df['close'].diff().abs().rolling(14).mean().iloc[-1]
+    
+    # Bullish: Gap + Middle candle (p2) is an explosive move
+    if p3['high'] < p1['low'] and body(p2) > (avg_body * 1.5):
+        signals['ict_bullish_fvg'] = True
+    # Bearish: Gap + Middle candle (p2) is an explosive move
+    if p3['low'] > p1['high'] and body(p2) > (avg_body * 1.5):
+        signals['ict_bearish_fvg'] = True
 
     return signals
