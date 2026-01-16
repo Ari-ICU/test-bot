@@ -10,37 +10,41 @@ class NewsFilter:
         self.last_signal_time = datetime.now() - timedelta(minutes=10)
         
         # Asset Class Keywords
-        self.crypto_keywords = ["BITCOIN", "BTC", "ETH", "ETHEREUM", "SOLANA", "CRYPTO"]
-        self.forex_keywords = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "GOLD", "XAU", "OIL"]
+        self.forex_keywords = ["USD", "EUR", "GBP", "JPY", "GOLD", "XAU", "CENTRAL BANK"]
         
-        # Economic Events (Affects EVERYTHING)
-        self.econ_keywords = ["CPI", "GDP", "FOMC", "FED", "RATE HIKE", "INFLATION", "JOB"]
+        # Fundamental Economic Indicators
+        self.econ_keywords = ["CPI", "GDP", "FOMC", "INTEREST RATE", "INFLATION", "EMPLOYMENT", "PAYROLLS"]
 
-        self.bullish_keywords = ["surge", "soar", "jump", "rally", "record", "bull", "gain"]
-        self.bearish_keywords = ["crash", "plunge", "drop", "slump", "bear", "loss", "fall"]
+        # Psychological Sentiment Keywords
+        self.bullish_keywords = ["surge", "rally", "growth", "stable", "hawkish", "bull"]
+        self.bearish_keywords = ["crash", "plunge", "risk", "panic", "dovish", "bear", "slump"]
+
+    def analyze_sentiment_multiplier(self, title):
+        """
+        Market Psychology Advice: Fear and greed drive fluctuations.
+        Returns a risk multiplier (0.5 for high fear/volatility, 1.0 for stable).
+        """
+        t = title.lower()
+        # High-impact 'Panic' or 'Crash' words should trigger a safety reduction in lot sizes
+        if any(word in t for word in ["crash", "panic", "crisis", "black swan"]):
+            return 0.5 
+        return 1.0
 
     def get_news_category(self, title):
-        """Determines if news is CRYPTO, FOREX, or ECON"""
         t = title.upper()
-        # Check Econ first (affects all)
         if any(k in t for k in self.econ_keywords):
-            return "ECON"
-        if any(k in t for k in self.crypto_keywords):
-            return "CRYPTO"
+            return "FUNDAMENTAL" # Prioritize economic indicators
         if any(k in t for k in self.forex_keywords):
             return "FOREX"
         return "UNKNOWN"
 
     def get_sentiment_signal(self, current_symbol="XAUUSD"):
         """
-        Returns: ("BUY"|"SELL"|"NEUTRAL", "Reason", "CATEGORY")
+        Returns: (Action, Reason, Category, RiskMultiplier)
         """
         if (datetime.now() - self.last_signal_time).seconds < 300:
-            return "NEUTRAL", "", "NONE"
+            return "NEUTRAL", "", "NONE", 1.0
 
-        # 1. Determine what we are trading
-        is_crypto_symbol = any(x in current_symbol.upper() for x in ["BTC", "ETH", "BITCOIN", "CRYPTO"])
-        
         for source in self.sources:
             try:
                 if not source.get('url'): continue
@@ -49,34 +53,25 @@ class NewsFilter:
                 for entry in feed.entries[:3]:
                     title = entry.title
                     category = self.get_news_category(title)
+                    risk_mod = self.analyze_sentiment_multiplier(title)
                     
                     if category == "UNKNOWN": continue 
 
-                    # --- FILTERING LOGIC ---
-                    # If trading Gold/Forex, IGNORE Crypto news
-                    if not is_crypto_symbol and category == "CRYPTO":
-                        continue
-                        
-                    # If trading Crypto, IGNORE Forex specific news (unless it's ECON)
-                    if is_crypto_symbol and category == "FOREX":
-                        continue
-                    # -----------------------
-
-                    # SELL Logic
+                    # Bearish/Fear Sentiment
                     for kw in self.bearish_keywords:
                         if kw in title.lower():
                             self.last_signal_time = datetime.now()
-                            logger.warning(f"📉 {category} News: {title}")
-                            return "SELL", f"News ({kw}): {title[:40]}...", category
+                            logger.warning(f"🧠 Market Psychology (Fear): {title}")
+                            return "SELL", f"Fund. ({kw}): {title[:30]}", category, risk_mod
 
-                    # BUY Logic
+                    # Bullish Sentiment
                     for kw in self.bullish_keywords:
                         if kw in title.lower():
                             self.last_signal_time = datetime.now()
-                            logger.info(f"📈 {category} News: {title}")
-                            return "BUY", f"News ({kw}): {title[:40]}...", category
+                            logger.info(f"🧠 Market Psychology (Greed): {title}")
+                            return "BUY", f"Fund. ({kw}): {title[:30]}", category, risk_mod
                             
             except Exception as e:
-                logger.error(f"News Error: {e}")
+                logger.error(f"News Analysis Error: {e}")
         
-        return "NEUTRAL", "", "NONE"
+        return "NEUTRAL", "", "NONE", 1.0
