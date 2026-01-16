@@ -83,7 +83,7 @@ def bot_logic(app):
                 ict_strat.analyze_ict_setup(candles),
                 trend.analyze_trend_setup(candles),
                 scalping.analyze_scalping_setup(candles),
-                tbs_strat.analyze_tb_setup(candles),
+                tbs_strat.analyze_tbs_turtle_setup(candles),
                 breakout.analyze_breakout_setup(candles)
             ]
 
