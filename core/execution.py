@@ -109,8 +109,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
+            # FIX: Check multiple possible keys for the symbol
             if 'symbol' in data:
                 self.connector.active_symbol = data['symbol'][0]
+            elif 'acct_name' in data and not self.connector.active_symbol:
+                # Fallback: Often the EA sends the symbol in the name field during init
+                self.connector.active_symbol = data['acct_name'][0].split(' ')[0]
 
             if 'candles' in data:
                 raw_candles = data['candles'][0]

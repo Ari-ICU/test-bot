@@ -98,7 +98,7 @@ class TradingApp(ttk.Window):
             setattr(self, var_name, lbl)
             return lbl
 
-        # --- ROW 1: MTF TREND MONITOR (NEW) ---
+        # --- ROW 1: MTF TREND MONITOR ---
         trend_monitor = ttk.Labelframe(content, text=" Multi-Timeframe Trend Direction ", padding=10)
         trend_monitor.pack(fill=X, pady=(0, 15))
         
@@ -116,11 +116,12 @@ class TradingApp(ttk.Window):
         create_stat_card(stats_frame, "ACCOUNT MODE", "lbl_acc_mode", "secondary", "CONNECTING...")
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
+        # FIXED: Added the missing lbl_profit card so the refresh loop doesn't crash
+        create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success", "$0.00")
         
-        # --- ROW 3: PSYCHOLOGY & MARKET (UPDATED) ---
+        # --- ROW 3: PSYCHOLOGY & MARKET ---
         mid_frame = ttk.Frame(content)
         mid_frame.pack(fill=X, pady=(0, 10))
-        # Psychology Card
         self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY DISCIPLINE", "lbl_discipline", "dark", "0/0 Trades")
         create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
@@ -274,7 +275,7 @@ class TradingApp(ttk.Window):
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
             
-            # --- FIXED: Added Floating Profit/Loss Update ---
+            # --- UPDATED: Floating Profit/Loss ---
             prof = info.get('profit', 0.0)
             p_prefix = "+" if prof >= 0 else ""
             p_color = "success" if prof >= 0 else "danger"
