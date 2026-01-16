@@ -17,17 +17,27 @@ import filters.spread as spread
 import filters.news as news
 from core.indicators import Indicators 
 
-# --- Enhanced Logger Setup ---
-class CustomFormatter(logging.Formatter):
-    format_str = "%(asctime)s | %(levelname)-8s | %(message)s"
-    def format(self, record):
-        formatter = logging.Formatter(self.format_str, datefmt="%H:%M:%S")
-        return formatter.format(record)
+# --- Fixed Logger Setup (Prevents Duplicates) ---
+def setup_logger():
+    logger = logging.getLogger("Main")
+    if logger.hasHandlers():
+        logger.handlers.clear() # Clear existing handlers to prevent duplicates
+    
+    logger.setLevel(logging.INFO)
+    logger.propagate = False # Stop messages from climbing to the root logger
 
-handler = logging.StreamHandler()
-handler.setFormatter(CustomFormatter())
-logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
-logger = logging.getLogger("Main")
+    class CustomFormatter(logging.Formatter):
+        format_str = "%(asctime)s | %(levelname)-8s | %(message)s"
+        def format(self, record):
+            formatter = logging.Formatter(self.format_str, datefmt="%H:%M:%S")
+            return formatter.format(record)
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(CustomFormatter())
+    logger.addHandler(handler)
+    return logger
+
+logger = setup_logger()
 
 def bot_logic(app):
     connector = app.connector
@@ -69,34 +79,32 @@ def bot_logic(app):
             if not app.auto_trade_var.get(): 
                 time.sleep(1); continue
 
-            is_open, session_name, session_risk = get_detailed_session_status()
+            is_open, session_name, session_multiplier = get_detailed_session_status()
             if not is_open: 
                 time.sleep(5); continue
 
             drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
             can_trade, risk_reason = risk.can_trade(drawdown_pct)
             if not can_trade:
-                logger.debug(f"Risk Block: {risk_reason}") # Log risk blocks at debug level
                 time.sleep(5); continue
                 
             if curr_positions >= max_pos_allowed:
                 time.sleep(5); continue
 
-            # 5. Real-Time Market Filter Logs
-            # These will now tell you exactly which filter is stopping the trade
+            # 5. Market Filters (With Warning Logs)
             if news.is_high_impact_news_near(symbol):
-                logger.warning(f"⚠️ News Filter: High Impact News detected. Skipping {symbol}.")
+                logger.warning(f"⚠️ Filter Block: High Impact News detected for {symbol}")
                 time.sleep(5); continue
 
             if not spread.is_spread_fine(symbol, info.get('bid', 0), info.get('ask', 0)):
-                logger.warning(f"⚠️ Spread Filter: Current spread is too wide for {symbol}.")
+                logger.warning(f"⚠️ Filter Block: Spread too wide for {symbol}")
                 time.sleep(2); continue
 
             if not volatility.is_volatility_sufficient(candles):
-                logger.warning(f"⚠️ Volatility Filter: ATR outside safe bounds for {symbol}.")
+                logger.warning(f"⚠️ Filter Block: Volatility insufficient for {symbol}")
                 time.sleep(5); continue
 
-            # 6. Strategy Evaluation with Signal Logging
+            # 6. Strategy Evaluation with Real-Time Reason Logging
             strategies = [
                 ("ICT_SB", ict_strat.analyze_ict_setup(candles)),
                 ("Trend", trend.analyze_trend_setup(candles)),
@@ -105,7 +113,7 @@ def bot_logic(app):
                 ("Breakout", breakout.analyze_breakout_setup(candles))
             ]
 
-            # Calculate ATR locally for precise SL/TP calculation
+            # Locally calculate current ATR for the Risk Manager
             df = pd.DataFrame(candles)
             atr_series = Indicators.calculate_atr(df)
             current_atr = atr_series.iloc[-1] if not atr_series.empty else 0
@@ -113,18 +121,18 @@ def bot_logic(app):
             for name, (action, reason) in strategies:
                 if action != "NEUTRAL":
                     current_price = info.get('ask') if action == "BUY" else info.get('bid')
-                    sl, tp = risk.calculate_sl_cycle(current_price, action, current_atr) # Using precise ATR
+                    # Use local ATR to set dynamic SL/TP
+                    sl, tp = risk.calculate_sl_tp(current_price, action, current_atr)
                     
                     if connector.send_order(action, symbol, user_lot, sl, tp):
-                        logger.info(f"🚀 {action} EXECUTED: {name} - {reason} | Lot: {user_lot}")
-                        risk.record_trade() #
+                        logger.info(f"🚀 {action} EXECUTED: {name} - {reason}")
+                        risk.record_trade()
                         time.sleep(60); break 
                 else:
-                    # REAL-TIME LOG: This will show in your console for every "Neutral" candle
-                    if time.time() - last_heartbeat < 2: # Only log once per cycle to avoid spam
-                        logger.info(f"📡 Signal Check [{name}]: {reason if reason else 'No Setup'}")
+                    # Log neutral reasons every cycle to confirm the bot is "thinking"
+                    logger.info(f"📡 {name} Check: {reason if reason else 'No Setup'}")
                 
-            time.sleep(1)
+            time.sleep(2) # Prevent loop from burning CPU
         except Exception as e:
             logger.error(f"Logic Error: {e}"); time.sleep(5)
 
