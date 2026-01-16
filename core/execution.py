@@ -15,7 +15,7 @@ class MT5Connector:
         self.command_queue = []
         self.lock = threading.Lock()
         
-        # FIXED: Internal storage variable to avoid naming collision with the property
+        # FIXED: Internal storage variable to avoid collision with property
         self._account_data = {
             'name': 'Disconnected',
             'balance': 0.0,
@@ -95,11 +95,9 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
-            # 1. Capture Active Symbol
             if 'symbol' in data:
                 self.connector.active_symbol = data['symbol'][0]
 
-            # 2. Parse Candle Data
             if 'candles' in data:
                 raw_candles = data['candles'][0]
                 if raw_candles:
@@ -116,18 +114,16 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                             })
                     self.connector.last_candles = parsed
 
-            # 3. Available Symbols List
             if 'all_symbols' in data:
                 self.connector.available_symbols = [s.strip() for s in data['all_symbols'][0].split(',') if s.strip()]
 
-            # 4. FIXED: Sync Account Data to the internal dictionary
+            # FIXED: Sync Account Data to the internal dictionary
             if 'balance' in data:
                 b_count = int(data.get('buy_count', [0])[0])
                 s_count = int(data.get('sell_count', [0])[0])
                 
-                # Update the private storage variable used by the property
                 self.connector._account_data = {
-                    'name': data.get('acc_name', ["Unknown Account"])[0], # Ensure EA sends 'acc_name'
+                    'name': data.get('acc_name', ["Unknown Account"])[0], 
                     'balance': float(data.get('balance', [0])[0]),
                     'equity': float(data.get('acct_equity', [0])[0]),
                     'profit': float(data.get('profit', [0])[0]),
@@ -138,7 +134,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     'ask': float(data.get('ask', [0.0])[0])
                 }
 
-            # 5. Respond with Queued Commands
             resp = "OK"
             with self.connector.lock:
                 if self.connector.command_queue:
