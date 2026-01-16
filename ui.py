@@ -271,9 +271,21 @@ class TradingApp(ttk.Window):
         logging.info(f"Manual {action} ({vol} lots) on {sym}")
 
     def manual_close(self, mode):
+        """
+        Fixed: Sends specific action strings (CLOSE_WIN, CLOSE_LOSS, CLOSE_ALL) 
+        to match the MQL5 ProcessCommand logic.
+        """
         sym = self.symbol_var.get()
-        self.connector.close_position(sym, mode)
-        logging.info(f"Manual Close ({mode}) on {sym}")
+        
+        # Format the command to match MQL5 EA's ProcessCommand expectation:
+        # The EA checks: if(action == "CLOSE_ALL") or if(action == "CLOSE_WIN"), etc.
+        cmd = f"CLOSE_{mode}|{sym}"
+        
+        # Append the command to the connector's queue for the EA to pick up
+        with self.connector.lock:
+            self.connector.command_queue.append(cmd)
+            
+        logging.info(f"Manual Close ({mode}) request sent for {sym}")
 
     def clear_logs(self):
         self.log_area.text.configure(state='normal')
