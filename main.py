@@ -28,7 +28,7 @@ def bot_logic(app):
     connector = app.connector
     risk = app.risk
     last_heartbeat = 0  
-    is_synced = False # State tracker to prevent log spam
+    is_synced = False 
 
     logger.info("Bot logic running: Dynamic UI Mode active.") 
     
@@ -51,7 +51,6 @@ def bot_logic(app):
                 last_heartbeat = time.time()
 
             # 3. Data Fetching & Validation
-            # EA sends 200 by default, so we check for 200
             candles = connector.get_tf_candles(execution_tf, 300)
 
             if len(candles) < 200:
@@ -65,42 +64,47 @@ def bot_logic(app):
                 is_synced = True
 
             # 4. Global Risk Gates
-            if not app.auto_trade_var.get(): # Check if UI Auto-Trade toggle is ON
+            if not app.auto_trade_var.get(): 
                 time.sleep(1); continue
 
-            is_open, _, _ = get_detailed_session_status()
+            is_open, session_name, _ = get_detailed_session_status()
             if not is_open: 
+                # logger.info(f"Market Closed: {session_name}")
                 time.sleep(5); continue
 
             drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
-            can_trade, reason = risk.can_trade(drawdown_pct)
+            can_trade, risk_reason = risk.can_trade(drawdown_pct)
             
-            if not can_trade or curr_positions >= max_pos_allowed:
+            if not can_trade:
+                # logger.warning(f"Risk Block: {risk_reason}")
+                time.sleep(5); continue
+                
+            if curr_positions >= max_pos_allowed:
                 time.sleep(5); continue
 
             # 5. Strategy Evaluation
-            decisions = [
-                ict_strat.analyze_ict_setup(candles),
-                trend.analyze_trend_setup(candles),
-                scalping.analyze_scalping_setup(candles),
-                tbs_strat.analyze_tbs_turtle_setup(candles),
-                breakout.analyze_breakout_setup(candles)
+            # We wrap results in a list to allow for better debug logging
+            strategies = [
+                ("ICT_SB", ict_strat.analyze_ict_setup(candles)),
+                ("Trend", trend.analyze_trend_setup(candles)),
+                ("Scalp", scalping.analyze_scalping_setup(candles)),
+                ("Turtle", tbs_strat.analyze_tbs_turtle_setup(candles)),
+                ("Breakout", breakout.analyze_breakout_setup(candles))
             ]
 
-            for action, reason in decisions:
+            for name, (action, reason) in strategies:
                 if action != "NEUTRAL":
                     current_price = info.get('ask') if action == "BUY" else info.get('bid')
                     latest_atr = candles[-1].get('atr', 0)
                     
-                    # Calculate dynamic stops based on refined RiskManager
+                    # Calculate dynamic stops based on RiskManager
                     sl, tp = risk.calculate_sl_tp(current_price, action, latest_atr)
                     
-                    # send_order now correctly passes the UI Lot Size
                     if connector.send_order(action, symbol, user_lot, sl, tp):
-                        logger.info(f"🚀 {action} EXECUTED: {reason} | Lot: {user_lot} | SL: {sl} | TP: {tp}")
+                        logger.info(f"🚀 {action} EXECUTED: {name} - {reason} | Lot: {user_lot} | SL: {sl} | TP: {tp}")
                         risk.record_trade()
-                    time.sleep(60); break 
-
+                        time.sleep(60); break # Cool down after trade execution
+                
             time.sleep(1)
         except Exception as e:
             logger.error(f"Logic Error: {e}"); time.sleep(5)
