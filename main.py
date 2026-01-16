@@ -12,10 +12,11 @@ import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
 import strategy.breakout as breakout
 import strategy.tbs_turtle as tbs_strat
+import strategy.trend_following as trend
 import filters.volatility as volatility
 import filters.spread as spread
 import filters.news as news
-from core.indicators import Indicators # Added to calculate ATR locally
+from core.indicators import Indicators 
 
 # --- Logger Setup ---
 class CustomFormatter(logging.Formatter):
@@ -109,7 +110,8 @@ def bot_logic(app):
                 ("Trend", trend.analyze_trend_setup(candles)),
                 ("Scalp", scalping.analyze_scalping_setup(candles)),
                 ("Turtle", tbs_strat.analyze_tbs_turtle_setup(candles)),
-                ("Breakout", breakout.analyze_breakout_setup(candles))
+                ("Breakout", breakout.analyze_breakout_setup(candles)),
+                ("Trend", trend.analyze_trend_setup(candles)),
             ]
 
             # Convert candles to DataFrame once for indicator-based SL/TP
