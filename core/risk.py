@@ -5,37 +5,29 @@ class RiskManager:
         self.max_daily_loss = self.config.get('max_daily_loss', 5.0) 
         self.min_lot = 0.01
 
-    def calculate_lot_size(self, balance, entry_price, sl_price, symbol_type="FOREX", equity=None):
+    def calculate_lot_size(self, balance, entry_price, sl_price, symbol_type="XAUUSD", equity=None):
         """
-        Calculates dynamic lot size based on risk percentage.
-        Uses Equity if provided (safer), else Balance.
+        Calculates dynamic lot size based on risk percentage and contract specs.
         """
-        # Use Equity for calculation if available (Protects during drawdown)
         base_capital = equity if equity is not None else balance
-        
         if base_capital <= 0: return self.min_lot
         
         risk_amount = base_capital * (self.risk_per_trade / 100.0)
-        dist = abs(entry_price - sl_price)
+        dist_points = abs(entry_price - sl_price)
         
-        if dist == 0: return self.min_lot
-        
-        # --- Lot Calculation ---
-        # Standard Formula: Risk / (Distance * ValuePerPoint)
-        # We approximate ValuePerPoint based on symbol type
-        
-        if "XAU" in symbol_type or "BTC" in symbol_type:
-            # Gold/Crypto (Higher volatility/Different contract size)
-            # Approximation: 1 Lot Gold ~ $1 per 0.01 tick? 
-            # This constant varies wildly by broker. 
-            # Safe Fallback: Assume Standard Lot = 100k units
-            raw_lot = risk_amount / dist 
+        if dist_points == 0: return self.min_lot
+
+        # Standard Gold (XAUUSD) calculation: 1 lot move of 1.00 = $100
+        # For Forex: 1 lot move of 0.0001 = $10
+        if "XAU" in symbol_type.upper():
+            # risk_amount / (distance * 100)
+            raw_lot = risk_amount / (dist_points * 100)
         else:
-            # Forex Standard
-            raw_lot = risk_amount / dist 
+            # Standard Forex calculation
+            raw_lot = risk_amount / (dist_points * 100000) if dist_points > 0 else self.min_lot
             
         final_lot = max(self.min_lot, round(raw_lot, 2))
-        return min(final_lot, 5.0) # Hard Cap
+        return min(final_lot, 2.0) # Reduced hard cap for safety
 
     def calculate_sl_tp(self, price, action, atr, risk_reward_ratio=2.0):
         """

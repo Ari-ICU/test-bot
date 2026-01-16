@@ -92,9 +92,10 @@ def bot_logic(app):
             # --- FIXED: MAX DAILY LOSS GATEKEEPER ---
             # Calculates if current floating drawdown exceeds allowed % of balance
             if curr_balance > 0:
+                # Use equity to find real-time drawdown
                 current_drawdown_pct = ((curr_balance - equity) / curr_balance) * 100
                 if current_drawdown_pct > risk.max_daily_loss:
-                    logger.warning(f"🛑 Halted: Daily Loss Limit ({risk.max_daily_loss}%) Reached.")
+                    logger.warning(f"🛑 Halted: Daily Drawdown ({current_drawdown_pct:.2f}%) exceeds limit.")
                     time.sleep(60)
                     continue
 
