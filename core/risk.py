@@ -30,23 +30,29 @@ class RiskManager:
         final_lot = max(self.min_lot, round(raw_lot, 2))
         return min(final_lot, 5.0) # Keep your 5.0 Hard Cap
 
-    def calculate_sl_tp(self, price, action, atr, risk_reward_ratio=2.0):
+    def calculate_sl_tp(self, price, action, atr, digits=2, risk_reward_ratio=2.0):
         """
-        Dynamic SL/TP based on Volatility (ATR).
-        Returns SL and TP prices.
+        Enhanced SL/TP calculation with safety buffers to prevent Error 10016.
         """
-        # 1. Volatility Filter (Ensure SL isn't too tight)
+        # Use 1.5x ATR for volatility or 0.1% of price as a minimum safety distance
         volatility = atr if atr > 0 else price * 0.002
-        min_sl_dist = price * 0.001 # Minimum 0.1% distance
+        min_dist = price * 0.001 
         
-        sl_dist = max(volatility * 1.5, min_sl_dist)
+        sl_dist = max(volatility * 1.5, min_dist)
         tp_dist = sl_dist * risk_reward_ratio
         
         if action == "BUY":
             sl = price - sl_dist
             tp = price + tp_dist
         else: # SELL
+            # For SELL, SL must be HIGHER than price, TP must be LOWER
             sl = price + sl_dist
             tp = price - tp_dist
             
-        return round(sl, 2), round(tp, 2)
+        # Final safety check: ensure SL is on the correct side of the price
+        if action == "SELL" and sl <= price:
+            sl = price + min_dist
+        if action == "BUY" and sl >= price:
+            sl = price - min_dist
+
+        return round(sl, digits), round(tp, digits)

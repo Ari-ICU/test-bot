@@ -281,31 +281,38 @@ void ProcessCommand(string cmd) {
     else if(action == "CLOSE_TICKET") CloseTicket((long)StringToInteger(parts[1]));
 }
 
-// --- FIX: Added Price Normalization ---
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeRequest r;
     MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
     
-    int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS); // Get correct digits for symbol
-    
-    r.action = TRADE_ACTION_DEAL; 
+    int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
+    double stops_level = SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(s, SYMBOL_POINT);
+    double ask = SymbolInfoDouble(s, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(s, SYMBOL_BID);
+    double entry_price = (t == ORDER_TYPE_BUY) ? ask : bid;
+
+    r.action = TRADE_ACTION_DEAL;
     r.symbol = s; 
     r.volume = v; 
     r.type = t; 
-    r.price = (t==ORDER_TYPE_BUY) ? SymbolInfoDouble(s,SYMBOL_ASK) : SymbolInfoDouble(s,SYMBOL_BID); 
+    r.price = entry_price;
+
+    // VALIDATION: Ensure SL/TP are not within the broker's forbidden "StopsLevel" zone
+    if(sl > 0) {
+        if(t == ORDER_TYPE_BUY && sl > (bid - stops_level)) sl = bid - stops_level;
+        if(t == ORDER_TYPE_SELL && sl < (ask + stops_level)) sl = ask + stops_level;
+        r.sl = NormalizeDouble(sl, digits);
+    }
     
-    // Normalize SL/TP to prevent Invalid Request (10013)
-    if(sl > 0) r.sl = NormalizeDouble(sl, digits);
-    if(tp > 0) r.tp = NormalizeDouble(tp, digits);
+    if(tp > 0) {
+        if(t == ORDER_TYPE_BUY && tp < (bid + stops_level)) tp = bid + stops_level;
+        if(t == ORDER_TYPE_SELL && tp > (ask - stops_level)) tp = ask - stops_level;
+        r.tp = NormalizeDouble(tp, digits);
+    }
     
-    r.deviation = 20;
-    r.type_filling = GetFillingMode(s); 
-    
-    Print("Sending Trade: ", s, " ", EnumToString(t), " Vol:", v, " Price:", r.price, " SL:", r.sl, " TP:", r.tp, " Fill:", EnumToString(r.type_filling));
-    
-    if(!OrderSend(r, res)) Print("❌ Trade Fail: ", res.retcode, " (", res.comment, ")");
-    else Print("✅ Trade Success! Ticket:", res.order);
+    r.type_filling = GetFillingMode(s);
+    if(!OrderSend(r, res)) Print("❌ Trade Fail: ", res.retcode);
 }
 
 void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
