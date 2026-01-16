@@ -24,84 +24,71 @@ logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 logger = logging.getLogger("Main")
 
 def bot_logic(app):
-    """
-    Core bot loop refactored for Strategy-Only execution.
-    Removed all D1, H1, and M15 trend alignment requirements.
-    """
     conf = Config()
     connector = app.connector
     risk = app.risk
-    news_filter = NewsFilter(conf.get('sources', []))
     
-    logger.info("Bot logic running: Strategy-Only Mode (M5) active.") 
-    
-    max_pos_allowed = risk.config.get('max_positions', 5)
+    logger.info("Bot logic running: Dynamic UI Mode active.") 
     last_heartbeat = 0  
     
     while app.bot_running:
         try:
+            # --- DYNAMIC UI SETTINGS ---
+            # Pull live values from UI instead of config files
+            symbol = app.symbol_var.get() 
+            execution_tf = app.tf_var.get()
+            max_pos_allowed = app.max_pos_var.get()
+            user_lot = app.lot_var.get()
+
             info = connector.account_info
             curr_balance = info.get('balance', 0.0)
             curr_positions = info.get('total_count', 0)
             equity = info.get('equity', 0.0)
-            symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
             
-            # --- Heartbeat Monitor ---
             if time.time() - last_heartbeat > 60:
                 logger.info(f"❤️ Heartbeat | {symbol} | Equity: ${equity:,.2f}")
                 last_heartbeat = time.time()
 
-            # --- SINGLE TIMEFRAME FETCHING ---
-            # Now only fetches the M5 execution timeframe candles
-            m5_candles = connector.get_tf_candles("M5", 300)
+            # --- DATA FETCHING ---
+            # Uses the timeframe selected in the UI dropdown
+            m5_candles = connector.get_tf_candles(execution_tf, 300)
 
-            # Validation: Ensure sufficient data for indicator calculations
+            # Fix: Lowered requirement to 200 to match EA default output
             if len(m5_candles) < 200:
-                logger.warning(f"Insufficient M5 data: {len(m5_candles)}/200")
+                logger.warning(f"Insufficient {execution_tf} data for {symbol}: {len(m5_candles)}/200")
                 time.sleep(2); continue
 
-            # --- RISK & SESSION GATES ---
+            # --- RISK GATES ---
             is_open, _, session_risk_mod = get_detailed_session_status()
             if not is_open: 
                 time.sleep(5); continue
 
             drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
             can_trade, _ = risk.can_trade(drawdown_pct)
+            
+            # Uses live Max Positions from UI
             if not can_trade or curr_positions >= max_pos_allowed:
                 time.sleep(5); continue
 
-            # --- STRATEGY EXECUTION ---
-            # Evaluate strategies directly based on M5 data
+            # --- STRATEGY EVALUATION ---
             decisions = [
                 ict_strat.analyze_ict_setup(m5_candles),
                 trend.analyze_trend_setup(m5_candles),
                 scalping.analyze_scalping_setup(m5_candles)
             ]
 
-            final_action = "NEUTRAL"
-            execution_reason = ""
-
             for action, reason in decisions:
-                # Execution triggers immediately on strategy signal
                 if action != "NEUTRAL":
-                    final_action = action
-                    execution_reason = reason
-                    break
-            
-            if final_action in ["BUY", "SELL"]:
-                current_price = info.get('ask') if final_action == "BUY" else info.get('bid')
-                latest_atr = m5_candles[-1].get('atr', 0)
-                
-                sl, tp = risk.calculate_sl_tp(current_price, final_action, latest_atr)
-                lot = risk.calculate_lot_size(curr_balance, current_price, sl, symbol, equity)
-                lot = lot * session_risk_mod # Volatility adjustment from session status
-
-                if connector.send_order(final_action, symbol, lot, sl, tp):
-                    logger.info(f"🚀 {final_action} EXECUTED: {execution_reason}")
-                    risk.record_trade()
-                
-                # Cool-down to prevent immediate double-triggering
-                time.sleep(60) 
+                    current_price = info.get('ask') if action == "BUY" else info.get('bid')
+                    latest_atr = m5_candles[-1].get('atr', 0)
+                    
+                    # Calculate SL/TP but use UI Lot Size
+                    sl, tp = risk.calculate_sl_tp(current_price, action, latest_atr)
+                    
+                    if connector.send_order(action, symbol, user_lot, sl, tp):
+                        logger.info(f"🚀 {action} EXECUTED: {reason} | Lot: {user_lot}")
+                        risk.record_trade()
+                    time.sleep(60); break 
 
             time.sleep(1)
         except Exception as e:
@@ -119,18 +106,15 @@ def main():
     )
     connector.set_telegram(telegram_bot)
 
-    if not connector.start(): 
-        return
+    if not connector.start(): return
 
     risk = RiskManager(conf.data)
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
     try:
         app.mainloop()
-    except KeyboardInterrupt: 
-        pass
-    finally: 
-        connector.stop()
+    except KeyboardInterrupt: pass
+    finally: connector.stop()
 
 if __name__ == "__main__":
     main()

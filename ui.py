@@ -33,7 +33,7 @@ class TradingApp(ttk.Window):
         
         # Defaults
         self.lot_var = tk.DoubleVar(value=0.01)
-        self.symbol_var = tk.StringVar(value="XAUUSD")
+        self.symbol_var = tk.StringVar(value="XAUUSDm")
         self.tf_var = tk.StringVar(value="M5") # Added for Timeframe control
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=5) 
@@ -169,6 +169,11 @@ class TradingApp(ttk.Window):
         self.tf_combo = ttk.Combobox(tf_row, textvariable=self.tf_var, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"], width=15, bootstyle="info")
         self.tf_combo.pack(fill=X, pady=2)
         self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
+
+        pos_row = ttk.Frame(conf_frame)
+        pos_row.pack(fill=X, padx=20, pady=5)
+        ttk.Label(pos_row, text="Max Positions:", font=("Helvetica", 10)).pack(anchor=W)
+        ttk.Spinbox(pos_row, from_=1, to=20, textvariable=self.max_pos_var, width=10).pack(fill=X, pady=2)
 
         lot_row = ttk.Frame(conf_frame)
         lot_row.pack(fill=X, padx=20, pady=5)
