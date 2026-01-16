@@ -5,7 +5,6 @@ from core.execution import MT5Connector
 from core.risk import RiskManager
 from core.session import get_detailed_session_status
 from core.telegram_bot import TelegramBot
-from filters.news import NewsFilter
 from ui import TradingApp
 import strategy.trend_following as trend
 import strategy.ict_silver_bullet as ict_strat
@@ -24,17 +23,19 @@ logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 logger = logging.getLogger("Main")
 
 def bot_logic(app):
-    conf = Config()
+    """
+    Core bot loop updated to pull ALL settings dynamically from the UI.
+    """
     connector = app.connector
     risk = app.risk
+    last_heartbeat = 0  
     
     logger.info("Bot logic running: Dynamic UI Mode active.") 
-    last_heartbeat = 0  
     
     while app.bot_running:
         try:
             # --- DYNAMIC UI SETTINGS ---
-            # Pull live values from UI instead of config files
+            # Pull values directly from UI variables in every loop
             symbol = app.symbol_var.get() 
             execution_tf = app.tf_var.get()
             max_pos_allowed = app.max_pos_var.get()
@@ -45,17 +46,18 @@ def bot_logic(app):
             curr_positions = info.get('total_count', 0)
             equity = info.get('equity', 0.0)
             
+            # --- Heartbeat Monitor ---
             if time.time() - last_heartbeat > 60:
                 logger.info(f"❤️ Heartbeat | {symbol} | Equity: ${equity:,.2f}")
                 last_heartbeat = time.time()
 
             # --- DATA FETCHING ---
-            # Uses the timeframe selected in the UI dropdown
-            m5_candles = connector.get_tf_candles(execution_tf, 300)
+            # Fetch candles based on the UI-selected Timeframe
+            candles = connector.get_tf_candles(execution_tf, 300)
 
-            # Fix: Lowered requirement to 200 to match EA default output
-            if len(m5_candles) < 200:
-                logger.warning(f"Insufficient {execution_tf} data for {symbol}: {len(m5_candles)}/200")
+            # Threshold set to 200 to match MT5_Bridge_EA default
+            if len(candles) < 200:
+                logger.warning(f"Insufficient {execution_tf} data for {symbol}: {len(candles)}/200")
                 time.sleep(2); continue
 
             # --- RISK GATES ---
@@ -64,25 +66,25 @@ def bot_logic(app):
                 time.sleep(5); continue
 
             drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
-            can_trade, _ = risk.can_trade(drawdown_pct)
+            can_trade, reason = risk.can_trade(drawdown_pct)
             
-            # Uses live Max Positions from UI
+            # Use the live Max Positions limit from the UI
             if not can_trade or curr_positions >= max_pos_allowed:
                 time.sleep(5); continue
 
-            # --- STRATEGY EVALUATION ---
+            # --- STRATEGY EXECUTION ---
             decisions = [
-                ict_strat.analyze_ict_setup(m5_candles),
-                trend.analyze_trend_setup(m5_candles),
-                scalping.analyze_scalping_setup(m5_candles)
+                ict_strat.analyze_ict_setup(candles),
+                trend.analyze_trend_setup(candles),
+                scalping.analyze_scalping_setup(candles)
             ]
 
             for action, reason in decisions:
                 if action != "NEUTRAL":
                     current_price = info.get('ask') if action == "BUY" else info.get('bid')
-                    latest_atr = m5_candles[-1].get('atr', 0)
+                    latest_atr = candles[-1].get('atr', 0)
                     
-                    # Calculate SL/TP but use UI Lot Size
+                    # Calculate stops, but use the UI-specified Lot Size
                     sl, tp = risk.calculate_sl_tp(current_price, action, latest_atr)
                     
                     if connector.send_order(action, symbol, user_lot, sl, tp):

@@ -133,28 +133,38 @@ class TradingApp(ttk.Window):
         ctrl_wrapper = ttk.Frame(content)
         ctrl_wrapper.pack(fill=BOTH, expand=YES)
 
+        # Execution Controls (Left Side)
         exec_frame = ttk.Labelframe(ctrl_wrapper, text=" Execution Controls ")
         exec_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 10))
+        
         grid_frame = ttk.Frame(exec_frame)
         grid_frame.pack(fill=X, padx=20, pady=15)
-        ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline", command=lambda: self.manual_trade("BUY")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline", command=lambda: self.manual_trade("SELL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline", 
+                   command=lambda: self.manual_trade("BUY")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline", 
+                   command=lambda: self.manual_trade("SELL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
         
         close_frame = ttk.Frame(exec_frame)
         close_frame.pack(fill=X, padx=20, pady=(5, 15))
-        ttk.Button(close_frame, text="CLOSE PROFIT", bootstyle="success", command=lambda: self.manual_close("WIN")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        ttk.Button(close_frame, text="CLOSE LOSS", bootstyle="danger", command=lambda: self.manual_close("LOSS")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        ttk.Button(close_frame, text="CLOSE ALL", bootstyle="warning", command=lambda: self.manual_close("ALL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(close_frame, text="CLOSE PROFIT", bootstyle="success", 
+                   command=lambda: self.manual_close("WIN")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(close_frame, text="CLOSE LOSS", bootstyle="danger", 
+                   command=lambda: self.manual_close("LOSS")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        ttk.Button(close_frame, text="CLOSE ALL", bootstyle="warning", 
+                   command=lambda: self.manual_close("ALL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
 
+        # Configuration Controls (Right Side)
         conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ")
         conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
         
+        # Auto Trading Switch
         auto_row = ttk.Frame(conf_frame)
         auto_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
-        ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle).pack(side=RIGHT)
+        ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, 
+                        text="ACTIVE", command=self.on_auto_trade_toggle).pack(side=RIGHT)
 
-        # Updated Active Symbol Dropdown
+        # Active Symbol Dropdown
         sym_row = ttk.Frame(conf_frame)
         sym_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
@@ -162,23 +172,28 @@ class TradingApp(ttk.Window):
         self.sym_combo.pack(fill=X, pady=2)
         self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
         
-        # New Timeframe Dropdown
+        # Execution Timeframe Dropdown
         tf_row = ttk.Frame(conf_frame)
         tf_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(tf_row, text="Execution Timeframe:", font=("Helvetica", 10)).pack(anchor=W)
-        self.tf_combo = ttk.Combobox(tf_row, textvariable=self.tf_var, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"], width=15, bootstyle="info")
+        self.tf_combo = ttk.Combobox(tf_row, textvariable=self.tf_var, 
+                                     values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"], 
+                                     width=15, bootstyle="info")
         self.tf_combo.pack(fill=X, pady=2)
         self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
 
+        # Max Positions Spinbox
         pos_row = ttk.Frame(conf_frame)
         pos_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(pos_row, text="Max Positions:", font=("Helvetica", 10)).pack(anchor=W)
         ttk.Spinbox(pos_row, from_=1, to=20, textvariable=self.max_pos_var, width=10).pack(fill=X, pady=2)
 
+        # Trade Volume Spinbox
         lot_row = ttk.Frame(conf_frame)
         lot_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01, textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
+        ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01, 
+                    textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
 
     def _build_console_tab(self):
         toolbar = ttk.Frame(self.tab_console)
@@ -219,16 +234,13 @@ class TradingApp(ttk.Window):
             logging.info(f"Changing active symbol to {sym}...")
 
     def update_timeframe(self, event=None):
-        tf = self.tf_var.get()
-        if tf:
-            # Send command to MT5 EA to change the chart timeframe
-            # Mapping string to MT5 minutes for the CHANGE_TF command
-            tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
-            minutes = tf_map.get(tf, 5)
-            cmd = f"CHANGE_TF|{self.symbol_var.get()}|{minutes}"
-            with self.connector.lock:
-                self.connector.command_queue.append(cmd)
-            logging.info(f"Timeframe change requested: {tf}")
+        """Notifies MT5 Bridge of a timeframe change request."""
+        tf_map = {"M1": 1, "M5": 5, "M15": 15, "H1": 60}
+        minutes = tf_map.get(self.tf_var.get(), 5)
+        cmd = f"CHANGE_TF|{self.symbol_var.get()}|{minutes}"
+        with self.connector.lock:
+            self.connector.command_queue.append(cmd)
+        logging.info(f"Timeframe change requested: {self.tf_var.get()}")
 
     def test_telegram(self):
         if self.telegram_bot:
