@@ -9,7 +9,9 @@ class RiskManager:
         """
         Calculates dynamic lot size based on risk percentage and contract specs.
         """
+        # Use Equity if provided (Protects during drawdown)
         base_capital = equity if equity is not None else balance
+        
         if base_capital <= 0: return self.min_lot
         
         risk_amount = base_capital * (self.risk_per_trade / 100.0)
@@ -17,17 +19,16 @@ class RiskManager:
         
         if dist_points == 0: return self.min_lot
 
-        # Standard Gold (XAUUSD) calculation: 1 lot move of 1.00 = $100
-        # For Forex: 1 lot move of 0.0001 = $10
+        # Standard Gold (XAUUSD) calculation: 1 lot move of 1.00 = $100 profit/loss
         if "XAU" in symbol_type.upper():
-            # risk_amount / (distance * 100)
+            # Formula: Lot = Risk / (Distance * 100)
             raw_lot = risk_amount / (dist_points * 100)
         else:
-            # Standard Forex calculation
-            raw_lot = risk_amount / (dist_points * 100000) if dist_points > 0 else self.min_lot
-            
+            # Standard Forex: 1 lot move of 0.0001 (1 pip) = $10
+            raw_lot = risk_amount / (dist_points * 100000)
+                
         final_lot = max(self.min_lot, round(raw_lot, 2))
-        return min(final_lot, 2.0) # Reduced hard cap for safety
+        return min(final_lot, 5.0) # Keep your 5.0 Hard Cap
 
     def calculate_sl_tp(self, price, action, atr, risk_reward_ratio=2.0):
         """
