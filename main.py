@@ -23,22 +23,16 @@ logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 logger = logging.getLogger("Main")
 
 def bot_logic(app):
-    """
-    Core bot loop updated to pull ALL settings dynamically from the UI.
-    """
     connector = app.connector
     risk = app.risk
     last_heartbeat = 0  
-    
-    logger.info("Bot logic running: Dynamic UI Mode active.") 
+    is_synced = False # State tracker to prevent log spam
 
-    # Add this above your 'while app.bot_running:' loop
-    data_synced = False 
+    logger.info("Bot logic running: Dynamic UI Mode active.") 
     
     while app.bot_running:
         try:
-            # --- DYNAMIC UI SETTINGS ---
-            # Pull values directly from UI variables in every loop
+            # 1. Pull dynamic settings from the UI
             symbol = app.symbol_var.get() 
             execution_tf = app.tf_var.get()
             max_pos_allowed = app.max_pos_var.get()
@@ -49,40 +43,40 @@ def bot_logic(app):
             curr_positions = info.get('total_count', 0)
             equity = info.get('equity', 0.0)
             
-            # --- Heartbeat Monitor ---
+            # 2. Heartbeat Monitor
             if time.time() - last_heartbeat > 60:
                 logger.info(f"❤️ Heartbeat | {symbol} | Equity: ${equity:,.2f}")
                 last_heartbeat = time.time()
 
-            # --- DATA FETCHING ---
-            
-
-            # Inside your loop, update the fetching logic:
+            # 3. Data Fetching & Validation
+            # EA sends 200 by default, so we check for 200
             candles = connector.get_tf_candles(execution_tf, 300)
 
             if len(candles) < 200:
-                logger.warning(f"Insufficient {execution_tf} data for {symbol}: {len(candles)}/200")
-                data_synced = False # Reset flag if data drops
-                time.sleep(2)
-                continue
-            else:
-                if not data_synced:
-                    logger.info(f"✅ Data Sync Successful: {len(candles)} candles received for {symbol} ({execution_tf})")
-                    data_synced = True # Set flag so it only logs once
+                if is_synced or last_heartbeat == 0:
+                    logger.warning(f"Waiting for {execution_tf} data for {symbol}: {len(candles)}/200")
+                is_synced = False
+                time.sleep(2); continue
 
-            # --- RISK GATES ---
-            is_open, _, session_risk_mod = get_detailed_session_status()
+            if not is_synced:
+                logger.info(f"✅ Data Sync Successful: {len(candles)} candles received for {symbol} ({execution_tf})")
+                is_synced = True
+
+            # 4. Global Risk Gates
+            if not app.auto_trade_var.get(): # Check if UI Auto-Trade toggle is ON
+                time.sleep(1); continue
+
+            is_open, _, _ = get_detailed_session_status()
             if not is_open: 
                 time.sleep(5); continue
 
             drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
             can_trade, reason = risk.can_trade(drawdown_pct)
             
-            # Use the live Max Positions limit from the UI
             if not can_trade or curr_positions >= max_pos_allowed:
                 time.sleep(5); continue
 
-            # --- STRATEGY EXECUTION ---
+            # 5. Strategy Evaluation
             decisions = [
                 ict_strat.analyze_ict_setup(candles),
                 trend.analyze_trend_setup(candles),
@@ -94,11 +88,12 @@ def bot_logic(app):
                     current_price = info.get('ask') if action == "BUY" else info.get('bid')
                     latest_atr = candles[-1].get('atr', 0)
                     
-                    # Calculate stops, but use the UI-specified Lot Size
+                    # Calculate dynamic stops based on refined RiskManager
                     sl, tp = risk.calculate_sl_tp(current_price, action, latest_atr)
                     
+                    # send_order now correctly passes the UI Lot Size
                     if connector.send_order(action, symbol, user_lot, sl, tp):
-                        logger.info(f"🚀 {action} EXECUTED: {reason} | Lot: {user_lot}")
+                        logger.info(f"🚀 {action} EXECUTED: {reason} | Lot: {user_lot} | SL: {sl} | TP: {tp}")
                         risk.record_trade()
                     time.sleep(60); break 
 
@@ -108,7 +103,7 @@ def bot_logic(app):
 
 def main():
     conf = Config()
-    connector = MT5Connector(host=conf.get('mt5', {}).get('host', '127.0.0.1'), port=8001)
+    connector = MT5Connector(host='127.0.0.1', port=8001)
     
     tg_conf = conf.get('telegram', {})
     telegram_bot = TelegramBot(
