@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from core.indicators import Indicators
 from core.patterns import detect_patterns
@@ -6,10 +6,19 @@ from core.patterns import detect_patterns
 def analyze_ict_setup(candles):
     if not candles or len(candles) < 30: return "NEUTRAL", ""
     
-    # Silver Bullet Time Windows (Example: 14:00-15:00 and 18:00-19:00 UTC)
-    now_hour = datetime.utcnow().hour
-    if not (14 <= now_hour <= 15 or 18 <= now_hour <= 19):
-        return "NEUTRAL", "Outside ICT Silver Bullet Hours"
+    # Get current time in Cambodia (UTC+7)
+    # Using UTC + 7 hours offset
+    now_kh = datetime.utcnow() + timedelta(hours=7)
+    now_hour = now_kh.hour
+
+    # ICT Silver Bullet Windows (Converted to Cambodia Time GMT+7):
+    # London Session: 10:00 - 11:00 AM (NYC) -> 21:00 - 22:00 (KH)
+    # PM Session: 2:00 - 3:00 PM (NYC) -> 01:00 - 02:00 AM (KH)
+    is_london_sb = (21 <= now_hour < 22)
+    is_pm_sb = (1 <= now_hour < 2)
+
+    if not (is_london_sb or is_pm_sb):
+        return "NEUTRAL", f"Outside ICT Silver Bullet Hours (KH Time: {now_kh.strftime('%H:%M')})"
 
     df = pd.DataFrame(candles)
     is_squeezing = Indicators.is_bollinger_squeeze(df)
