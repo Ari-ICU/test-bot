@@ -98,11 +98,19 @@ class TradingApp(ttk.Window):
             setattr(self, var_name, lbl)
             return lbl
 
-        # --- ROW 1: MTF TREND MONITOR ---
+        # --- ROW 1: MTF TREND MONITOR (UPDATED with M15 and H1) ---
         trend_monitor = ttk.Labelframe(content, text=" Multi-Timeframe Trend Direction ", padding=10)
         trend_monitor.pack(fill=X, pady=(0, 15))
         
-        tf_list = [("Daily", "D1"), ("4-Hour", "H4"), ("5-Minute", "M5")]
+        # Added M15 and H1 to the list
+        tf_list = [
+            ("Daily", "D1"), 
+            ("4-Hour", "H4"), 
+            ("1-Hour", "H1"), 
+            ("15-Min", "M15"), 
+            ("5-Min", "M5")
+        ]
+        
         for i, (name, code) in enumerate(tf_list):
             f = ttk.Frame(trend_monitor)
             f.pack(side=LEFT, expand=YES)
@@ -116,7 +124,6 @@ class TradingApp(ttk.Window):
         create_stat_card(stats_frame, "ACCOUNT MODE", "lbl_acc_mode", "secondary", "CONNECTING...")
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
-        # Ensure lbl_profit exists to prevent crash
         create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success", "$0.00")
         
         # --- ROW 3: PSYCHOLOGY & MARKET ---
