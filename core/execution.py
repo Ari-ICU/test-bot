@@ -32,8 +32,9 @@ class MT5Connector:
 
     @property
     def account_info(self):
-        """Public getter for the UI and logic engines."""
-        return self._account_data
+        """Thread-safe getter for account data"""
+        with self.lock:
+            return self._account_data.copy()
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
