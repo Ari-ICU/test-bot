@@ -35,7 +35,7 @@ def analyze_trend_setup(candles):
         # B. Momentum Confirmation (MACD) [NEW]
         if current['macd'] > current['macd_signal']:
             # C. Trend Strength
-            if current['adx'] > 25:
+            if current['adx'] > 15:
                 # D. Entry Trigger
                 trigger_found = False
                 trigger_name = ""
@@ -62,7 +62,7 @@ def analyze_trend_setup(candles):
     elif current['close'] < current['ema_200'] and current['supertrend'] == False:
         # B. Momentum Confirmation (MACD) [NEW]
         if current['macd'] < current['macd_signal']:
-            if current['adx'] > 25:
+            if current['adx'] > 15:
                 trigger_found = False
                 trigger_name = ""
 
