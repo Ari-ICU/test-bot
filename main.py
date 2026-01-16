@@ -13,6 +13,7 @@ import strategy.reversal as reversal
 import strategy.breakout as breakout
 import strategy.tbs_turtle as tbs_turtle
 import strategy.ict_silver_bullet as ict_strat
+import strategy.scalping as scalping
 
 # --- Console Logger (Keeps the technical details) ---
 class CustomFormatter(logging.Formatter):
@@ -122,6 +123,7 @@ def bot_logic(app):
             decisions.append(check_strategy("Trend", *trend.analyze_trend_setup(candles)))
             decisions.append(check_strategy("Reversal", *reversal.analyze_reversal_setup(candles, 30, 20)))
             decisions.append(check_strategy("Breakout", *breakout.analyze_breakout_setup(candles)))
+            decisions.append(check_strategy("Scalp", *scalping.analyze_scalping_setup(candles)))
             
             # --- Execution Logic ---
             final_action = "NEUTRAL"

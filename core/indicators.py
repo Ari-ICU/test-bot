@@ -105,3 +105,22 @@ class Indicators:
         
         # Return only the most recent value (last candle)
         return squeeze_series.iloc[-1]
+
+    @staticmethod
+    def calculate_stoch(df, period=14, smooth_k=3, smooth_d=3):
+        """
+        Stochastic Oscillator
+        %K = (Current Close - Lowest Low) / (Highest High - Lowest Low) * 100
+        %D = Moving Average of %K
+        """
+        low_min = df['low'].rolling(window=period).min()
+        high_max = df['high'].rolling(window=period).max()
+        
+        # Calculate raw %K
+        stoch_k = 100 * (df['close'] - low_min) / (high_max - low_min)
+        
+        # Apply smoothing to get %K and %D
+        k_line = stoch_k.rolling(window=smooth_k).mean()
+        d_line = k_line.rolling(window=smooth_d).mean()
+        
+        return k_line, d_line
