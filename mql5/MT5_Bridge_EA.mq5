@@ -126,6 +126,7 @@ void OnTimer() {
     Comment(dashboard);
 
     string post_str = "symbol=" + _Symbol + 
+    "&all_symbols=" + symbols_list +
                       "&bid=" + DoubleToString(bid, _Digits) + 
                       "&ask=" + DoubleToString(ask, _Digits) +
                       "&balance=" + DoubleToString(balance, 2) +

@@ -15,7 +15,6 @@ class MT5Connector:
         self.command_queue = []
         self.lock = threading.Lock()
         
-        # FIXED: Internal storage variable initialized
         self._account_data = {
             'name': 'Disconnected',
             'balance': 0.0,
@@ -25,28 +24,22 @@ class MT5Connector:
         }
 
         self.tf_data = {
-            "M5": [],
-            "M15": [],
-            "H1": [],
-            "H4": [],
-            "D1": []
+            "M5": [], "M15": [], "H1": [], "H4": [], "D1": []
         }
         self.active_tf = "M5"
         
         self.last_candles = []
-        self.available_symbols = []
+        self.available_symbols = [] # This stores the dropdown list
         self.running = False
         self.telegram_bot = None
-        self.active_symbol = None 
+        self.active_symbol = "XAUUSD" # Default symbol
 
     @property
     def account_info(self):
-        """Thread-safe getter for account data"""
         with self.lock:
             return self._account_data.copy()
 
     def get_tf_candles(self, tf="M5"):
-        """Returns candles for a specific timeframe."""
         return self.tf_data.get(tf, [])
 
     def set_telegram(self, tg_bot):
@@ -70,13 +63,11 @@ class MT5Connector:
         if self.server:
             self.server.shutdown()
             self.server.server_close()
-            logger.info("Execution Engine Stopped")
 
     def send_order(self, action, symbol, volume, sl, tp):
         cmd = f"{action}|{symbol}|{volume}|{sl}|{tp}|10"
         with self.lock: 
             self.command_queue.append(cmd)
-        logger.info(f"Order Queued: {cmd}")
         if self.telegram_bot:
             self.telegram_bot.send_message(f"🚀 <b>Signal Sent:</b> {action} {symbol} {volume}")
 
@@ -84,16 +75,12 @@ class MT5Connector:
         cmd = f"CLOSE_MODE|{symbol}|{mode}"
         with self.lock: 
             self.command_queue.append(cmd)
-        logger.info(f"Close Command Queued: {cmd}")
 
     def change_symbol(self, symbol):
+        self.active_symbol = symbol
         cmd = f"CHANGE_SYMBOL|{symbol}"
         with self.lock:
             self.command_queue.append(cmd)
-        logger.info(f"Symbol Change Queued: {symbol}")
-
-    def get_latest_candles(self):
-        return self.last_candles
 
 class MT5RequestHandler(BaseHTTPRequestHandler):
     connector = None
@@ -109,16 +96,19 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
-            # FIX: Check multiple possible keys for the symbol
+            # --- FIXED SYMBOL RETRIEVAL ---
+            # 1. Update the active symbol from chart
             if 'symbol' in data:
                 self.connector.active_symbol = data['symbol'][0]
-            elif 'acct_name' in data and not self.connector.active_symbol:
-                # Fallback: Often the EA sends the symbol in the name field during init
-                self.connector.active_symbol = data['acct_name'][0].split(' ')[0]
 
+            # 2. Update the full dropdown list from Market Watch
+            if 'all_symbols' in data:
+                raw_syms = data['all_symbols'][0]
+                self.connector.available_symbols = [s.strip() for s in raw_syms.split(',') if s.strip()]
+
+            # 3. Handle Candlestick Data
             if 'candles' in data:
                 raw_candles = data['candles'][0]
-                # Get TF from request (requires updating Bridge EA to send &tf=M5)
                 tf = data.get('tf', ['M5'])[0].upper() 
                 if raw_candles:
                     parsed = []
@@ -132,27 +122,27 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                             })
                     self.connector.tf_data[tf] = parsed
 
-            if 'all_symbols' in data:
-                self.connector.available_symbols = [s.strip() for s in data['all_symbols'][0].split(',') if s.strip()]
-
-            # 4. FIXED: Updating the internal variable instead of the read-only property
+            # 4. Handle Account Updates
             if 'balance' in data:
                 trade_mode = int(data.get('trade_mode', [1])[0])
                 b_count = int(data.get('buy_count', [0])[0])
                 s_count = int(data.get('sell_count', [0])[0])
-                self.connector._account_data = {
-                    'name': data.get('acct_name', ["Unknown"])[0], 
-                    'is_demo': (trade_mode != 0),
-                    'balance': float(data.get('balance', [0])[0]),
-                    'equity': float(data.get('acct_equity', [0])[0]),
-                    'profit': float(data.get('profit', [0])[0]),
-                    'buy_count': b_count,
-                    'sell_count': s_count,
-                    'total_count': b_count + s_count,
-                    'bid': float(data.get('bid', [0.0])[0]),
-                    'ask': float(data.get('ask', [0.0])[0])
-                }
+                
+                with self.connector.lock:
+                    self.connector._account_data = {
+                        'name': data.get('acct_name', ["Unknown"])[0], 
+                        'is_demo': (trade_mode != 0),
+                        'balance': float(data.get('balance', [0])[0]),
+                        'equity': float(data.get('acct_equity', [0])[0]),
+                        'profit': float(data.get('profit', [0])[0]),
+                        'buy_count': b_count,
+                        'sell_count': s_count,
+                        'total_count': b_count + s_count,
+                        'bid': float(data.get('bid', [0.0])[0]),
+                        'ask': float(data.get('ask', [0.0])[0])
+                    }
 
+            # Response for MT5 (Commands)
             resp = "OK"
             with self.connector.lock:
                 if self.connector.command_queue:
