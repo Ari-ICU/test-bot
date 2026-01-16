@@ -41,24 +41,13 @@ class MT5Connector:
         with self.lock:
             return self._account_data.copy()
 
-    def get_tf_candles(self, timeframe_str, count):
-        # Map string to MT5 constants
-        tf_map = {
-            "D1": mt5.TIMEFRAME_D1,
-            "H1": mt5.TIMEFRAME_H1,
-            "M15": mt5.TIMEFRAME_M15,
-            "M5": mt5.TIMEFRAME_M5
-        }
-        tf = tf_map.get(timeframe_str, mt5.TIMEFRAME_M5)
-        
-        # FORCED SYNC: Pull 10 bars first to "wake up" the timeframe feed
-        mt5.copy_rates_from_pos(self.symbol, tf, 0, 10)
-        
-        # Now pull the full requested history
-        rates = mt5.copy_rates_from_pos(self.symbol, tf, 0, count)
-        if rates is None:
-            return []
-        return rates.tolist()
+    def get_tf_candles(self, timeframe_str, count=300):
+        """Thread-safe access to candle data received from MT5 Bridge"""
+        with self.lock:
+            data = self.tf_data.get(timeframe_str.upper(), [])
+            if len(data) > count:
+                return data[-count:]
+            return data
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot

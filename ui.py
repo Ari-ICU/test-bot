@@ -19,7 +19,7 @@ class QueueHandler(logging.Handler):
 class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
-        self.title("MT5 Algo Terminal")
+        self.title("MT5 Algo Terminal - Strategy Only Mode")
         self.geometry("1100x900") 
         
         self.bot_loop_callback = bot_loop_callback
@@ -40,9 +40,6 @@ class TradingApp(ttk.Window):
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
         
-        # Track TF Labels for color updates
-        self.tf_labels = {}
-
         self._setup_logging()
         self._build_ui()
         self._start_log_polling()
@@ -98,25 +95,16 @@ class TradingApp(ttk.Window):
             setattr(self, var_name, lbl)
             return lbl
 
-        # --- ROW 1: MTF TREND MONITOR (UPDATED with M15 and H1) ---
-        trend_monitor = ttk.Labelframe(content, text=" Multi-Timeframe Trend Direction ", padding=10)
-        trend_monitor.pack(fill=X, pady=(0, 15))
+        # --- ROW 1: STRATEGY ENGINE STATUS (FIXED: Replaces MTF Monitor) ---
+        strategy_monitor = ttk.Labelframe(content, text=" Active M5 Strategy Engine ", padding=10)
+        strategy_monitor.pack(fill=X, pady=(0, 15))
         
-        # Added M15 and H1 to the list
-        tf_list = [
-            ("Daily", "D1"), 
-            ("4-Hour", "H4"), 
-            ("1-Hour", "H1"), 
-            ("15-Min", "M15"), 
-            ("5-Min", "M5")
-        ]
-        
-        for i, (name, code) in enumerate(tf_list):
-            f = ttk.Frame(trend_monitor)
+        strat_list = ["ICT Silver Bullet", "Trend Confluence", "M5 Scalper"]
+        for strat in strat_list:
+            f = ttk.Frame(strategy_monitor)
             f.pack(side=LEFT, expand=YES)
-            ttk.Label(f, text=name, font=("Helvetica", 9)).pack()
-            self.tf_labels[code] = ttk.Label(f, text="SCANNING", font=("Helvetica", 12, "bold"), bootstyle=SECONDARY)
-            self.tf_labels[code].pack()
+            ttk.Label(f, text=strat, font=("Helvetica", 9)).pack()
+            ttk.Label(f, text="READY", font=("Helvetica", 12, "bold"), bootstyle=SUCCESS).pack()
 
         # --- ROW 2: ACCOUNT STATS ---
         stats_frame = ttk.Frame(content)
@@ -273,29 +261,18 @@ class TradingApp(ttk.Window):
         if hasattr(self.connector, 'server') and self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
         
-        # 2. Update Symbol List in Dropdown (Sync from Market Watch)
-        if hasattr(self.connector, 'available_symbols') and self.connector.available_symbols:
-            current_values = list(self.sym_combo['values'])
-            if set(current_values) != set(self.connector.available_symbols):
-                self.sym_combo['values'] = self.connector.available_symbols
-        
-        # 3. Account & Position Refreshes
+        # 2. Account & Position Refreshes
         if self.connector.account_info:
             info = self.connector.account_info
             self.lbl_acc_mode.configure(text="DEMO ACCOUNT" if info.get('is_demo', True) else "REAL ACCOUNT")
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
             
-            # Update Floating Profit/Loss
             prof = info.get('profit', 0.0)
             p_prefix = "+" if prof >= 0 else ""
             p_color = "success" if prof >= 0 else "danger"
-            self.lbl_profit.configure(
-                text=f"{p_prefix}${prof:,.2f}", 
-                bootstyle=f"{p_color}-inverse"
-            )
+            self.lbl_profit.configure(text=f"{p_prefix}${prof:,.2f}", bootstyle=f"{p_color}-inverse")
             
-            # Update Psychology & Market Stats
             if hasattr(self, 'lbl_daily_trades'):
                 self.lbl_daily_trades.configure(text=f"{self.risk.daily_trades_count}/{self.risk.max_daily_trades} Trades")
             
@@ -305,18 +282,7 @@ class TradingApp(ttk.Window):
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
 
-        # 4. MTF Trend Updates (D1, H4, M5 Synchronization)
-        for tf, label in self.tf_labels.items():
-            candles = self.connector.get_tf_candles(tf)
-            if len(candles) >= 2:
-                is_up = candles[-1]['close'] > candles[-2]['close']
-                label.configure(
-                    text="UP" if is_up else "DOWN", 
-                    bootstyle="success" if is_up else "danger"
-                )
-
         self.after(500, self._start_data_refresh)
 
 if __name__ == "__main__":
-    # Example initialization if run directly
     pass

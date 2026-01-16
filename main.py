@@ -1,17 +1,15 @@
 import time
 import logging
-from logging.handlers import RotatingFileHandler
 from bot_settings import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager
-from core.session import is_market_open, get_detailed_session_status
-from core.telegram_bot import TelegramBot, TelegramLogHandler 
+from core.session import get_detailed_session_status
+from core.telegram_bot import TelegramBot
 from filters.news import NewsFilter
 from ui import TradingApp
 import strategy.trend_following as trend
 import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
-import strategy.tbs_turtle as tbs_turtle
 
 # --- Logger Setup ---
 class CustomFormatter(logging.Formatter):
@@ -26,12 +24,16 @@ logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 logger = logging.getLogger("Main")
 
 def bot_logic(app):
+    """
+    Core bot loop refactored for Strategy-Only execution.
+    Removed all D1, H1, and M15 trend alignment requirements.
+    """
     conf = Config()
     connector = app.connector
     risk = app.risk
     news_filter = NewsFilter(conf.get('sources', []))
     
-    logger.info("Bot logic running: Real-Time MTF (H1/M15/M5) active.") 
+    logger.info("Bot logic running: Strategy-Only Mode (M5) active.") 
     
     max_pos_allowed = risk.config.get('max_positions', 5)
     last_heartbeat = 0  
@@ -49,25 +51,14 @@ def bot_logic(app):
                 logger.info(f"❤️ Heartbeat | {symbol} | Equity: ${equity:,.2f}")
                 last_heartbeat = time.time()
 
-            # --- REAL-TIME MTF FETCHING ---
-            # These calls pull the latest price data directly from MT5 terminal
-            d1_candles = connector.get_tf_candles("D1", 50)   # Global Bias
-            h1_candles = connector.get_tf_candles("H1", 100)  # Intermediate Trend
-            m15_candles = connector.get_tf_candles("M15", 100) # Structural Confirmation
-            m5_candles = connector.get_tf_candles("M5", 300)   # Entry (Needs 200+ for EMA)
+            # --- SINGLE TIMEFRAME FETCHING ---
+            # Now only fetches the M5 execution timeframe candles
+            m5_candles = connector.get_tf_candles("M5", 300)
 
-            # Validation: Ensure MT5 returned enough data for calculations
-            if any(len(c) < 20 for c in [d1_candles, h1_candles, m15_candles]):
-                time.sleep(1); continue
+            # Validation: Ensure sufficient data for indicator calculations
             if len(m5_candles) < 210:
                 logger.warning(f"Insufficient M5 data: {len(m5_candles)}/210")
                 time.sleep(2); continue
-
-            # --- DYNAMIC TREND CALCULATION ---
-            # Uses live close prices to determine current direction
-            d1_trend = "BUY" if d1_candles[-1]['close'] > d1_candles[-10]['close'] else "SELL"
-            h1_trend = "BUY" if h1_candles[-1]['close'] > h1_candles[-20]['close'] else "SELL"
-            m15_trend = "BUY" if m15_candles[-1]['close'] > m15_candles[-10]['close'] else "SELL"
 
             # --- RISK & SESSION GATES ---
             is_open, _, session_risk_mod = get_detailed_session_status()
@@ -80,6 +71,7 @@ def bot_logic(app):
                 time.sleep(5); continue
 
             # --- STRATEGY EXECUTION ---
+            # Evaluate strategies directly based on M5 data
             decisions = [
                 ict_strat.analyze_ict_setup(m5_candles),
                 trend.analyze_trend_setup(m5_candles),
@@ -87,13 +79,13 @@ def bot_logic(app):
             ]
 
             final_action = "NEUTRAL"
+            execution_reason = ""
+
             for action, reason in decisions:
-                # REAL-TIME ALIGNMENT: M5 Strategy must match H1 and M15 Trends
-                if action != "NEUTRAL" and action == h1_trend == m15_trend:
+                # Execution triggers immediately on strategy signal
+                if action != "NEUTRAL":
                     final_action = action
-                    execution_reason = f"{reason} | MTF Match (H1/M15/M5)"
-                    if action == d1_trend:
-                        execution_reason += " + D1 Bias"
+                    execution_reason = reason
                     break
             
             if final_action in ["BUY", "SELL"]:
@@ -102,12 +94,13 @@ def bot_logic(app):
                 
                 sl, tp = risk.calculate_sl_tp(current_price, final_action, latest_atr)
                 lot = risk.calculate_lot_size(curr_balance, current_price, sl, symbol, equity)
-                lot = lot * session_risk_mod # Adjusted for current volatility
+                lot = lot * session_risk_mod # Volatility adjustment from session status
 
                 if connector.send_order(final_action, symbol, lot, sl, tp):
                     logger.info(f"🚀 {final_action} EXECUTED: {execution_reason}")
                     risk.record_trade()
                 
+                # Cool-down to prevent immediate double-triggering
                 time.sleep(60) 
 
             time.sleep(1)
@@ -119,18 +112,25 @@ def main():
     connector = MT5Connector(host=conf.get('mt5', {}).get('host', '127.0.0.1'), port=8001)
     
     tg_conf = conf.get('telegram', {})
-    telegram_bot = TelegramBot(token=tg_conf.get('bot_token', ''), authorized_chat_id=tg_conf.get('chat_id', ''), connector=connector)
+    telegram_bot = TelegramBot(
+        token=tg_conf.get('bot_token', ''), 
+        authorized_chat_id=tg_conf.get('chat_id', ''), 
+        connector=connector
+    )
     connector.set_telegram(telegram_bot)
 
-    if not connector.start(): return
+    if not connector.start(): 
+        return
 
     risk = RiskManager(conf.data)
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
     try:
         app.mainloop()
-    except KeyboardInterrupt: pass
-    finally: connector.stop()
+    except KeyboardInterrupt: 
+        pass
+    finally: 
+        connector.stop()
 
 if __name__ == "__main__":
     main()
