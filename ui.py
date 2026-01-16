@@ -240,8 +240,10 @@ class TradingApp(ttk.Window):
             "M1": 1, "M5": 5, "M15": 15, "M30": 30, 
             "H1": 60, "H4": 240, "D1": 1440
         }
-        minutes = tf_map.get(self.tf_var.get(), 5) # If TF is not in this list, it defaults to 5
-        cmd = f"CHANGE_TF|{self.symbol_var.get()}|{minutes}"
+        minutes = tf_map.get(self.tf_var.get(), 5)
+        
+        # ADD THIS LINE:
+        self.connector.change_timeframe(self.symbol_var.get(), minutes)
 
     def test_telegram(self):
         if self.telegram_bot:

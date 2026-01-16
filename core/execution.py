@@ -93,6 +93,12 @@ class MT5Connector:
         with self.lock:
             self.command_queue.append(cmd)
 
+    def change_timeframe(self, symbol, timeframe_minutes):
+        cmd = f"CHANGE_TF|{symbol}|{timeframe_minutes}"
+        with self.lock:
+            self.command_queue.append(cmd)
+        logger.info(f"Timeframe change queued: {timeframe_minutes}m for {symbol}")
+
 class MT5RequestHandler(BaseHTTPRequestHandler):
     connector = None
 
