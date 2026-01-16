@@ -23,6 +23,15 @@ class MT5Connector:
             'profit': 0.0,
             'total_count': 0
         }
+
+        self.tf_data = {
+            "M5": [],
+            "M15": [],
+            "H1": [],
+            "H4": [],
+            "D1": []
+        }
+        self.active_tf = "M5"
         
         self.last_candles = []
         self.available_symbols = []
@@ -35,6 +44,10 @@ class MT5Connector:
         """Thread-safe getter for account data"""
         with self.lock:
             return self._account_data.copy()
+
+    def get_tf_candles(self, tf="M5"):
+        """Returns candles for a specific timeframe."""
+        return self.tf_data.get(tf, [])
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
@@ -101,19 +114,19 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
             if 'candles' in data:
                 raw_candles = data['candles'][0]
+                # Get TF from request (requires updating Bridge EA to send &tf=M5)
+                tf = data.get('tf', ['M5'])[0].upper() 
                 if raw_candles:
                     parsed = []
                     for c in raw_candles.split('|'):
                         parts = c.split(',')
                         if len(parts) >= 5:
                             parsed.append({
-                                'high': float(parts[0]),
-                                'low': float(parts[1]),
-                                'open': float(parts[2]),
-                                'close': float(parts[3]),
+                                'high': float(parts[0]), 'low': float(parts[1]),
+                                'open': float(parts[2]), 'close': float(parts[3]),
                                 'time': int(parts[4])
                             })
-                    self.connector.last_candles = parsed
+                    self.connector.tf_data[tf] = parsed
 
             if 'all_symbols' in data:
                 self.connector.available_symbols = [s.strip() for s in data['all_symbols'][0].split(',') if s.strip()]
