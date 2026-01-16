@@ -257,6 +257,7 @@ class TradingApp(ttk.Window):
 
         if self.connector.account_info:
             info = self.connector.account_info
+            # Pull 'name' from the dict returned by the connector
             acc_name = info.get('name', "Unknown Account")
             self.lbl_acc_name.configure(text=str(acc_name))
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")

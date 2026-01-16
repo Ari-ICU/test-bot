@@ -1,7 +1,7 @@
 import threading
 import logging
-import time
 import json
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
@@ -14,14 +14,26 @@ class MT5Connector:
         self.server = None
         self.command_queue = []
         self.lock = threading.Lock()
-        self.account_info = {}
+        
+        # FIXED: Internal storage variable to avoid naming collision with the property
+        self._account_data = {
+            'name': 'Disconnected',
+            'balance': 0.0,
+            'equity': 0.0,
+            'profit': 0.0,
+            'total_count': 0
+        }
+        
         self.last_candles = []
         self.available_symbols = []
         self.running = False
         self.telegram_bot = None
-        
-        # New: Track the actual symbol reporting from MT5
         self.active_symbol = None 
+
+    @property
+    def account_info(self):
+        """Public property for the UI. Returns the internal dictionary."""
+        return self._account_data
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
@@ -55,20 +67,16 @@ class MT5Connector:
             self.telegram_bot.send_message(f"🚀 <b>Signal Sent:</b> {action} {symbol} {volume}")
 
     def close_position(self, symbol, mode="ALL"):
-        cmd = f"CLOSE_{mode}|{symbol}"
+        cmd = f"CLOSE_MODE|{symbol}|{mode}"
         with self.lock: 
             self.command_queue.append(cmd)
         logger.info(f"Close Command Queued: {cmd}")
-        if self.telegram_bot:
-            self.telegram_bot.send_message(f"🔄 <b>Close Command:</b> {mode} {symbol}")
 
     def change_symbol(self, symbol):
         cmd = f"CHANGE_SYMBOL|{symbol}"
         with self.lock:
             self.command_queue.append(cmd)
         logger.info(f"Symbol Change Queued: {symbol}")
-        if self.telegram_bot:
-            self.telegram_bot.send_message(f"🔀 <b>Symbol Changed:</b> Now trading {symbol}")
 
     def get_latest_candles(self):
         return self.last_candles
@@ -84,78 +92,42 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
         try:
             length = int(self.headers.get('Content-Length', 0))
-            
-            # --- TELEGRAM WEBHOOK ---
-            if self.path == '/telegram':
-                body = self.rfile.read(length).decode('utf-8')
-                try:
-                    data = json.loads(body)
-                    if self.connector.telegram_bot:
-                        self.connector.telegram_bot.process_webhook_update(data)
-                    self.send_response(200)
-                    self.end_headers()
-                    self.wfile.write(b"OK")
-                except Exception as e:
-                    logger.error(f"Telegram processing error: {e}")
-                    self.send_error(400)
-                return
-
-            # --- TRADINGVIEW WEBHOOK ---
-            if self.path == '/webhook':
-                try:
-                    body = self.rfile.read(length).decode('utf-8')
-                    data = json.loads(body)
-                    action = data.get('action', '').upper()
-                    symbol = data.get('symbol', 'XAUUSD')
-                    volume = float(data.get('volume', 0.01))
-                    if action in ['BUY', 'SELL']:
-                        self.connector.send_order(action, symbol, volume, 0, 0)
-                    self.send_response(200)
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"status": "queued"}).encode())
-                except:
-                    self.send_error(400)
-                return
-
-            # --- MT5 DATA SYNC ---
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
-            # 1. Capture Symbol from EA (This fixes the mismatch)
+            # 1. Capture Active Symbol
             if 'symbol' in data:
-                ea_symbol = data['symbol'][0]
-                if ea_symbol:
-                    self.connector.active_symbol = ea_symbol
+                self.connector.active_symbol = data['symbol'][0]
 
-            # 2. Candle Data
+            # 2. Parse Candle Data
             if 'candles' in data:
                 raw_candles = data['candles'][0]
                 if raw_candles:
-                    parsed_candles = []
+                    parsed = []
                     for c in raw_candles.split('|'):
                         parts = c.split(',')
                         if len(parts) >= 5:
-                            parsed_candles.append({
+                            parsed.append({
                                 'high': float(parts[0]),
                                 'low': float(parts[1]),
                                 'open': float(parts[2]),
                                 'close': float(parts[3]),
                                 'time': int(parts[4])
                             })
-                    self.connector.last_candles = parsed_candles
+                    self.connector.last_candles = parsed
 
-            # 3. Available Symbols
+            # 3. Available Symbols List
             if 'all_symbols' in data:
-                raw_syms = data['all_symbols'][0]
-                if raw_syms:
-                    clean_syms = [s.strip() for s in raw_syms.split(',') if s.strip()]
-                    self.connector.available_symbols = clean_syms
+                self.connector.available_symbols = [s.strip() for s in data['all_symbols'][0].split(',') if s.strip()]
 
-            # 4. Account Info
+            # 4. FIXED: Sync Account Data to the internal dictionary
             if 'balance' in data:
                 b_count = int(data.get('buy_count', [0])[0])
                 s_count = int(data.get('sell_count', [0])[0])
-                self.connector.account_info = {
+                
+                # Update the private storage variable used by the property
+                self.connector._account_data = {
+                    'name': data.get('acc_name', ["Unknown Account"])[0], # Ensure EA sends 'acc_name'
                     'balance': float(data.get('balance', [0])[0]),
                     'equity': float(data.get('acct_equity', [0])[0]),
                     'profit': float(data.get('profit', [0])[0]),
@@ -166,7 +138,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     'ask': float(data.get('ask', [0.0])[0])
                 }
 
-            # 5. Send Queued Commands
+            # 5. Respond with Queued Commands
             resp = "OK"
             with self.connector.lock:
                 if self.connector.command_queue:
@@ -178,4 +150,5 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(resp.encode())
             
         except Exception as e:
+            logger.error(f"Sync Error: {e}")
             self.send_error(500)
