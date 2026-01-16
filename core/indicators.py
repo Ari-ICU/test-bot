@@ -99,7 +99,9 @@ class Indicators:
         """Returns True if BB is inside Keltner Channels (The Squeeze)"""
         bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'], period, 2)
         kc_upper, kc_lower = Indicators.calculate_keltner_channels(df, period, 1.5)
+    
+        # Use bitwise '&' for Series comparison
+        squeeze_series = (bb_upper < kc_upper) & (bb_lower > kc_lower)
         
-        # Squeeze is active when BB is narrower than KC
-        squeeze = (bb_upper < kc_upper) and (bb_lower > kc_lower)
-        return squeeze
+        # Return only the most recent value (last candle)
+        return squeeze_series.iloc[-1]
