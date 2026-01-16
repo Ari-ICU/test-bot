@@ -31,6 +31,9 @@ def bot_logic(app):
     last_heartbeat = 0  
     
     logger.info("Bot logic running: Dynamic UI Mode active.") 
+
+    # Add this above your 'while app.bot_running:' loop
+    data_synced = False 
     
     while app.bot_running:
         try:
@@ -51,25 +54,21 @@ def bot_logic(app):
                 logger.info(f"❤️ Heartbeat | {symbol} | Equity: ${equity:,.2f}")
                 last_heartbeat = time.time()
 
-            # --- State Tracker (Placed above the bot_logic while loop) ---
-            is_synced = False 
+            # --- DATA FETCHING ---
+            
 
-            # --- Inside the while app.bot_running: loop ---
+            # Inside your loop, update the fetching logic:
             candles = connector.get_tf_candles(execution_tf, 300)
 
             if len(candles) < 200:
-                # Only log the warning if we were previously synced or it's the first attempt
-                if is_synced or last_heartbeat == 0:
-                    logger.warning(f"Waiting for {execution_tf} data for {symbol}: {len(candles)}/200")
-                
-                is_synced = False  # Reset state
+                logger.warning(f"Insufficient {execution_tf} data for {symbol}: {len(candles)}/200")
+                data_synced = False # Reset flag if data drops
                 time.sleep(2)
                 continue
-
-            # --- Success Logic (No loop used) ---
-            if not is_synced:
-                logger.info(f"✅ Data Sync Successful: {len(candles)} candles received for {symbol} ({execution_tf})")
-                is_synced = True  # Lock the state so this block doesn't repeat
+            else:
+                if not data_synced:
+                    logger.info(f"✅ Data Sync Successful: {len(candles)} candles received for {symbol} ({execution_tf})")
+                    data_synced = True # Set flag so it only logs once
 
             # --- RISK GATES ---
             is_open, _, session_risk_mod = get_detailed_session_status()
