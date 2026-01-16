@@ -56,8 +56,8 @@ def bot_logic(app):
             m5_candles = connector.get_tf_candles("M5", 300)
 
             # Validation: Ensure sufficient data for indicator calculations
-            if len(m5_candles) < 210:
-                logger.warning(f"Insufficient M5 data: {len(m5_candles)}/210")
+            if len(m5_candles) < 200:
+                logger.warning(f"Insufficient M5 data: {len(m5_candles)}/200")
                 time.sleep(2); continue
 
             # --- RISK & SESSION GATES ---

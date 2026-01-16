@@ -34,6 +34,7 @@ class TradingApp(ttk.Window):
         # Defaults
         self.lot_var = tk.DoubleVar(value=0.01)
         self.symbol_var = tk.StringVar(value="XAUUSD")
+        self.tf_var = tk.StringVar(value="M5") # Added for Timeframe control
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=5) 
         
@@ -95,8 +96,8 @@ class TradingApp(ttk.Window):
             setattr(self, var_name, lbl)
             return lbl
 
-        # --- ROW 1: STRATEGY ENGINE STATUS (FIXED: Replaces MTF Monitor) ---
-        strategy_monitor = ttk.Labelframe(content, text=" Active M5 Strategy Engine ", padding=10)
+        # --- ROW 1: STRATEGY ENGINE STATUS ---
+        strategy_monitor = ttk.Labelframe(content, text=" Active Strategy Engine ", padding=10)
         strategy_monitor.pack(fill=X, pady=(0, 15))
         
         strat_list = ["ICT Silver Bullet", "Trend Confluence", "M5 Scalper"]
@@ -149,10 +150,11 @@ class TradingApp(ttk.Window):
         conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
         
         auto_row = ttk.Frame(conf_frame)
-        auto_row.pack(fill=X, padx=20, pady=10)
+        auto_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
         ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle).pack(side=RIGHT)
 
+        # Updated Active Symbol Dropdown
         sym_row = ttk.Frame(conf_frame)
         sym_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
@@ -160,6 +162,14 @@ class TradingApp(ttk.Window):
         self.sym_combo.pack(fill=X, pady=2)
         self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
         
+        # New Timeframe Dropdown
+        tf_row = ttk.Frame(conf_frame)
+        tf_row.pack(fill=X, padx=20, pady=5)
+        ttk.Label(tf_row, text="Execution Timeframe:", font=("Helvetica", 10)).pack(anchor=W)
+        self.tf_combo = ttk.Combobox(tf_row, textvariable=self.tf_var, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"], width=15, bootstyle="info")
+        self.tf_combo.pack(fill=X, pady=2)
+        self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
+
         lot_row = ttk.Frame(conf_frame)
         lot_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
@@ -199,8 +209,21 @@ class TradingApp(ttk.Window):
     def update_symbol(self, event=None):
         sym = self.symbol_var.get()
         if sym:
+            # Sync symbol to MT5
             self.connector.change_symbol(sym)
             logging.info(f"Changing active symbol to {sym}...")
+
+    def update_timeframe(self, event=None):
+        tf = self.tf_var.get()
+        if tf:
+            # Send command to MT5 EA to change the chart timeframe
+            # Mapping string to MT5 minutes for the CHANGE_TF command
+            tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+            minutes = tf_map.get(tf, 5)
+            cmd = f"CHANGE_TF|{self.symbol_var.get()}|{minutes}"
+            with self.connector.lock:
+                self.connector.command_queue.append(cmd)
+            logging.info(f"Timeframe change requested: {tf}")
 
     def test_telegram(self):
         if self.telegram_bot:
@@ -257,6 +280,12 @@ class TradingApp(ttk.Window):
         return f"[{time_str}] {record.getMessage()}"
 
     def _start_data_refresh(self):
+        # Update available symbols from Market Watch if list changed
+        if hasattr(self.connector, 'available_symbols') and self.connector.available_symbols:
+            current_vals = list(self.sym_combo['values'])
+            if sorted(current_vals) != sorted(self.connector.available_symbols):
+                self.sym_combo['values'] = self.connector.available_symbols
+
         # 1. Server Status check
         if hasattr(self.connector, 'server') and self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
