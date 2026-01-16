@@ -34,26 +34,30 @@ def bot_logic(app):
     
     logger.info("Bot logic initialized.") 
     
+    # --- FIXED: Load max positions from risk config ---
+    max_pos_allowed = risk.config.get('max_positions', 5)
+    
     # --- TRADE MONITOR & HEARTBEAT VARIABLES ---
     last_balance = 0.0
     last_positions = 0
     first_run = True
-    last_heartbeat = 0  # Timer for real-time status updates
+    last_heartbeat = 0  
     
     while app.bot_running:
         try:
             info = connector.account_info
             curr_balance = info.get('balance', 0.0)
             curr_positions = info.get('total_count', 0)
+            equity = info.get('equity', 0.0)
             symbol = app.symbol_var.get() if hasattr(app, 'symbol_var') else "XAUUSD"
             
             # --- REAL-TIME HEARTBEAT ---
-            # Provides visual confirmation every 60s that the bot is scanning
             if time.time() - last_heartbeat > 60:
                 bid = info.get('bid', 0.0)
-                logger.info(f"❤️ Heartbeat | {symbol} @ {bid} | Equity: ${info.get('equity', 0):,.2f}")
+                logger.info(f"❤️ Heartbeat | {symbol} @ {bid} | Equity: ${equity:,.2f}")
                 last_heartbeat = time.time()
 
+            # Initialize balance tracking
             if first_run and curr_balance > 0:
                 last_balance = curr_balance
                 last_positions = curr_positions
@@ -68,10 +72,10 @@ def bot_logic(app):
                             logger.info(f"✅ TP Hit: +${pnl:.2f} (Bal: ${curr_balance:,.2f})")
                         else:
                             logger.warning(f"❌ SL Hit: -${abs(pnl):.2f} (Bal: ${curr_balance:,.2f})")
-
                 last_positions = curr_positions
                 last_balance = curr_balance
 
+            # Basic UI Controls
             if hasattr(app, 'auto_trade_var') and not app.auto_trade_var.get():
                 time.sleep(1)
                 continue
@@ -80,15 +84,28 @@ def bot_logic(app):
                 time.sleep(5)
                 continue
 
+            # --- FIXED: MAX POSITION GATEKEEPER ---
+            if curr_positions >= max_pos_allowed:
+                time.sleep(1)
+                continue
+
+            # --- FIXED: MAX DAILY LOSS GATEKEEPER ---
+            # Calculates if current floating drawdown exceeds allowed % of balance
+            if curr_balance > 0:
+                current_drawdown_pct = ((curr_balance - equity) / curr_balance) * 100
+                if current_drawdown_pct > risk.max_daily_loss:
+                    logger.warning(f"🛑 Halted: Daily Loss Limit ({risk.max_daily_loss}%) Reached.")
+                    time.sleep(60)
+                    continue
+
             candles = connector.get_latest_candles()
             if not candles or len(candles) < 20: 
                 time.sleep(1)
                 continue
 
-            # --- Strategies ---
+            # --- Strategies & Signals ---
             decisions = []
             
-            # Helper to log signals in real-time
             def check_strategy(name, action, reason):
                 if action != "NEUTRAL":
                     logger.info(f"🎯 SIGNAL: {name} | {action} | {reason}")
@@ -98,9 +115,9 @@ def bot_logic(app):
             news_action, news_reason, news_category = news_filter.get_sentiment_signal(symbol)
             decisions.append(check_strategy("News", news_action, news_reason))
             
-            # 2. Strategies
-            decisions.append(check_strategy("TBS Turtle", *tbs_turtle.analyze_tbs_turtle_setup(candles)))
-            decisions.append(check_strategy("ICT SB", *ict_strat.analyze_ict_setup(candles)))
+            # 2. Strategies (Prioritizing CRT/TBS and ICT/TBS)
+            decisions.append(check_strategy("CRT TBS", *tbs_turtle.analyze_tbs_turtle_setup(candles)))
+            decisions.append(check_strategy("ICT TBS", *ict_strat.analyze_ict_setup(candles)))
             decisions.append(check_strategy("Trend", *trend.analyze_trend_setup(candles)))
             decisions.append(check_strategy("Reversal", *reversal.analyze_reversal_setup(candles, 30, 20)))
             decisions.append(check_strategy("Breakout", *breakout.analyze_breakout_setup(candles)))
@@ -116,17 +133,19 @@ def bot_logic(app):
                     break
             
             if final_action in ["BUY", "SELL"]:
-                lot = 0.01
-                if hasattr(app, 'lot_var'):
-                    try: lot = float(app.lot_var.get())
-                    except: lot = 0.01
+                # Use dynamic lot from RiskManager if possible, else UI fallback
+                lot = risk.calculate_lot_size(curr_balance, info.get('ask'), info.get('ask')*0.99)
+                if hasattr(app, 'lot_var') and float(app.lot_var.get()) > 0:
+                    lot = float(app.lot_var.get())
                 
                 current_price = info.get('ask') if final_action == "BUY" else info.get('bid')
-                sl, tp = risk.calculate_sl_tp(current_price, final_action, 1.0)
+                # Use current candle ATR for dynamic SL/TP
+                latest_atr = candles[-1].get('atr', 0)
+                sl, tp = risk.calculate_sl_tp(current_price, final_action, latest_atr)
                 
                 logger.info(f"🚀 EXECUTING: {final_action} {symbol} @ {current_price}\nReason: {execution_reason}")
                 connector.send_order(final_action, symbol, lot, sl, tp)
-                time.sleep(60)
+                time.sleep(60) # Cooldown after trade
 
             time.sleep(1)
 
