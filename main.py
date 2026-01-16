@@ -11,6 +11,9 @@ import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
 import strategy.breakout as breakout
 import strategy.tbs_turtle as tbs_strat
+import filters.volatility as volatility
+import filters.spread as spread
+import filters.news as news
 
 # --- Logger Setup ---
 class CustomFormatter(logging.Formatter):
@@ -63,27 +66,38 @@ def bot_logic(app):
                 logger.info(f"✅ Data Sync Successful: {len(candles)} candles received for {symbol} ({execution_tf})")
                 is_synced = True
 
-            # 4. Global Risk Gates
+            # 4. Global Risk & Market Gates
             if not app.auto_trade_var.get(): 
                 time.sleep(1); continue
 
+            # Session Check
             is_open, session_name, _ = get_detailed_session_status()
             if not is_open: 
-                # logger.info(f"Market Closed: {session_name}")
                 time.sleep(5); continue
 
+            # Account Risk Check
             drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
             can_trade, risk_reason = risk.can_trade(drawdown_pct)
-            
-            if not can_trade:
-                # logger.warning(f"Risk Block: {risk_reason}")
-                time.sleep(5); continue
-                
-            if curr_positions >= max_pos_allowed:
+            if not can_trade or curr_positions >= max_pos_allowed:
                 time.sleep(5); continue
 
-            # 5. Strategy Evaluation
-            # We wrap results in a list to allow for better debug logging
+            # 5. Market Filters (New Filters Implementation)
+            # Check for High-Impact News
+            if news.is_high_impact_news_near(symbol):
+                logger.warning(f"Trade Blocked: High Impact News for {symbol}")
+                time.sleep(5); continue
+
+            # Check Spread health
+            if not spread.is_spread_fine(symbol, info.get('bid'), info.get('ask')):
+                logger.warning(f"Trade Blocked: Spread Issue for {symbol}")
+                time.sleep(2); continue
+
+            # Check Volatility environment
+            if not volatility.is_volatility_sufficient(candles):
+                logger.warning(f"Trade Blocked: Volatility Issue for {symbol}")
+                time.sleep(5); continue
+
+            # 6. Strategy Evaluation
             strategies = [
                 ("ICT_SB", ict_strat.analyze_ict_setup(candles)),
                 ("Trend", trend.analyze_trend_setup(candles)),
@@ -95,6 +109,8 @@ def bot_logic(app):
             for name, (action, reason) in strategies:
                 if action != "NEUTRAL":
                     current_price = info.get('ask') if action == "BUY" else info.get('bid')
+                    
+                    # Ensure ATR is calculated for SL/TP
                     latest_atr = candles[-1].get('atr', 0)
                     
                     # Calculate dynamic stops based on RiskManager
@@ -102,34 +118,34 @@ def bot_logic(app):
                     
                     if connector.send_order(action, symbol, user_lot, sl, tp):
                         logger.info(f"🚀 {action} EXECUTED: {name} - {reason} | Lot: {user_lot} | SL: {sl} | TP: {tp}")
-                        risk.record_trade()
-                        time.sleep(60); break # Cool down after trade execution
+                        risk.record_trade() #
+                        time.sleep(60); break 
                 
             time.sleep(1)
         except Exception as e:
             logger.error(f"Logic Error: {e}"); time.sleep(5)
 
 def main():
-    conf = Config()
-    connector = MT5Connector(host='127.0.0.1', port=8001)
+    conf = Config() #
+    connector = MT5Connector(host='127.0.0.1', port=8001) #
     
     tg_conf = conf.get('telegram', {})
     telegram_bot = TelegramBot(
         token=tg_conf.get('bot_token', ''), 
         authorized_chat_id=tg_conf.get('chat_id', ''), 
         connector=connector
-    )
-    connector.set_telegram(telegram_bot)
+    ) #
+    connector.set_telegram(telegram_bot) #
 
-    if not connector.start(): return
+    if not connector.start(): return #
 
-    risk = RiskManager(conf.data)
-    app = TradingApp(bot_logic, connector, risk, telegram_bot)
+    risk = RiskManager(conf.data) #
+    app = TradingApp(bot_logic, connector, risk, telegram_bot) #
     
     try:
-        app.mainloop()
+        app.mainloop() #
     except KeyboardInterrupt: pass
-    finally: connector.stop()
+    finally: connector.stop() #
 
 if __name__ == "__main__":
     main()
