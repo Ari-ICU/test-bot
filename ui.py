@@ -49,15 +49,15 @@ class TradingApp(ttk.Window):
         self.after(1000, self.toggle_bot) 
 
     def _setup_logging(self):
-        # 1. Target the Root Logger to capture signals from ALL strategy files
+        # 1. Get the ROOT logger to capture signals from EVERY file
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
 
-        # 2. Clear existing handlers to prevent UI freezing or duplicate messages
+        # 2. CLEAR existing handlers to prevent UI freezing or duplicate logs
         if root_logger.hasHandlers():
             root_logger.handlers.clear()
 
-        # 3. Attach your existing QueueHandler
+        # 3. Re-attach the QueueHandler
         queue_handler = QueueHandler(self.log_queue)
         formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S')
         queue_handler.setFormatter(formatter)
@@ -305,12 +305,14 @@ class TradingApp(ttk.Window):
         self.log_area.text.configure(state='disabled')
 
     def _start_log_polling(self):
+        # This runs every 100ms to pull logs from the bot thread into the UI
         while not self.log_queue.empty():
             try:
                 record = self.log_queue.get_nowait()
+                # Use your existing formatter logic
                 msg = self.log_formatter(record)
                 
-                # Use .text to target the underlying widget in ScrolledText
+                # FIX: Target the internal .text attribute of the ScrolledText widget
                 self.log_area.text.configure(state='normal')
                 self.log_area.text.insert(tk.END, msg + "\n", record.levelname) 
                 self.log_area.text.see(tk.END) # Auto-scroll to latest signal
