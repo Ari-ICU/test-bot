@@ -233,14 +233,15 @@ class TradingApp(ttk.Window):
             self.connector.change_symbol(sym)
             logging.info(f"Changing active symbol to {sym}...")
 
+    # From ui.py
     def update_timeframe(self, event=None):
         """Notifies MT5 Bridge of a timeframe change request."""
-        tf_map = {"M1": 1, "M5": 5, "M15": 15, "H1": 60}
-        minutes = tf_map.get(self.tf_var.get(), 5)
+        tf_map = {
+            "M1": 1, "M5": 5, "M15": 15, "M30": 30, 
+            "H1": 60, "H4": 240, "D1": 1440
+        }
+        minutes = tf_map.get(self.tf_var.get(), 5) # If TF is not in this list, it defaults to 5
         cmd = f"CHANGE_TF|{self.symbol_var.get()}|{minutes}"
-        with self.connector.lock:
-            self.connector.command_queue.append(cmd)
-        logging.info(f"Timeframe change requested: {self.tf_var.get()}")
 
     def test_telegram(self):
         if self.telegram_bot:

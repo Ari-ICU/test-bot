@@ -121,7 +121,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             if 'candles' in data:
                 raw_candles = data['candles'][0]
                 # Route data to correct TF slot based on EA parameter
-                tf_key = data.get('tf', ['M5'])[0].upper() 
+                tf_key = data.get('tf', ['M5'])[0].upper()
                 
                 if raw_candles:
                     parsed = []
