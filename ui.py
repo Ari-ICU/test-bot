@@ -116,7 +116,7 @@ class TradingApp(ttk.Window):
         create_stat_card(stats_frame, "ACCOUNT MODE", "lbl_acc_mode", "secondary", "CONNECTING...")
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
-        # FIXED: Added the missing lbl_profit card so the refresh loop doesn't crash
+        # Ensure lbl_profit exists to prevent crash
         create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success", "$0.00")
         
         # --- ROW 3: PSYCHOLOGY & MARKET ---
@@ -263,38 +263,53 @@ class TradingApp(ttk.Window):
 
     def _start_data_refresh(self):
         # 1. Server Status check
-        if self.connector.server:
+        if hasattr(self.connector, 'server') and self.connector.server:
             self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
         
-        # 2. Update Symbol List in Dropdown (THE FIX)
-        if self.connector.available_symbols:
+        # 2. Update Symbol List in Dropdown (Sync from Market Watch)
+        if hasattr(self.connector, 'available_symbols') and self.connector.available_symbols:
             current_values = list(self.sym_combo['values'])
-            # Only update if the list has changed to avoid UI flickering
             if set(current_values) != set(self.connector.available_symbols):
                 self.sym_combo['values'] = self.connector.available_symbols
         
         # 3. Account & Position Refreshes
         if self.connector.account_info:
             info = self.connector.account_info
-            self.lbl_acc_mode.configure(text="DEMO ACCOUNT" if info.get('is_demo') else "REAL ACCOUNT")
+            self.lbl_acc_mode.configure(text="DEMO ACCOUNT" if info.get('is_demo', True) else "REAL ACCOUNT")
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
             
             # Update Floating Profit/Loss
             prof = info.get('profit', 0.0)
+            p_prefix = "+" if prof >= 0 else ""
             p_color = "success" if prof >= 0 else "danger"
-            self.lbl_profit.configure(text=f"${prof:,.2f}", bootstyle=f"{p_color}-inverse")
+            self.lbl_profit.configure(
+                text=f"{p_prefix}${prof:,.2f}", 
+                bootstyle=f"{p_color}-inverse"
+            )
             
-            # Update Counts
+            # Update Psychology & Market Stats
+            if hasattr(self, 'lbl_daily_trades'):
+                self.lbl_daily_trades.configure(text=f"{self.risk.daily_trades_count}/{self.risk.max_daily_trades} Trades")
+            
+            self.lbl_bid.configure(text=f"{info.get('bid', 0.0):.5f}")
+            self.lbl_ask.configure(text=f"{info.get('ask', 0.0):.5f}")
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
 
-        # 4. MTF Trend Updates
+        # 4. MTF Trend Updates (D1, H4, M5 Synchronization)
         for tf, label in self.tf_labels.items():
             candles = self.connector.get_tf_candles(tf)
             if len(candles) >= 2:
                 is_up = candles[-1]['close'] > candles[-2]['close']
-                label.configure(text="UP" if is_up else "DOWN", bootstyle="success" if is_up else "danger")
+                label.configure(
+                    text="UP" if is_up else "DOWN", 
+                    bootstyle="success" if is_up else "danger"
+                )
 
         self.after(500, self._start_data_refresh)
+
+if __name__ == "__main__":
+    # Example initialization if run directly
+    pass
