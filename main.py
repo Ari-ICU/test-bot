@@ -9,6 +9,8 @@ from ui import TradingApp
 import strategy.trend_following as trend
 import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
+import strategy.breakout as breakout
+import strategy.tbs_turtle as tbs_strat
 
 # --- Logger Setup ---
 class CustomFormatter(logging.Formatter):
@@ -80,7 +82,9 @@ def bot_logic(app):
             decisions = [
                 ict_strat.analyze_ict_setup(candles),
                 trend.analyze_trend_setup(candles),
-                scalping.analyze_scalping_setup(candles)
+                scalping.analyze_scalping_setup(candles),
+                tb_strat.analyze_tb_setup(candles),
+                breakout.analyze_breakout_setup(candles)
             ]
 
             for action, reason in decisions:
