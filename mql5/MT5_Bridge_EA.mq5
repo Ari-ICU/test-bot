@@ -125,8 +125,19 @@ void OnTimer() {
     dashboard += "-----------------------------";
     Comment(dashboard);
 
+    string GetTFString() {
+        if(_Period == PERIOD_M1) return "M1";
+        if(_Period == PERIOD_M5) return "M5";
+        if(_Period == PERIOD_M15) return "M15";
+        if(_Period == PERIOD_H1) return "H1";
+        if(_Period == PERIOD_H4) return "H4";
+        if(_Period == PERIOD_D1) return "D1";
+        return "M5";
+    }
+
     string post_str = "symbol=" + _Symbol + 
-    "&all_symbols=" + symbols_list +
+                      "&all_symbols=" + symbols_list +
+                      "&tf=" + GetTFString() +
                       "&bid=" + DoubleToString(bid, _Digits) + 
                       "&ask=" + DoubleToString(ask, _Digits) +
                       "&balance=" + DoubleToString(balance, 2) +

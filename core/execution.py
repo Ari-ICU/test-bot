@@ -15,6 +15,7 @@ class MT5Connector:
         self.command_queue = []
         self.lock = threading.Lock()
         
+        # Internal storage for account data
         self._account_data = {
             'name': 'Disconnected',
             'balance': 0.0,
@@ -23,29 +24,33 @@ class MT5Connector:
             'total_count': 0
         }
 
+        # FULL TIMEFRAME SUPPORT: Expanded to hold data for all required strategy timeframes
         self.tf_data = {
-            "M5": [], "M15": [], "H1": [], "H4": [], "D1": []
+            "M1": [], "M5": [], "M15": [], "M30": [],
+            "H1": [], "H4": [], "D1": [], "W1": []
         }
-        self.active_tf = "M5"
         
-        self.last_candles = []
-        self.available_symbols = [] # This stores the dropdown list
+        self.available_symbols = [] # Stores the dropdown list for the UI
         self.running = False
         self.telegram_bot = None
-        self.active_symbol = "XAUUSD" # Default symbol
+        self.active_symbol = "XAUUSD" 
 
     @property
     def account_info(self):
+        """Thread-safe getter for account data"""
         with self.lock:
             return self._account_data.copy()
 
     def get_tf_candles(self, tf="M5"):
-        return self.tf_data.get(tf, [])
+        """Returns candles for a specific timeframe"""
+        with self.lock:
+            return self.tf_data.get(tf.upper(), [])
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
 
     def start(self):
+        """Starts the HTTP server for MT5 communication"""
         try:
             MT5RequestHandler.connector = self
             self.server = HTTPServer((self.host, self.port), MT5RequestHandler)
@@ -63,11 +68,14 @@ class MT5Connector:
         if self.server:
             self.server.shutdown()
             self.server.server_close()
+            logger.info("Execution Engine Stopped")
 
     def send_order(self, action, symbol, volume, sl, tp):
+        """Queues a trade order for the MT5 EA to pick up"""
         cmd = f"{action}|{symbol}|{volume}|{sl}|{tp}|10"
         with self.lock: 
             self.command_queue.append(cmd)
+        logger.info(f"Order Queued: {cmd}")
         if self.telegram_bot:
             self.telegram_bot.send_message(f"🚀 <b>Signal Sent:</b> {action} {symbol} {volume}")
 
@@ -89,6 +97,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        """Handles incoming data from MT5 Bridge EA"""
         if not self.connector: return
 
         try:
@@ -96,8 +105,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length).decode('utf-8')
             data = parse_qs(body)
             
-            # --- FIXED SYMBOL RETRIEVAL ---
-            # 1. Update the active symbol from chart
+            # 1. Update active chart symbol
             if 'symbol' in data:
                 self.connector.active_symbol = data['symbol'][0]
 
@@ -106,10 +114,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 raw_syms = data['all_symbols'][0]
                 self.connector.available_symbols = [s.strip() for s in raw_syms.split(',') if s.strip()]
 
-            # 3. Handle Candlestick Data
+            # 3. Handle Candlestick Data for specific Timeframes
             if 'candles' in data:
                 raw_candles = data['candles'][0]
-                tf = data.get('tf', ['M5'])[0].upper() 
+                # Route data to correct TF slot based on EA parameter
+                tf_key = data.get('tf', ['M5'])[0].upper() 
+                
                 if raw_candles:
                     parsed = []
                     for c in raw_candles.split('|'):
@@ -120,7 +130,8 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                 'open': float(parts[2]), 'close': float(parts[3]),
                                 'time': int(parts[4])
                             })
-                    self.connector.tf_data[tf] = parsed
+                    with self.connector.lock:
+                        self.connector.tf_data[tf_key] = parsed
 
             # 4. Handle Account Updates
             if 'balance' in data:
@@ -142,7 +153,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         'ask': float(data.get('ask', [0.0])[0])
                     }
 
-            # Response for MT5 (Commands)
+            # Prepare response for MT5 (Sends any pending commands)
             resp = "OK"
             with self.connector.lock:
                 if self.connector.command_queue:
