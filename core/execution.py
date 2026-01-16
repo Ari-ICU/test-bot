@@ -15,7 +15,7 @@ class MT5Connector:
         self.command_queue = []
         self.lock = threading.Lock()
         
-        # FIXED: Internal storage variable to avoid collision with property
+        # FIXED: Internal storage variable initialized
         self._account_data = {
             'name': 'Disconnected',
             'balance': 0.0,
@@ -32,7 +32,7 @@ class MT5Connector:
 
     @property
     def account_info(self):
-        """Public property for the UI. Returns the internal dictionary."""
+        """Public getter for the UI and logic engines."""
         return self._account_data
 
     def set_telegram(self, tg_bot):
@@ -117,13 +117,14 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             if 'all_symbols' in data:
                 self.connector.available_symbols = [s.strip() for s in data['all_symbols'][0].split(',') if s.strip()]
 
-            # FIXED: Sync Account Data to the internal dictionary
+            # 4. FIXED: Updating the internal variable instead of the read-only property
             if 'balance' in data:
+                trade_mode = int(data.get('trade_mode', [1])[0])
                 b_count = int(data.get('buy_count', [0])[0])
                 s_count = int(data.get('sell_count', [0])[0])
-                
                 self.connector._account_data = {
-                    'name': data.get('acc_name', ["Unknown Account"])[0], 
+                    'name': data.get('acct_name', ["Unknown"])[0], 
+                    'is_demo': (trade_mode != 0),
                     'balance': float(data.get('balance', [0])[0]),
                     'equity': float(data.get('acct_equity', [0])[0]),
                     'profit': float(data.get('profit', [0])[0]),

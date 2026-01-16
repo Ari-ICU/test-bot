@@ -96,7 +96,7 @@ class TradingApp(ttk.Window):
 
         stats_frame = ttk.Frame(content)
         stats_frame.pack(fill=X, pady=(0, 10))
-        create_stat_card(stats_frame, "ACCOUNT NAME", "lbl_acc_name", "dark", "N/A")
+        create_stat_card(stats_frame, "ACCOUNT MODE", "lbl_acc_mode", "secondary", "CONNECTING...")
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
         create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success")
@@ -258,8 +258,10 @@ class TradingApp(ttk.Window):
         if self.connector.account_info:
             info = self.connector.account_info
             # Pull 'name' from the dict returned by the connector
+            is_demo = info.get('is_demo', True)
+            mode_text = "DEMO ACCOUNT" if is_demo else "REAL ACCOUNT"
             acc_name = info.get('name', "Unknown Account")
-            self.lbl_acc_name.configure(text=str(acc_name))
+            self.lbl_acc_mode.configure(text=mode_text, bootstyle=f"secondary-inverse")
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
             prof = info.get('profit', 0)
