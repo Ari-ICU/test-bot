@@ -41,10 +41,13 @@ class MT5Connector:
         with self.lock:
             return self._account_data.copy()
 
-    def get_tf_candles(self, timeframe, num_candles=100):
-        """Returns candles for a specific timeframe"""
+    def get_tf_candles(self, timeframe="M5", count=None):
+        """Returns candles for a specific timeframe with optional count limiting"""
         with self.lock:
-            return self.tf_data.get(tf.upper(), [])
+            data = self.tf_data.get(timeframe.upper(), [])
+            if count and isinstance(count, int):
+                return data[-count:] # Return only the requested number of recent candles
+            return data 
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
