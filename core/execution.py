@@ -41,7 +41,7 @@ class MT5Connector:
         with self.lock:
             return self._account_data.copy()
 
-    def get_tf_candles(self, tf="M5"):
+    def get_tf_candles(self, timeframe, num_candles=100):
         """Returns candles for a specific timeframe"""
         with self.lock:
             return self.tf_data.get(tf.upper(), [])
