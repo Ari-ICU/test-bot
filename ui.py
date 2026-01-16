@@ -49,10 +49,20 @@ class TradingApp(ttk.Window):
         self.after(1000, self.toggle_bot) 
 
     def _setup_logging(self):
+        # 1. Target the Root Logger to capture signals from ALL strategy files
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+
+        # 2. Clear existing handlers to prevent UI freezing or duplicate messages
+        if root_logger.hasHandlers():
+            root_logger.handlers.clear()
+
+        # 3. Attach your existing QueueHandler
         queue_handler = QueueHandler(self.log_queue)
         formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S')
         queue_handler.setFormatter(formatter)
-        logging.getLogger().addHandler(queue_handler)
+        
+        root_logger.addHandler(queue_handler)
 
     def _build_ui(self):
         header = ttk.Frame(self)
@@ -299,9 +309,11 @@ class TradingApp(ttk.Window):
             try:
                 record = self.log_queue.get_nowait()
                 msg = self.log_formatter(record)
+                
+                # Use .text to target the underlying widget in ScrolledText
                 self.log_area.text.configure(state='normal')
                 self.log_area.text.insert(tk.END, msg + "\n", record.levelname) 
-                self.log_area.text.see(tk.END)
+                self.log_area.text.see(tk.END) # Auto-scroll to latest signal
                 self.log_area.text.configure(state='disabled')
             except queue.Empty:
                 break
