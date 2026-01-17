@@ -16,7 +16,7 @@ import filters.volatility as volatility
 import filters.spread as spread
 import filters.news as news
 from core.indicators import Indicators 
-from core.asset_detector import detect_asset_type  # New import
+from core.asset_detector import detect_asset_type
 
 # --- Fixed Logger Setup (Prevents Duplicates) ---
 def setup_logger():
@@ -44,7 +44,7 @@ def bot_logic(app):
     connector = app.connector
     risk = app.risk
     last_heartbeat = 0  
-    is_synced = False 
+    news_cooldown = 0  # NEW: Track news cooldown manually
 
     logger.info("Bot logic running: Real-Time Signal Logging Active (Forex/Crypto Support).") 
     
@@ -88,10 +88,17 @@ def bot_logic(app):
                 logger.info(f"Market closed for {symbol}")
                 time.sleep(30); continue
 
-            # 4. News Filter (High-Impact Block)
-            if news.is_high_impact_news_near(symbol):
-                logger.warning(f"High-impact news near for {symbol} – Skipping trades")
-                time.sleep(300); continue  # 5-min hold
+            # 4. News Filter (High-Impact Block) – FIXED: Tunable cooldown
+            news_blocked = news.is_high_impact_news_near(symbol)
+            if news_blocked:
+                logger.warning(f"High-impact news near for {symbol} – Skipping trades (cooldown: {news_cooldown}s remaining)")
+                news_cooldown = max(0, news_cooldown - 5)  # Decrement per cycle (~5s)
+                if news_cooldown > 0:
+                    time.sleep(5); continue
+                news_cooldown = 300  # Reset to 5 min on new hit
+                time.sleep(5); continue
+            else:
+                news_cooldown = 0  # Clear if no news
 
             # 5. Pull Candles & Analyze Strategies (with Real-Time Reason Logging)
             candles = connector.get_tf_candles(execution_tf)
@@ -112,8 +119,9 @@ def bot_logic(app):
                 ("Breakout", breakout.analyze_breakout_setup(candles))
             ]
 
+            trade_executed = False
             for name, (action, reason) in strategies:
-                if action != "NEUTRAL":
+                if action != "NEUTRAL" and not trade_executed:
                     current_price = ask if action == "BUY" else bid
                     # Dynamic SL/TP & Lot via RiskManager
                     sl, tp = risk.calculate_sl_tp(current_price, action, current_atr, symbol)
@@ -124,6 +132,7 @@ def bot_logic(app):
                         risk.record_trade()
                         if app.telegram_bot:
                             app.telegram_bot.send_message(f"🚀 {action} {symbol}: {name} - {reason}")
+                        trade_executed = True
                         time.sleep(60); break  # Cool-off after trade
                 else:
                     # Log neutral reasons every cycle to confirm the bot is "thinking"
