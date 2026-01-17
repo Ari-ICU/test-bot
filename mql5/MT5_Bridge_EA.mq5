@@ -4,7 +4,7 @@
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
-input int TimerInterval = 500; // Configurable timer interval (ms) for tuning responsiveness vs performance
+input int TimerInterval = 100; // Configurable timer interval (ms) for tuning responsiveness vs performance
 
 // Cache variables for performance
 string g_symbols_list = "";
