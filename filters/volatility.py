@@ -1,41 +1,46 @@
 import pandas as pd
 import logging
-from core.indicators import Indicators  # Fixed: Import the class, not a non-existent function
+from core.indicators import Indicators
+from core.asset_detector import detect_asset_type
 
 logger = logging.getLogger("VolatilityFilter")
 
-def is_volatility_sufficient(candles, min_atr_threshold=0.01, max_atr_threshold=500.0):
+def is_volatility_sufficient(candles, symbol, min_atr_threshold=0.01, max_atr_threshold=500.0):
     """
-    FIXED: Renamed to match main.py expectations.
     Checks if market volatility is within safe and active limits using ATR.
+    Dynamic thresholds per asset.
     """
     try:
         if not candles or len(candles) < 20:
             return False
 
-        # Convert candles list to DataFrame for indicator calculation
         df = pd.DataFrame(candles)
-        
-        # Fixed: Call the static method from the Indicators class
         atr_series = Indicators.calculate_atr(df)
         
         if atr_series.empty:
             return False
             
         current_atr = atr_series.iloc[-1]
+        asset_type = detect_asset_type(symbol)
+        
+        # Dynamic thresholds
+        if asset_type == "crypto":
+            min_atr = 10.0  # BTC needs movement
+            max_atr = 2000.0  # Allow spikes
+        else:  # forex
+            min_atr = min_atr_threshold
+            max_atr = 50.0  # Tighter for XAU/EUR
 
-        # 1. Check for 'Dead' Market (ATR too low)
-        if current_atr < min_atr_threshold:
-            # logger.warning(f"Volatility too low: {current_atr}")
+        if current_atr < min_atr:
+            logger.debug(f"Volatility too low for {symbol}: {current_atr} < {min_atr}")
             return False 
 
-        # 2. Check for 'Chaotic' Market (ATR too high)
-        if current_atr > max_atr_threshold:
-            logger.warning(f"Volatility too high: {current_atr}")
+        if current_atr > max_atr:
+            logger.warning(f"Volatility too high for {symbol}: {current_atr} > {max_atr}")
             return False 
 
+        logger.debug(f"Volatility OK for {symbol}: ATR={current_atr}")
         return True
     except Exception as e:
         logger.error(f"Volatility check error: {e}")
         return False
-

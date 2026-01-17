@@ -4,7 +4,7 @@ import pandas as pd
 from bot_settings import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager
-from core.session import get_detailed_session_status
+from core.session import get_detailed_session_status, is_silver_bullet
 from core.telegram_bot import TelegramBot
 from ui import TradingApp
 import strategy.trend_following as trend
@@ -16,6 +16,7 @@ import filters.volatility as volatility
 import filters.spread as spread
 import filters.news as news
 from core.indicators import Indicators 
+from core.asset_detector import detect_asset_type  # New import
 
 # --- Fixed Logger Setup (Prevents Duplicates) ---
 def setup_logger():
@@ -45,7 +46,7 @@ def bot_logic(app):
     last_heartbeat = 0  
     is_synced = False 
 
-    logger.info("Bot logic running: Real-Time Signal Logging Active.") 
+    logger.info("Bot logic running: Real-Time Signal Logging Active (Forex/Crypto Support).") 
     
     while app.bot_running:
         try:
@@ -59,82 +60,78 @@ def bot_logic(app):
             curr_balance = info.get('balance', 0.0)
             curr_positions = info.get('total_count', 0)
             equity = info.get('equity', 0.0)
+            bid, ask = info.get('bid', 0.0), info.get('ask', 0.0)
             
+            # NEW: Asset Type Detection & Logging
+            asset_type = detect_asset_type(symbol)
+            logger.info(f"--- Cycle Start | {symbol} ({asset_type}) | Pos: {curr_positions} | Equity: ${equity:,.2f} ---")
+
             # 2. Heartbeat Monitor
             if time.time() - last_heartbeat > 60:
-                logger.info(f"❤️ Heartbeat | {symbol} | Equity: ${equity:,.2f} | Pos: {curr_positions}/{max_pos_allowed}")
+                logger.info(f"❤️ Heartbeat | {symbol} ({asset_type}) @ {ask:.5f} | Equity: ${equity:,.2f} | Pos: {curr_positions}")
                 last_heartbeat = time.time()
 
-            # 3. Data Sync Check
-            candles = connector.get_tf_candles(execution_tf, 300)
-            if len(candles) < 200:
-                is_synced = False
-                time.sleep(2); continue
-
-            if not is_synced:
-                logger.info(f"✅ Data Sync Successful: {len(candles)} candles for {symbol} ({execution_tf})")
-                is_synced = True
-
-            # 4. Global Trade Guards
-            if not app.auto_trade_var.get(): 
-                time.sleep(1); continue
-
-            is_open, session_name, session_multiplier = get_detailed_session_status()
-            if not is_open: 
-                time.sleep(5); continue
-
-            drawdown_pct = ((curr_balance - equity) / curr_balance) * 100 if curr_balance > 0 else 0
-            can_trade, risk_reason = risk.can_trade(drawdown_pct)
-            if not can_trade:
-                time.sleep(5); continue
-                
+            # 3. Pre-Trade Filters (Dynamic for Asset)
             if curr_positions >= max_pos_allowed:
+                logger.info(f"Max positions reached: {curr_positions}/{max_pos_allowed}")
+                time.sleep(10); continue
+
+            if not volatility.is_volatility_sufficient(connector.get_tf_candles(execution_tf), symbol):
+                logger.info(f"Volatility filter failed for {symbol}")
                 time.sleep(5); continue
 
-            # 5. Market Filters (With Warning Logs)
+            if not spread.is_spread_fine(symbol, bid, ask):
+                logger.info(f"Spread filter failed for {symbol}")
+                time.sleep(5); continue
+
+            if not get_detailed_session_status(symbol)[0]:  # is_open
+                logger.info(f"Market closed for {symbol}")
+                time.sleep(30); continue
+
+            # 4. News Filter (High-Impact Block)
             if news.is_high_impact_news_near(symbol):
-                logger.warning(f"⚠️ Filter Block: High Impact News detected for {symbol}")
-                time.sleep(5); continue
+                logger.warning(f"High-impact news near for {symbol} – Skipping trades")
+                time.sleep(300); continue  # 5-min hold
 
-            if not spread.is_spread_fine(symbol, info.get('bid', 0), info.get('ask', 0)):
-                logger.warning(f"⚠️ Filter Block: Spread too wide for {symbol}")
-                time.sleep(2); continue
-
-            if not volatility.is_volatility_sufficient(candles):
-                logger.warning(f"⚠️ Filter Block: Volatility insufficient for {symbol}")
-                time.sleep(5); continue
-
-            # 6. Strategy Evaluation with Real-Time Reason Logging
-            strategies = [
-                ("ICT_SB", ict_strat.analyze_ict_setup(candles)),
-                ("Trend", trend.analyze_trend_setup(candles)),
-                ("Scalp", scalping.analyze_scalping_setup(candles)),
-                ("Turtle", tbs_strat.analyze_tbs_turtle_setup(candles)),
-                ("Breakout", breakout.analyze_breakout_setup(candles))
-            ]
+            # 5. Pull Candles & Analyze Strategies (with Real-Time Reason Logging)
+            candles = connector.get_tf_candles(execution_tf)
+            if len(candles) < 50:
+                logger.info("Insufficient candles – Waiting...")
+                time.sleep(10); continue
 
             # Locally calculate current ATR for the Risk Manager
             df = pd.DataFrame(candles)
             atr_series = Indicators.calculate_atr(df)
             current_atr = atr_series.iloc[-1] if not atr_series.empty else 0
 
+            strategies = [
+                ("ICT_SB", ict_strat.analyze_ict_setup(candles) if is_silver_bullet(symbol) else ("NEUTRAL", "Outside Silver Bullet")),
+                ("Trend", trend.analyze_trend_setup(candles)),
+                ("Scalp", scalping.analyze_scalping_setup(candles)),
+                ("Turtle", tbs_strat.analyze_tbs_turtle_setup(candles)),
+                ("Breakout", breakout.analyze_breakout_setup(candles))
+            ]
+
             for name, (action, reason) in strategies:
                 if action != "NEUTRAL":
-                    current_price = info.get('ask') if action == "BUY" else info.get('bid')
-                    # Use local ATR to set dynamic SL/TP
-                    sl, tp = risk.calculate_sl_tp(current_price, action, current_atr)
+                    current_price = ask if action == "BUY" else bid
+                    # Dynamic SL/TP & Lot via RiskManager
+                    sl, tp = risk.calculate_sl_tp(current_price, action, current_atr, symbol)
+                    dynamic_lot = risk.calculate_lot_size(curr_balance, current_price, sl, symbol, equity)
                     
-                    if connector.send_order(action, symbol, user_lot, sl, tp):
-                        logger.info(f"🚀 {action} EXECUTED: {name} - {reason}")
+                    if connector.send_order(action, symbol, dynamic_lot, sl, tp):
+                        logger.info(f"🚀 {action} EXECUTED on {symbol} ({asset_type}): {name} - {reason} | Lot: {dynamic_lot} | SL: {sl} | TP: {tp}")
                         risk.record_trade()
-                        time.sleep(60); break 
+                        if app.telegram_bot:
+                            app.telegram_bot.send_message(f"🚀 {action} {symbol}: {name} - {reason}")
+                        time.sleep(60); break  # Cool-off after trade
                 else:
                     # Log neutral reasons every cycle to confirm the bot is "thinking"
-                    logger.info(f"📡 {name} Check: {reason if reason else 'No Setup'}")
+                    logger.debug(f"📡 {name} Check ({asset_type}): {reason if reason else 'No Setup'}")
                 
             time.sleep(2) # Prevent loop from burning CPU
         except Exception as e:
-            logger.error(f"Logic Error: {e}"); time.sleep(5)
+            logger.error(f"Logic Error for {symbol}: {e}"); time.sleep(5)
 
 def main():
     conf = Config()
@@ -148,15 +145,19 @@ def main():
     )
     connector.set_telegram(telegram_bot)
 
-    if not connector.start(): return
+    if not connector.start(): 
+        logger.error("Failed to start connector – Exiting.")
+        return
 
     risk = RiskManager(conf.data)
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
     try:
         app.mainloop()
-    except KeyboardInterrupt: pass
-    finally: connector.stop()
+    except KeyboardInterrupt: 
+        logger.info("Shutting down...")
+    finally: 
+        connector.stop()
 
 if __name__ == "__main__":
     main()
