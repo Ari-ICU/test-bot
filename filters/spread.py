@@ -1,14 +1,18 @@
+# spread.py (Fixed: Added logger setup to prevent NameError)
 import logging
-from core.asset_detector import detect_asset_type
+from core.asset_detector import detect_asset_type  # Assuming this is imported elsewhere or add if needed
 
-logger = logging.getLogger("SpreadFilter")
+logger = logging.getLogger("SpreadFilter")  # FIXED: Define logger here, like in other filters
 
 def is_spread_fine(symbol, bid, ask, max_spread_limit=0.50):
     """
     Checks if the current market spread is within acceptable limits.
     Dynamic based on asset type.
     """
+    logger.debug(f"Spread Check for {symbol}: Bid={bid}, Ask={ask}")  # FIXED: Log raw values
+    
     if bid == 0 or ask == 0:
+        logger.warning(f"Invalid prices for {symbol}: Bid={bid}, Ask={ask} – Check MT5 symbol selection")  # FIXED: More specific warning
         return False
         
     current_spread = ask - bid

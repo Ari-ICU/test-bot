@@ -1,4 +1,4 @@
-# main.py (Fully Fixed - No changes needed from previous, but included for completeness)
+# main.py (Fully Fixed: Price validation, enhanced logging, news cooldown polish)
 import time
 import logging
 import pandas as pd
@@ -45,9 +45,9 @@ def bot_logic(app):
     connector = app.connector
     risk = app.risk
     last_heartbeat = 0  
-    news_cooldown = 0  # NEW: Track news cooldown manually
+    news_cooldown = 0  # Track news cooldown manually
 
-    # NEW: Initialize last_symbol and last_tf before loop
+    # Initialize last_symbol and last_tf before loop
     last_symbol = None
     last_tf = None
 
@@ -56,8 +56,8 @@ def bot_logic(app):
     while app.bot_running:
         try:
             # 1. Pull dynamic settings from the UI
-            symbol = connector.active_symbol  # FIXED: Use connector's confirmed/optimistic value
-            execution_tf = connector.active_tf  # FIXED: Use connector's confirmed/optimistic value
+            symbol = connector.active_symbol  # Use connector's confirmed/optimistic value
+            execution_tf = connector.active_tf  # Use connector's confirmed/optimistic value
             max_pos_allowed = app.max_pos_var.get()
             user_lot = app.lot_var.get()
 
@@ -67,11 +67,17 @@ def bot_logic(app):
             equity = info.get('equity', 0.0)
             bid, ask = info.get('bid', 0.0), info.get('ask', 0.0)
             
-            # NEW: Asset Type Detection & Logging
+            # FIXED: Early Price Validation – Skip if invalid (e.g., MT5 not synced)
+            if bid <= 0 or ask <= 0:
+                logger.warning(f"⏳ Invalid prices for {symbol}: Bid={bid}, Ask={ask} – Waiting for MT5 sync...")
+                time.sleep(10)  # Longer wait for quote sync
+                continue
+            
+            # FIXED: Asset Type Detection & Logging (now after price check)
             asset_type = detect_asset_type(symbol)
-            logger.info(f"--- Cycle Start | {symbol} ({asset_type}) | Pos: {curr_positions} | Equity: ${equity:,.2f} ---")
+            logger.info(f"--- Cycle Start | {symbol} ({asset_type}) | Pos: {curr_positions} | Equity: ${equity:,.2f} | Price: {ask:.5f} ---")
 
-            # NEW: Detect change and log/shorten sleep
+            # Detect change and log/shorten sleep
             if last_symbol != symbol:
                 logger.info(f"🎯 Bot Detected Symbol Change: {last_symbol} → {symbol}")
                 last_symbol = symbol
@@ -85,7 +91,7 @@ def bot_logic(app):
             else:
                 time.sleep(2)  # Normal sleep at end
 
-            # 2. Heartbeat Monitor
+            # 2. Heartbeat Monitor (now after price validation)
             if time.time() - last_heartbeat > 60:
                 logger.info(f"❤️ Heartbeat | {symbol} ({asset_type}) @ {ask:.5f} | Equity: ${equity:,.2f} | Pos: {curr_positions}")
                 last_heartbeat = time.time()
@@ -111,8 +117,8 @@ def bot_logic(app):
             news_blocked = news.is_high_impact_news_near(symbol)
             if news_blocked:
                 logger.warning(f"High-impact news near for {symbol} – Skipping trades (cooldown: {news_cooldown}s remaining)")
-                news_cooldown = max(0, news_cooldown - 5)  # Decrement per cycle (~5s)
                 if news_cooldown > 0:
+                    news_cooldown = max(0, news_cooldown - 5)  # Decrement per cycle (~5s)
                     time.sleep(5); continue
                 news_cooldown = 300  # Reset to 5 min on new hit
                 time.sleep(5); continue
