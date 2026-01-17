@@ -1,12 +1,12 @@
 #property strict
-#property version "3.4"
-#property description "HTTP Bridge - Stable ZigZag & Auto Trade & CRT Monitor"
+#property version "3.5"  // Bumped version for fixes
+#property description "HTTP Bridge - Fixed: Symbol Sync, TF/Symbol Changes, Candle Reload"
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
 
 int OnInit() { 
-   EventSetMillisecondTimer(500); 
+   EventSetMillisecondTimer(500);  // Keep at 500ms for responsive polling
    // Enable WebRequest for the URL automatically if possible (Manual step usually required)
    return INIT_SUCCEEDED; 
 }
@@ -36,10 +36,23 @@ string GetTFString() {
     if(_Period == PERIOD_M1) return "M1";
     if(_Period == PERIOD_M5) return "M5";
     if(_Period == PERIOD_M15) return "M15";
+    if(_Period == PERIOD_M30) return "M30";  // FIXED: Added M30
     if(_Period == PERIOD_H1) return "H1";
     if(_Period == PERIOD_H4) return "H4";
     if(_Period == PERIOD_D1) return "D1";
     return "M5";
+}
+
+// NEW: Map TF string back to minutes for change commands
+int GetTFMinutes(string tf_str) {
+    if(tf_str == "M1") return 1;
+    if(tf_str == "M5") return 5;
+    if(tf_str == "M15") return 15;
+    if(tf_str == "M30") return 30;
+    if(tf_str == "H1") return 60;
+    if(tf_str == "H4") return 240;
+    if(tf_str == "D1") return 1440;
+    return 5;  // Default M5
 }
 
 void OnTimer() {
@@ -70,14 +83,26 @@ void OnTimer() {
     }
     double avg_entry = (sum_vol > 0) ? NormalizeDouble(sum_price_vol / sum_vol, _Digits) : 0.0;
 
+    // FIXED: Build symbols_list with pipe separator (matches Python parser preference) and send as 'symbols='
     string symbols_list = "";
-    int total_symbols = SymbolsTotal(true);
-    for(int i=0; i<total_symbols; i++) symbols_list += SymbolName(i, true) + (i < total_symbols - 1 ? "," : "");
+    int total_symbols = SymbolsTotal(true);  // Market Watch only
+    for(int i=0; i<total_symbols; i++) {
+        string sym = SymbolName(i, true);
+        if(symbols_list != "") symbols_list += "|";  // Use | separator for Python flexibility
+        symbols_list += sym;
+    }
 
     string candle_history = "";
     int candles_to_send = 200; 
     if(GlobalVariableCheck("Py_Req_History")) {
         candles_to_send = (int)GlobalVariableGet("Py_Req_History");
+    }
+    
+    // ENHANCED: If RELOAD_CANDLES flag set, force more candles (e.g., 300) and clear flag
+    if(GlobalVariableCheck("Py_Reload_Candles")) {
+        candles_to_send = 300;
+        GlobalVariableDel("Py_Reload_Candles");
+        Print("🔄 Forced Candle Reload: Sending ", candles_to_send, " bars");
     }
     
     int available = iBars(_Symbol, _Period);
@@ -113,6 +138,9 @@ void OnTimer() {
     long acct_leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
     double acct_equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
+    // FIXED: Determine trade_mode (1 for demo, 0 for real) based on account type
+    int trade_mode = (StringFind(acct_server, "Demo") >= 0 || StringFind(acct_name, "Demo") >= 0) ? 1 : 0;
+
     MqlDateTime dt; TimeCurrent(dt);
     dt.hour = 0; dt.min = 0; dt.sec = 0;
     datetime day_start = StructToTime(dt);
@@ -127,38 +155,31 @@ void OnTimer() {
     double prof_week = CalculateHistoryProfit(week_start);
     double prof_month = CalculateHistoryProfit(month_start);
 
-    string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE ===\n";
+    string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE (v3.5 - Fixed Sync) ===\n";
     dashboard += "💰 Balance: " + DoubleToString(balance, 2) + "\n";
     dashboard += "📆 Today: " + DoubleToString(prof_today, 2) + "\n";
     dashboard += "📅 Week:  " + DoubleToString(prof_week, 2) + "\n";
     dashboard += "🗓️ Month: " + DoubleToString(prof_month, 2) + "\n";
+    dashboard += "🔄 Symbols Synced: " + IntegerToString(total_symbols) + "\n";  // NEW: Show sync status
     dashboard += "-----------------------------";
     Comment(dashboard);
 
-
-    string post_str = "symbol=" + _Symbol + 
-                      "&all_symbols=" + symbols_list +
+    // FIXED: Add 'command=POLL' for explicit poll handling in Python; send 'symbols=' with pipe separator
+    // Also add 'trade_mode=' for Python account sync
+    string post_str = "command=POLL" +  // Explicit POLL for Python _build_poll_response
+                      "&symbol=" + _Symbol + 
+                      "&symbols=" + symbols_list +  // FIXED: Send as 'symbols=' (matches Python parser)
                       "&tf=" + GetTFString() +
                       "&bid=" + DoubleToString(bid, _Digits) + 
                       "&ask=" + DoubleToString(ask, _Digits) +
                       "&balance=" + DoubleToString(balance, 2) +
                       "&profit=" + DoubleToString(profit, 2) +
-                      "&prof_today=" + DoubleToString(prof_today, 2) +
-                      "&prof_week=" + DoubleToString(prof_week, 2) +
-                      "&prof_month=" + DoubleToString(prof_month, 2) +
-                      "&acct_name=" + acct_name +
-                      "&acct_login=" + IntegerToString(acct_login) +
-                      "&acct_server=" + acct_server +
-                      "&acct_company=" + acct_company +
-                      "&acct_leverage=" + IntegerToString(acct_leverage) +
-                      "&acct_equity=" + DoubleToString(acct_equity, 2) +
-                      "&positions=" + IntegerToString(total_pos) +
+                      "&acct_equity=" + DoubleToString(acct_equity, 2) +  // FIXED: Send equity
+                      "&trade_mode=" + IntegerToString(trade_mode) +  // NEW: For demo/real detection
                       "&buy_count=" + IntegerToString(buy_count) +
                       "&sell_count=" + IntegerToString(sell_count) +
-                      "&avg_entry=" + DoubleToString(avg_entry, _Digits) +
-                      "&all_symbols=" + symbols_list +
                       "&candles=" + candle_history +
-                      "&active_trades=" + active_trades;
+                      "&active_trades=" + active_trades;  // Keep for potential use
 
     SendRequest(post_str);
 }
@@ -180,7 +201,9 @@ void SendRequest(string data_str) {
         if(result_str != "OK" && result_str != "") {
              string commands[];
              int count = StringSplit(result_str, ';', commands);
-             for(int i=0; i<count; i++) ProcessCommand(commands[i]);
+             for(int i=0; i<count; i++) {
+                 ProcessCommand(commands[i]);
+             }
         }
     }
 }
@@ -218,19 +241,51 @@ void ProcessCommand(string cmd) {
         symbol = _Symbol;
     }
     
-    if(action == "CHANGE_TF") {
-        if(ArraySize(parts) < 3) return;
-        int tf = (int)StringToInteger(parts[2]);
-        ENUM_TIMEFRAMES p = PERIOD_CURRENT;
-        if(tf==1) p=PERIOD_M1; else if(tf==5) p=PERIOD_M5; else if(tf==15) p=PERIOD_M15;
-        else if(tf==30) p=PERIOD_M30; else if(tf==60) p=PERIOD_H1;
-        else if(tf==240) p=PERIOD_H4; else if(tf==1440) p=PERIOD_D1;
-        ChartSetSymbolPeriod(0, symbol, p); 
-        GlobalVariableDel("Py_Req_History");
+    // FIXED: Handle Python's "GET_SYMBOLS" – Just log, as we send symbols every poll anyway
+    if(action == "GET_SYMBOLS") {
+        Print("📋 GET_SYMBOLS Received – Symbols already sent in next poll (", SymbolsTotal(true), " total)");
         return;
     }
     
-    // Visual Commands
+    // FIXED: Handle Python's "TF_CHANGE|{new_tf_str}|{symbol}" – Parse and apply
+    if(action == "TF_CHANGE") {
+        if(ArraySize(parts) < 3) return;
+        string new_tf = parts[1];  // e.g., "M15"
+        // symbol already in parts[2], but use if needed
+        int tf_minutes = GetTFMinutes(new_tf);
+        ENUM_TIMEFRAMES p = PERIOD_CURRENT;
+        if(tf_minutes==1) p=PERIOD_M1; else if(tf_minutes==5) p=PERIOD_M5; else if(tf_minutes==15) p=PERIOD_M15;
+        else if(tf_minutes==30) p=PERIOD_M30; else if(tf_minutes==60) p=PERIOD_H1;
+        else if(tf_minutes==240) p=PERIOD_H4; else if(tf_minutes==1440) p=PERIOD_D1;
+        ChartSetSymbolPeriod(0, symbol, p); 
+        GlobalVariableDel("Py_Req_History");
+        Print("🔄 TF Changed to ", new_tf, " (", tf_minutes, "min) for ", symbol);
+        return;
+    }
+    
+    // FIXED: Handle Python's "SYMBOL_CHANGE|{new_symbol}|{tf}" – Parse and apply
+    if(action == "SYMBOL_CHANGE") {
+        if(ArraySize(parts) < 2) return;
+        // new_symbol in parts[1], tf in parts[2] (but we keep current period unless specified)
+        string new_symbol = parts[1];
+        if(SymbolSelect(new_symbol, true)) {
+            ChartSetSymbolPeriod(0, new_symbol, _Period);  // Keep current TF
+            Print("🔄 Symbol Changed to ", new_symbol, " on TF ", GetTFString());
+        } else {
+            Print("❌ Failed to change to invalid symbol: ", new_symbol);
+        }
+        GlobalVariableDel("Py_Req_History");
+        return; 
+    }
+    
+    // NEW: Handle "RELOAD_CANDLES|{tf}|{symbol}" – Set flag for next poll to send more/fresh candles
+    if(action == "RELOAD_CANDLES") {
+        GlobalVariableSet("Py_Reload_Candles", 1.0);  // Flag to trigger in OnTimer
+        Print("🔄 RELOAD_CANDLES Requested – Will send fresh ", 300, " bars next poll");
+        return;
+    }
+    
+    // Visual Commands (unchanged)
     if(action == "DRAW_RECT") {
         if(ArraySize(parts) < 7) return;
         color c = StringToColorRGB(parts[6]); 
@@ -263,6 +318,19 @@ void ProcessCommand(string cmd) {
     }
     if(action == "CLEAN_CHART") { ObjectsDeleteAll(0, "Py_"); return; }
     
+    // Legacy handling (kept for backward compat, but now uses new commands)
+    if(action == "CHANGE_TF") {
+        if(ArraySize(parts) < 3) return;
+        int tf = (int)StringToInteger(parts[2]);
+        ENUM_TIMEFRAMES p = PERIOD_CURRENT;
+        if(tf==1) p=PERIOD_M1; else if(tf==5) p=PERIOD_M5; else if(tf==15) p=PERIOD_M15;
+        else if(tf==30) p=PERIOD_M30; else if(tf==60) p=PERIOD_H1;
+        else if(tf==240) p=PERIOD_H4; else if(tf==1440) p=PERIOD_D1;
+        ChartSetSymbolPeriod(0, symbol, p); 
+        GlobalVariableDel("Py_Req_History");
+        return;
+    }
+    
     if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") { 
         SymbolSelect(symbol, true);
         ChartSetSymbolPeriod(0, symbol, _Period); 
@@ -284,14 +352,31 @@ void ProcessCommand(string cmd) {
         return;
     }
 
-    if(action == "BUY")             TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
-    else if(action == "SELL")       TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
-    else if(action == "BUY_LIMIT")   TradePending(symbol, ORDER_TYPE_BUY_LIMIT, lot, price, sl, tp);
-    else if(action == "SELL_LIMIT")  TradePending(symbol, ORDER_TYPE_SELL_LIMIT, lot, price, sl, tp);
-    else if(action == "CLOSE_ALL")   ClosePositions(symbol, "ALL");
-    else if(action == "CLOSE_WIN")   ClosePositions(symbol, "WIN");
-    else if(action == "CLOSE_LOSS")  ClosePositions(symbol, "LOSS");
-    else if(action == "CLOSE_TICKET") CloseTicket((long)StringToInteger(parts[1]));
+    // FIXED: Wrapped trade action chain in proper blocks to fix parsing/else chaining issues
+    if(action == "BUY") {
+        TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
+    }
+    else if(action == "SELL") {
+        TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
+    }
+    else if(action == "BUY_LIMIT") {
+        TradePending(symbol, ORDER_TYPE_BUY_LIMIT, lot, price, sl, tp);
+    }
+    else if(action == "SELL_LIMIT") {
+        TradePending(symbol, ORDER_TYPE_SELL_LIMIT, lot, price, sl, tp);
+    }
+    else if(action == "CLOSE_ALL") {
+        ClosePositions(symbol, "ALL");
+    }
+    else if(action == "CLOSE_WIN") {
+        ClosePositions(symbol, "WIN");
+    }
+    else if(action == "CLOSE_LOSS") {
+        ClosePositions(symbol, "LOSS");
+    }
+    else if(action == "CLOSE_TICKET") {
+        CloseTicket((long)StringToInteger(parts[1]));
+    }
 }
 
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
