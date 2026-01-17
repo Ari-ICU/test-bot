@@ -88,6 +88,10 @@ class TradingApp(ttk.Window):
         self._build_console_tab()
         self._build_settings_tab()
 
+        # NEW: Set initial combobox values with fallback (before packing)
+        fallback_symbols = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm", "USDJPYm"]
+        self.sym_combo['values'] = fallback_symbols  # Initial population
+
     def _build_dashboard_tab(self):
         content = ttk.Frame(self.tab_dashboard)
         content.pack(fill=BOTH, expand=YES, padx=20, pady=20)
@@ -127,7 +131,7 @@ class TradingApp(ttk.Window):
         # --- ROW 3: PSYCHOLOGY & MARKET ---
         mid_frame = ttk.Frame(content)
         mid_frame.pack(fill=X, pady=(0, 10))
-        self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY DISCIPLINE", "lbl_daily_trades", "dark", "0/5 Trades")  # FIXED: Consistent var_name
+        self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY DISCIPLINE", "lbl_daily_trades", "dark", "0/5 Trades")
         create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
 
@@ -235,24 +239,24 @@ class TradingApp(ttk.Window):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
         logging.info(f"Auto-Trading {state}")
 
+    # FIXED: Enhanced update_symbol – Trigger connector refresh
     def update_symbol(self, event=None):
         sym = self.symbol_var.get()
         if sym:
-            # Sync symbol to MT5
             if hasattr(self.connector, 'change_symbol'):
                 self.connector.change_symbol(sym)
-            logging.info(f"Changing active symbol to {sym}...")
+            # NEW: Force connector to expect new symbols list
+            if hasattr(self.connector, 'refresh_symbols'):
+                self.connector.refresh_symbols()
+            logging.info(f"🔄 UI Symbol Changed to {sym} – Queued for MT5, Refreshing...")
 
+    # FIXED: Enhanced update_timeframe – Similar
     def update_timeframe(self, event=None):
-        """Notifies MT5 Bridge of a timeframe change request."""
-        tf_map = {
-            "M1": 1, "M5": 5, "M15": 15, "M30": 30,
-            "H1": 60, "H4": 240, "D1": 1440
-        }
+        tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
         minutes = tf_map.get(self.tf_var.get(), 5)
-       
         if hasattr(self.connector, 'change_timeframe'):
             self.connector.change_timeframe(self.symbol_var.get(), minutes)
+        logging.info(f"🔄 UI TF Changed to {self.tf_var.get()} ({minutes}min) – Queued for MT5, Refreshing...")
 
     def test_telegram(self):
         if self.telegram_bot:
@@ -326,21 +330,38 @@ class TradingApp(ttk.Window):
         time_str = time.strftime('%H:%M:%S', time.localtime(record.created))
         return f"[{time_str}] {record.getMessage()}"
 
+    # FIXED: Enhanced _start_data_refresh – Better sync, error handling, and force refresh if empty
     def _start_data_refresh(self):
-        # Update available symbols from Market Watch if list changed
-        if hasattr(self.connector, 'available_symbols') and self.connector.available_symbols:
-            current_vals = list(self.sym_combo['values'])
-            if sorted(current_vals) != sorted(self.connector.available_symbols):
-                self.sym_combo['values'] = self.connector.available_symbols
-        
-        # NEW: Force sync dropdown to connector's active symbol (fixes BTC bid vs XAU dropdown)
+        # Pull and set symbols (now with fallback check)
+        if hasattr(self.connector, 'available_symbols'):
+            avail_syms = self.connector.available_symbols
+            current_vals = list(self.sym_combo['values']) if self.sym_combo['values'] else []
+            if avail_syms and sorted(current_vals) != sorted(avail_syms):
+                self.sym_combo['values'] = avail_syms
+                logging.info(f"📋 UI Dropdown Updated: {len(avail_syms)} symbols from MT5")
+            elif not avail_syms:  # Fallback trigger
+                fallback = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm", "USDJPYm"]
+                if sorted(current_vals) != sorted(fallback):
+                    self.sym_combo['values'] = fallback
+                    logging.warning("⚠️ No MT5 symbols received – Using fallback list. Check EA POST 'symbols' data.")
+
+        # FIXED: Enhanced Auto-Sync for Symbol (with TF too)
         if hasattr(self.connector, 'active_symbol'):
             ea_active = self.connector.active_symbol
             ui_selected = self.symbol_var.get()
             if ui_selected != ea_active:
                 self.symbol_var.set(ea_active)
-                self.sym_combo.set(ea_active)  # Update combobox display too
-                logging.info(f"🔄 Auto-Sync: Dropdown → {ea_active} (was {ui_selected} – bid was lagging)")
+                self.sym_combo.set(ea_active)
+                logging.info(f"🔄 UI Auto-Sync: Symbol → {ea_active} (was {ui_selected})")
+
+        # NEW: Auto-Sync for TF
+        if hasattr(self.connector, 'active_tf'):
+            ea_tf = self.connector.active_tf
+            ui_tf = self.tf_var.get()
+            if ui_tf != ea_tf:
+                self.tf_var.set(ea_tf)
+                self.tf_combo.set(ea_tf)
+                logging.info(f"🔄 UI Auto-Sync: TF → {ea_tf} (was {ui_tf})")
 
         # 1. Server Status check
         if hasattr(self.connector, 'server') and self.connector.server:
@@ -366,7 +387,12 @@ class TradingApp(ttk.Window):
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
-        self.after(500, self._start_data_refresh)
+
+        # NEW: If no recent data after change, log warning
+        if len(self.connector.get_tf_candles(self.tf_var.get())) < 10:
+            logging.warning(f"⚠️ Low Candle Count ({len(self.connector.get_tf_candles(self.tf_var.get()))}) for {self.symbol_var.get()} – Check MT5 sync")
+
+        self.after(1000, self._start_data_refresh)  # Slower refresh (1s) to reduce CPU
 
 if __name__ == "__main__":
     pass

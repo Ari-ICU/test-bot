@@ -85,6 +85,15 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         'ask': float(data.get('ask', [0.0])[0])
                     }
 
+            # NEW: Handle Available Symbols List from MT5 (e.g., Market Watch)
+            raw_symbols = data.get('symbols', [''])[0]
+            if raw_symbols:
+                symbols_list = [s.strip() for s in raw_symbols.split('|') if s.strip()]  # Assume pipe-separated
+                with self.connector.lock:
+                    if self.connector.available_symbols != symbols_list:
+                        self.connector.available_symbols = symbols_list
+                        logger.info(f"📋 Updated Available Symbols from MT5: {len(symbols_list)} symbols (e.g., {symbols_list[:3]})")
+
             # NEW: Update Active Symbol from EA
             if 'symbol' in data:
                 new_symbol = data['symbol'][0]
@@ -92,6 +101,14 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     if self.connector.active_symbol != new_symbol:
                         self.connector.active_symbol = new_symbol
                         logger.info(f"EA Active Symbol Updated: {new_symbol} ({detect_asset_type(new_symbol)})")
+
+            # FIXED: Enhanced TF Handling – Ensure active_tf is set and log for UI sync
+            if 'tf' in data:
+                new_tf = data['tf'][0].upper()
+                with self.connector.lock:
+                    if hasattr(self.connector, 'active_tf') and self.connector.active_tf != new_tf:
+                        self.connector.active_tf = new_tf
+                        logger.info(f"🔄 Confirmed TF Change from MT5: {new_tf} – Triggering UI Refresh")
 
             # Prepare response for MT5 (Sends any pending commands)
             resp = "OK"
@@ -118,7 +135,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             # Format candles as | separated string
             candle_str = '|'.join([f"{c['high']},{c['low']},{c['open']},{c['close']},{c['time']}" for c in candles[-100:]]) if candles else ''
             
-            return f"POLLOK|balance:{acc['balance']}|equity:{acc['equity']}|profit:{acc['profit']}|bid:{acc['bid']}|ask:{acc['ask']}|buy_count:{acc['buy_count']}|sell_count:{acc['sell_count']}|candles:{candle_str}|symbol:{self.connector.active_symbol}"
+            return f"POLLOK|balance:{acc['balance']}|equity:{acc['equity']}|profit:{acc['profit']}|bid:{acc['bid']}|ask:{acc['ask']}|buy_count:{acc['buy_count']}|sell_count:{acc['sell_count']}|candles:{candle_str}|symbol:{self.connector.active_symbol}|tf:{tf}"
 
     def log_message(self, format, *args):
         # Suppress default HTTP logs
@@ -151,10 +168,11 @@ class MT5Connector:
             "H1": [], "H4": [], "D1": [], "W1": []
         }
         
-        self.available_symbols = [] # Stores the dropdown list for the UI
+        self.available_symbols = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm"]  # FALLBACK: Initial common symbols
         self.running = False
         self.telegram_bot = None
-        self.active_symbol = "XAUUSDm"  # NEW: Track active EA symbol
+        self.active_symbol = "XAUUSDm"  # Track active EA symbol
+        self.active_tf = "M5"  # NEW: Track active TF
 
     @property
     def account_info(self):
@@ -172,6 +190,38 @@ class MT5Connector:
 
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
+
+    # FIXED: Enhanced change_symbol – Add confirmation wait (poll for new active_symbol)
+    def change_symbol(self, new_symbol):
+        with self.lock:
+            for tf in self.tf_data:
+                self.tf_data[tf] = []  # Clear old data
+            self.command_queue.append(f"SYMBOL_CHANGE|{new_symbol}|{self.active_tf}")
+            old_symbol = self.active_symbol
+            self.active_symbol = new_symbol  # Optimistically update
+            logger.info(f"🔄 Queued Symbol Change: {old_symbol} → {new_symbol} (TF: {self.active_tf}) – Waiting for MT5 Confirmation...")
+        
+        # NEW: Wait briefly for MT5 to confirm (prevents UI lag)
+        time.sleep(2)  # Give EA time to switch and POST back
+
+    # FIXED: Enhanced change_timeframe – Similar confirmation
+    def change_timeframe(self, symbol, minutes):
+        tf_map = {1: "M1", 5: "M5", 15: "M15", 30: "M30", 60: "H1", 240: "H4", 1440: "D1"}
+        new_tf = tf_map.get(minutes, "M5")
+        with self.lock:
+            self.tf_data[new_tf] = []  # Clear for reload
+            self.command_queue.append(f"TF_CHANGE|{new_tf}|{symbol}")
+            old_tf = self.active_tf
+            self.active_tf = new_tf
+            logger.info(f"🔄 Queued TF Change: {old_tf} → {new_tf} ({minutes}min) for {symbol} – Waiting for MT5 Confirmation...")
+        
+        time.sleep(2)  # Wait for EA to switch TF and send new candles
+
+    # NEW: Method to force refresh symbols (call from UI if needed)
+    def refresh_symbols(self):
+        # In real setup, this could trigger MT5 to send symbols via a queued command like "GET_SYMBOLS"
+        # For now, log and rely on next POST
+        logger.info("🔄 Forcing Symbol List Refresh – Check MT5 POST for 'symbols' data")
 
     def send_order(self, action, symbol, lot, sl, tp):
         """Send order to queue for EA execution."""

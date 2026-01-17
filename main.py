@@ -103,7 +103,7 @@ def bot_logic(app):
             # 5. Pull Candles & Analyze Strategies (with Real-Time Reason Logging)
             candles = connector.get_tf_candles(execution_tf)
             if len(candles) < 50:
-                logger.info("Insufficient candles – Waiting...")
+                logger.warning(f"❌ Insufficient Candles ({len(candles)}) for {symbol} on {execution_tf} – Symbol/TF Change Pending?")
                 time.sleep(10); continue
 
             # Locally calculate current ATR for the Risk Manager
