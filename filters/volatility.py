@@ -4,7 +4,7 @@ from core.indicators import Indicators  # Fixed: Import the class, not a non-exi
 
 logger = logging.getLogger("VolatilityFilter")
 
-def is_volatility_sufficient(candles, min_atr_threshold=0.01, max_atr_threshold=5.0):
+def is_volatility_sufficient(candles, min_atr_threshold=0.01, max_atr_threshold=500.0):
     """
     FIXED: Renamed to match main.py expectations.
     Checks if market volatility is within safe and active limits using ATR.
