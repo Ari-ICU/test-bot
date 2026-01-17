@@ -206,23 +206,16 @@ class TradingApp(ttk.Window):
         lot_row = ttk.Frame(conf_frame)
         lot_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01,
-                    textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
-
-        # NEW: Add Refresh Button
-        refresh_row = ttk.Frame(conf_frame)
-        refresh_row.pack(fill=X, padx=20, pady=5)
-        ttk.Button(refresh_row, text="🔄 Refresh Symbols/TF", bootstyle="info-outline",
-                   command=self.force_refresh).pack(fill=X)
+        ttk.Spinbox(lot_row, from_=0.01, to=50, textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
 
     def _build_console_tab(self):
-        toolbar = ttk.Frame(self.tab_console)
-        toolbar.pack(fill=X, padx=10, pady=10)
-        ttk.Label(toolbar, text="System Logs", font=("Helvetica", 12, "bold")).pack(side=LEFT)
-        ttk.Button(toolbar, text="Clear Console", bootstyle="secondary", command=self.clear_logs).pack(side=RIGHT)
-        self.log_area = ScrolledText(self.tab_console, state='disabled', font=("Consolas", 10))
-        self.log_area.pack(fill=BOTH, expand=YES, padx=10, pady=(0, 10))
-        self.log_area.text.tag_config('INFO', foreground='#ffffff')
+        # Console Setup with ScrolledText
+        console_frame = ttk.Frame(self.tab_console)
+        console_frame.pack(fill=BOTH, expand=YES, padx=20, pady=20)
+        self.log_area = ScrolledText(console_frame, bootstyle="secondary", height=30, width=120, autohide=True)
+        self.log_area.pack(fill=BOTH, expand=YES)
+        # Configure tags for log levels
+        self.log_area.text.tag_config('INFO', foreground='lightgreen')
         self.log_area.text.tag_config('WARNING', foreground='#f0ad4e')
         self.log_area.text.tag_config('ERROR', foreground='#d9534f')
 
@@ -412,6 +405,8 @@ class TradingApp(ttk.Window):
             self.lbl_bid.configure(text=f"{info.get('bid', 0.0):.5f}")
             self.lbl_ask.configure(text=f"{info.get('ask', 0.0):.5f}")
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
+            self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
+            self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
 
         # NEW: Check for pending mismatches and log
         if hasattr(self.connector, 'pending_changes'):

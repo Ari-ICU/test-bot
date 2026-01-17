@@ -56,11 +56,8 @@ def bot_logic(app):
     while app.bot_running:
         try:
             # 1. Pull dynamic settings from the UI
-            symbol = connector.active_symbol 
-            execution_tf = connector.active_tf
-            
-            symbol = app.symbol_var.get() 
-            execution_tf = app.tf_var.get()
+            symbol = connector.active_symbol  # FIXED: Use connector's confirmed/optimistic value
+            execution_tf = connector.active_tf  # FIXED: Use connector's confirmed/optimistic value
             max_pos_allowed = app.max_pos_var.get()
             user_lot = app.lot_var.get()
 

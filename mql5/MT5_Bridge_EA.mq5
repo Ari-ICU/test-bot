@@ -1,19 +1,47 @@
 #property strict
-#property version "3.5"  // Bumped version for fixes
-#property description "HTTP Bridge - Fixed: Symbol Sync, TF/Symbol Changes, Candle Reload"
+#property version "3.6" // Bumped for performance optimizations
+#property description "HTTP Bridge - Optimized: Caching, Reduced String Ops, Efficient Polling"
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
+input int TimerInterval = 500; // Configurable timer interval (ms) for tuning responsiveness vs performance
 
-int OnInit() { 
-   EventSetMillisecondTimer(500);  // Keep at 500ms for responsive polling
+// Cache variables for performance
+string g_symbols_list = "";
+datetime g_last_symbols_update = 0;
+string g_candle_history = "";
+datetime g_last_candle_update = 0;
+int g_candles_to_send = 200;
+string g_tf_string = "";
+ENUM_TIMEFRAMES g_current_period = PERIOD_CURRENT;
+double g_last_bid = 0, g_last_ask = 0;
+double g_cached_balance = 0, g_cached_profit = 0, g_cached_equity = 0;
+int g_cached_buy_count = 0, g_cached_sell_count = 0;
+double g_cached_avg_entry = 0;
+string g_cached_active_trades = "";
+datetime g_last_positions_update = 0;
+datetime g_last_account_update = 0;
+int g_trade_mode = -1; // -1 forces initial calc
+datetime g_day_start = 0, g_week_start = 0, g_month_start = 0;
+double g_prof_today = 0, g_prof_week = 0, g_prof_month = 0;
+datetime g_last_profit_update = 0;
+bool g_force_candle_reload = false;
+
+int OnInit() {
+   EventSetMillisecondTimer(TimerInterval);
+   g_current_period = _Period;
+   g_tf_string = GetTFString();
+   UpdateSymbolsCache(); // Initial cache
+   UpdateAccountCache(); // Initial
+   UpdatePositionsCache(); // Initial
+   UpdateProfitCache(); // Initial
    // Enable WebRequest for the URL automatically if possible (Manual step usually required)
-   return INIT_SUCCEEDED; 
+   return INIT_SUCCEEDED;
 }
 
-void OnDeinit(const int reason) { 
-   EventKillTimer(); 
-   ObjectsDeleteAll(0, "Py_"); 
+void OnDeinit(const int reason) {
+   EventKillTimer();
+   ObjectsDeleteAll(0, "Py_");
 }
 
 double CalculateHistoryProfit(datetime from_date) {
@@ -32,18 +60,39 @@ double CalculateHistoryProfit(datetime from_date) {
     return profit;
 }
 
+// Cache-aware profit update (call only when needed, e.g., daily/weekly boundaries crossed)
+void UpdateProfitCache() {
+    MqlDateTime dt; TimeCurrent(dt);
+    dt.hour = 0; dt.min = 0; dt.sec = 0;
+    datetime day_start = StructToTime(dt);
+    int days_to_monday = (dt.day_of_week == 0) ? 6 : (dt.day_of_week - 1);
+    datetime week_start = day_start - (days_to_monday * 86400);
+    dt.day = 1;
+    datetime month_start = StructToTime(dt);
+
+    bool needs_update = (day_start != g_day_start) || (week_start != g_week_start) || (month_start != g_month_start) || (g_last_profit_update == 0);
+    if(needs_update) {
+        g_prof_today = CalculateHistoryProfit(day_start);
+        g_prof_week = CalculateHistoryProfit(week_start);
+        g_prof_month = CalculateHistoryProfit(month_start);
+        g_day_start = day_start;
+        g_week_start = week_start;
+        g_month_start = month_start;
+        g_last_profit_update = TimeCurrent();
+    }
+}
+
 string GetTFString() {
     if(_Period == PERIOD_M1) return "M1";
     if(_Period == PERIOD_M5) return "M5";
     if(_Period == PERIOD_M15) return "M15";
-    if(_Period == PERIOD_M30) return "M30";  // FIXED: Added M30
+    if(_Period == PERIOD_M30) return "M30";
     if(_Period == PERIOD_H1) return "H1";
     if(_Period == PERIOD_H4) return "H4";
     if(_Period == PERIOD_D1) return "D1";
     return "M5";
 }
 
-// NEW: Map TF string back to minutes for change commands
 int GetTFMinutes(string tf_str) {
     if(tf_str == "M1") return 1;
     if(tf_str == "M5") return 5;
@@ -52,23 +101,56 @@ int GetTFMinutes(string tf_str) {
     if(tf_str == "H1") return 60;
     if(tf_str == "H4") return 240;
     if(tf_str == "D1") return 1440;
-    return 5;  // Default M5
+    return 5;
 }
 
-void OnTimer() {
-    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)) {
-        Print("⚠️ Algo Trading is Disabled! Enable 'Algo Trading' button.");
-    }
+// Efficient symbols cache update (only if Market Watch changed or every 5min)
+void UpdateSymbolsCache() {
+    datetime now = TimeCurrent();
+    if(now - g_last_symbols_update < 300 || SymbolsTotal(true) == 0) return; // Skip if recent or empty
 
-    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double profit = AccountInfoDouble(ACCOUNT_PROFIT);
-    string acct_name = AccountInfoString(ACCOUNT_NAME);
-    
+    StringFreezer freezer; // Use StringFreezer for efficient concatenation
+    int total_symbols = SymbolsTotal(true);
+    for(int i=0; i<total_symbols; i++) {
+        string sym = SymbolName(i, true);
+        if(freezer.Len() > 0) freezer.Add("|");
+        freezer.Add(sym);
+    }
+    g_symbols_list = freezer.String();
+    g_last_symbols_update = now;
+}
+
+// Efficient candle history builder using StringFreezer
+void UpdateCandleHistory() {
+    datetime now = TimeCurrent();
+    if(!g_force_candle_reload && now - g_last_candle_update < TimerInterval * 0.001) return; // Skip if recent
+
+    StringFreezer freezer;
+    int available = iBars(_Symbol, g_current_period);
+    int count = MathMin(g_candles_to_send, available);
+
+    for(int i=0; i<count; i++) {
+        if(i > 0) freezer.Add("|");
+        freezer.Add(DoubleToString(iHigh(_Symbol, g_current_period, i), _Digits) + "," +
+                    DoubleToString(iLow(_Symbol, g_current_period, i), _Digits) + "," +
+                    DoubleToString(iOpen(_Symbol, g_current_period, i), _Digits) + "," +
+                    DoubleToString(iClose(_Symbol, g_current_period, i), _Digits) + "," +
+                    IntegerToString(iTime(_Symbol, g_current_period, i)));
+    }
+    g_candle_history = freezer.String();
+    g_last_candle_update = now;
+    g_force_candle_reload = false;
+}
+
+// Efficient positions cache (update only if positions changed or every 1s)
+void UpdatePositionsCache() {
+    datetime now = TimeCurrent();
+    if(now - g_last_positions_update < 1) return; // 1s throttle
+
     int total_pos = PositionsTotal();
-    int buy_count = 0; int sell_count = 0;
-    double sum_price_vol = 0.0; double sum_vol = 0.0;
+    int buy_count = 0, sell_count = 0;
+    double sum_price_vol = 0.0, sum_vol = 0.0;
+    StringFreezer trades_freezer;
 
     for(int i=0; i<total_pos; i++) {
         if(PositionGetSymbol(i) == _Symbol) {
@@ -79,123 +161,142 @@ void OnTimer() {
             sum_vol += vol;
             if(type == POSITION_TYPE_BUY) buy_count++;
             else if(type == POSITION_TYPE_SELL) sell_count++;
+
+            // Build active_trades only for this symbol
+            ulong ticket = PositionGetTicket(i);
+            string type_str = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            string trade_line = IntegerToString(ticket) + "," + _Symbol + "," + type_str + "," + DoubleToString(vol, 2) + "," + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2);
+            if(trades_freezer.Len() > 0) trades_freezer.Add("|");
+            trades_freezer.Add(trade_line);
         }
     }
-    double avg_entry = (sum_vol > 0) ? NormalizeDouble(sum_price_vol / sum_vol, _Digits) : 0.0;
+    g_cached_avg_entry = (sum_vol > 0) ? NormalizeDouble(sum_price_vol / sum_vol, _Digits) : 0.0;
+    g_cached_buy_count = buy_count;
+    g_cached_sell_count = sell_count;
+    g_cached_active_trades = trades_freezer.String();
+    g_last_positions_update = now;
+}
 
-    // FIXED: Build symbols_list with pipe separator (matches Python parser preference) and send as 'symbols='
-    string symbols_list = "";
-    int total_symbols = SymbolsTotal(true);  // Market Watch only
-    for(int i=0; i<total_symbols; i++) {
-        string sym = SymbolName(i, true);
-        if(symbols_list != "") symbols_list += "|";  // Use | separator for Python flexibility
-        symbols_list += sym;
-    }
+// Efficient account cache (update every 2s or on change)
+void UpdateAccountCache() {
+    datetime now = TimeCurrent();
+    if(now - g_last_account_update < 2) return;
 
-    string candle_history = "";
-    int candles_to_send = 200; 
-    if(GlobalVariableCheck("Py_Req_History")) {
-        candles_to_send = (int)GlobalVariableGet("Py_Req_History");
-    }
-    
-    // ENHANCED: If RELOAD_CANDLES flag set, force more candles (e.g., 300) and clear flag
-    if(GlobalVariableCheck("Py_Reload_Candles")) {
-        candles_to_send = 300;
-        GlobalVariableDel("Py_Reload_Candles");
-        Print("🔄 Forced Candle Reload: Sending ", candles_to_send, " bars");
-    }
-    
-    int available = iBars(_Symbol, _Period);
-    if(candles_to_send > available) candles_to_send = available;
-
-    for(int i=0; i<candles_to_send; i++) {
-        candle_history += DoubleToString(iHigh(_Symbol, _Period, i), _Digits) + "," +
-                          DoubleToString(iLow(_Symbol, _Period, i), _Digits) + "," +
-                          DoubleToString(iOpen(_Symbol, _Period, i), _Digits) + "," +
-                          DoubleToString(iClose(_Symbol, _Period, i), _Digits) + "," +
-                          IntegerToString(iTime(_Symbol, _Period, i)) + 
-                          (i < candles_to_send - 1 ? "|" : "");
-    }
-
-    string active_trades = "";
-    for(int i=0; i<total_pos; i++) {
-        ulong ticket = PositionGetTicket(i);
-        if(ticket > 0) {
-            string p_symbol = PositionGetString(POSITION_SYMBOL);
-            long p_type = PositionGetInteger(POSITION_TYPE);
-            double p_vol = PositionGetDouble(POSITION_VOLUME);
-            double p_profit = PositionGetDouble(POSITION_PROFIT);
-            string type_str = (p_type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-            string trade_line = IntegerToString(ticket) + "," + p_symbol + "," + type_str + "," + DoubleToString(p_vol, 2) + "," + DoubleToString(p_profit, 2);
-            if(active_trades != "") active_trades += "|";
-            active_trades += trade_line;
-        }
-    }
-
-    long acct_login = AccountInfoInteger(ACCOUNT_LOGIN);
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double profit = AccountInfoDouble(ACCOUNT_PROFIT);
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    string acct_name = AccountInfoString(ACCOUNT_NAME);
     string acct_server = AccountInfoString(ACCOUNT_SERVER);
-    string acct_company = AccountInfoString(ACCOUNT_COMPANY);
-    long acct_leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
-    double acct_equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-    // FIXED: Determine trade_mode (1 for demo, 0 for real) based on account type
-    int trade_mode = (StringFind(acct_server, "Demo") >= 0 || StringFind(acct_name, "Demo") >= 0) ? 1 : 0;
+    // Update trade_mode only if changed
+    int new_trade_mode = (StringFind(acct_server, "Demo") >= 0 || StringFind(acct_name, "Demo") >= 0) ? 1 : 0;
+    if(new_trade_mode != g_trade_mode) {
+        g_trade_mode = new_trade_mode;
+    }
 
-    MqlDateTime dt; TimeCurrent(dt);
-    dt.hour = 0; dt.min = 0; dt.sec = 0;
-    datetime day_start = StructToTime(dt);
-    
-    int days_to_monday = (dt.day_of_week == 0) ? 6 : (dt.day_of_week - 1);
-    datetime week_start = day_start - (days_to_monday * 86400);
+    g_cached_balance = balance;
+    g_cached_profit = profit;
+    g_cached_equity = equity;
+    g_last_account_update = now;
+}
 
-    dt.day = 1;
-    datetime month_start = StructToTime(dt);
+void OnTimer() {
+    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)) {
+        static datetime last_warn = 0;
+        if(TimeCurrent() - last_warn > 60) { // Throttle warning
+            Print("⚠️ Algo Trading is Disabled! Enable 'Algo Trading' button.");
+            last_warn = TimeCurrent();
+        }
+        return; // Early exit if trading disabled
+    }
 
-    double prof_today = CalculateHistoryProfit(day_start);
-    double prof_week = CalculateHistoryProfit(week_start);
-    double prof_month = CalculateHistoryProfit(month_start);
+    // Update caches as needed
+    UpdateAccountCache();
+    UpdatePositionsCache();
+    UpdateProfitCache();
+    UpdateSymbolsCache();
+    UpdateCandleHistory();
 
-    string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE (v3.5 - Fixed Sync) ===\n";
-    dashboard += "💰 Balance: " + DoubleToString(balance, 2) + "\n";
-    dashboard += "📆 Today: " + DoubleToString(prof_today, 2) + "\n";
-    dashboard += "📅 Week:  " + DoubleToString(prof_week, 2) + "\n";
-    dashboard += "🗓️ Month: " + DoubleToString(prof_month, 2) + "\n";
-    dashboard += "🔄 Symbols Synced: " + IntegerToString(total_symbols) + "\n";  // NEW: Show sync status
+    // Check for TF change
+    if(g_current_period != _Period) {
+        g_current_period = _Period;
+        g_tf_string = GetTFString();
+        g_force_candle_reload = true; // Force reload on TF change
+        Print("🔄 TF Changed - Forcing Candle Reload");
+    }
+
+    // Check for symbol change (less frequent)
+    static string last_symbol = "";
+    if(last_symbol != _Symbol) {
+        last_symbol = _Symbol;
+        g_force_candle_reload = true;
+        Print("🔄 Symbol Changed - Forcing Candle Reload");
+    }
+
+    // Get fresh bid/ask (volatile, update every tick-like)
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    bool prices_changed = (bid != g_last_bid || ask != g_last_ask);
+    g_last_bid = bid;
+    g_last_ask = ask;
+
+    // Build dashboard (lightweight)
+    string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE (v3.6 - Optimized) ===\n";
+    dashboard += "💰 Balance: " + DoubleToString(g_cached_balance, 2) + "\n";
+    dashboard += "📆 Today: " + DoubleToString(g_prof_today, 2) + "\n";
+    dashboard += "📅 Week: " + DoubleToString(g_prof_week, 2) + "\n";
+    dashboard += "🗓️ Month: " + DoubleToString(g_prof_month, 2) + "\n";
+    dashboard += "🔄 Symbols Synced: " + IntegerToString(SymbolsTotal(true)) + "\n";
     dashboard += "-----------------------------";
     Comment(dashboard);
 
-    // FIXED: Add 'command=POLL' for explicit poll handling in Python; send 'symbols=' with pipe separator
-    // Also add 'trade_mode=' for Python account sync
-    string post_str = "command=POLL" +  // Explicit POLL for Python _build_poll_response
-                      "&symbol=" + _Symbol + 
-                      "&symbols=" + symbols_list +  // FIXED: Send as 'symbols=' (matches Python parser)
-                      "&tf=" + GetTFString() +
-                      "&bid=" + DoubleToString(bid, _Digits) + 
-                      "&ask=" + DoubleToString(ask, _Digits) +
-                      "&balance=" + DoubleToString(balance, 2) +
-                      "&profit=" + DoubleToString(profit, 2) +
-                      "&acct_equity=" + DoubleToString(acct_equity, 2) +  // FIXED: Send equity
-                      "&trade_mode=" + IntegerToString(trade_mode) +  // NEW: For demo/real detection
-                      "&buy_count=" + IntegerToString(buy_count) +
-                      "&sell_count=" + IntegerToString(sell_count) +
-                      "&candles=" + candle_history +
-                      "&active_trades=" + active_trades;  // Keep for potential use
+    // Build POST data efficiently with StringFreezer
+    StringFreezer post_freezer;
+    post_freezer.Add("command=POLL");
+    post_freezer.Add("&symbol=" + _Symbol);
+    post_freezer.Add("&symbols=" + g_symbols_list);
+    post_freezer.Add("&tf=" + g_tf_string);
+    post_freezer.Add(prices_changed ? "&bid=" + DoubleToString(bid, _Digits) : ""); // Send only if changed
+    post_freezer.Add(prices_changed ? "&ask=" + DoubleToString(ask, _Digits) : "");
+    post_freezer.Add("&balance=" + DoubleToString(g_cached_balance, 2));
+    post_freezer.Add("&profit=" + DoubleToString(g_cached_profit, 2));
+    post_freezer.Add("&acct_equity=" + DoubleToString(g_cached_equity, 2));
+    post_freezer.Add("&trade_mode=" + IntegerToString(g_trade_mode));
+    post_freezer.Add("&buy_count=" + IntegerToString(g_cached_buy_count));
+    post_freezer.Add("&sell_count=" + IntegerToString(g_cached_sell_count));
+    post_freezer.Add("&candles=" + g_candle_history);
+    post_freezer.Add("&active_trades=" + g_cached_active_trades);
 
+    string post_str = post_freezer.String();
     SendRequest(post_str);
 }
+
+// Custom StringFreezer class for efficient string building (avoids repeated allocations)
+class StringFreezer {
+private:
+    string m_buffer;
+public:
+    void Add(string s) { m_buffer += s; }
+    int Len() { return StringLen(m_buffer); }
+    string String() { return m_buffer; }
+};
 
 void SendRequest(string data_str) {
     char post_char[]; StringToCharArray(data_str, post_char);
     uchar post_uchar[]; ArrayResize(post_uchar, ArraySize(post_char));
     for(int i=0; i<ArraySize(post_char); i++) post_uchar[i] = (uchar)post_char[i];
-    
+   
     uchar result_uchar[]; string response_headers;
     int http_res = WebRequest("POST", ServerURL, "Content-Type: application/x-www-form-urlencoded\r\n", 2000, post_uchar, result_uchar, response_headers);
-    
+   
     if(http_res == -1 && GetLastError() == 4060) {
-        Print("⚠️ ERROR: Enable WebRequest for ", ServerURL, " in Tools -> Options -> Expert Advisors");
+        static datetime last_error = 0;
+        if(TimeCurrent() - last_error > 300) { // Throttle error print
+            Print("⚠️ ERROR: Enable WebRequest for ", ServerURL, " in Tools -> Options -> Expert Advisors");
+            last_error = TimeCurrent();
+        }
     }
-    
+   
     if(ArraySize(result_uchar) > 0) {
         string result_str = CharArrayToString(result_uchar);
         if(result_str != "OK" && result_str != "") {
@@ -219,106 +320,119 @@ color StringToColorRGB(string rgb_str) {
     return (color)StringToInteger(rgb_str);
 }
 
-// --- FIX: Robust Filling Mode Detection ---
 ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol) {
     long mode = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
-    if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;  // Prefer FOK
-    if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;  // Then IOC
-    return ORDER_FILLING_RETURN;                                    // Default
+    if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
+    if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
+    return ORDER_FILLING_RETURN;
 }
 
 void ProcessCommand(string cmd) {
     string parts[];
     if(StringSplit(cmd, '|', parts) < 2) return;
-    
-    string action = parts[0]; 
+   
+    string action = parts[0];
     string symbol = parts[1];
-    
-    // --- FIX: Auto-correct Symbol Mismatch ---
-    // If python sends "XAUUSD" but chart is "XAUUSDm", force chart symbol
+   
     if(!SymbolSelect(symbol, true)) {
         Print("⚠️ Symbol '", symbol, "' not found! Defaulting to chart symbol: ", _Symbol);
         symbol = _Symbol;
     }
-    
-    // FIXED: Handle Python's "GET_SYMBOLS" – Just log, as we send symbols every poll anyway
+   
     if(action == "GET_SYMBOLS") {
         Print("📋 GET_SYMBOLS Received – Symbols already sent in next poll (", SymbolsTotal(true), " total)");
         return;
     }
-    
-    // FIXED: Handle Python's "TF_CHANGE|{new_tf_str}|{symbol}" – Parse and apply
+   
     if(action == "TF_CHANGE") {
         if(ArraySize(parts) < 3) return;
-        string new_tf = parts[1];  // e.g., "M15"
-        // symbol already in parts[2], but use if needed
+        string new_tf = parts[1];
         int tf_minutes = GetTFMinutes(new_tf);
         ENUM_TIMEFRAMES p = PERIOD_CURRENT;
         if(tf_minutes==1) p=PERIOD_M1; else if(tf_minutes==5) p=PERIOD_M5; else if(tf_minutes==15) p=PERIOD_M15;
         else if(tf_minutes==30) p=PERIOD_M30; else if(tf_minutes==60) p=PERIOD_H1;
         else if(tf_minutes==240) p=PERIOD_H4; else if(tf_minutes==1440) p=PERIOD_D1;
-        ChartSetSymbolPeriod(0, symbol, p); 
+        ChartSetSymbolPeriod(0, symbol, p);
+        g_current_period = p;
+        g_tf_string = new_tf;
+        g_force_candle_reload = true; // Trigger reload
         GlobalVariableDel("Py_Req_History");
         Print("🔄 TF Changed to ", new_tf, " (", tf_minutes, "min) for ", symbol);
         return;
     }
-    
-    // FIXED: Handle Python's "SYMBOL_CHANGE|{new_symbol}|{tf}" – Parse and apply
+   
     if(action == "SYMBOL_CHANGE") {
         if(ArraySize(parts) < 2) return;
-        // new_symbol in parts[1], tf in parts[2] (but we keep current period unless specified)
         string new_symbol = parts[1];
         if(SymbolSelect(new_symbol, true)) {
-            ChartSetSymbolPeriod(0, new_symbol, _Period);  // Keep current TF
-            Print("🔄 Symbol Changed to ", new_symbol, " on TF ", GetTFString());
+            ChartSetSymbolPeriod(0, new_symbol, g_current_period);
+            Print("🔄 Symbol Changed to ", new_symbol, " on TF ", g_tf_string);
+            g_force_candle_reload = true; // Trigger reload
         } else {
             Print("❌ Failed to change to invalid symbol: ", new_symbol);
         }
         GlobalVariableDel("Py_Req_History");
-        return; 
-    }
-    
-    // NEW: Handle "RELOAD_CANDLES|{tf}|{symbol}" – Set flag for next poll to send more/fresh candles
-    if(action == "RELOAD_CANDLES") {
-        GlobalVariableSet("Py_Reload_Candles", 1.0);  // Flag to trigger in OnTimer
-        Print("🔄 RELOAD_CANDLES Requested – Will send fresh ", 300, " bars next poll");
         return;
     }
-    
-    // Visual Commands (unchanged)
+   
+    if(action == "RELOAD_CANDLES") {
+        g_candles_to_send = 300;
+        g_force_candle_reload = true;
+        Print("🔄 RELOAD_CANDLES Requested – Will send fresh ", g_candles_to_send, " bars next poll");
+        return;
+    }
+   
+    if(action == "GET_HISTORY") {
+        if(ArraySize(parts) < 3) return;
+        g_candles_to_send = (int)StringToInteger(parts[2]);
+        g_force_candle_reload = true;
+        return;
+    }
+   
+    // Visual Commands (batch redraw at end if multiple, but for smoothness, redraw only if needed)
+    static bool needs_redraw = false;
     if(action == "DRAW_RECT") {
         if(ArraySize(parts) < 7) return;
-        color c = StringToColorRGB(parts[6]); 
+        color c = StringToColorRGB(parts[6]);
         DrawRect(parts[1], StringToDouble(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), (int)StringToInteger(parts[5]), c);
+        needs_redraw = true;
         return;
     }
     if(action == "DRAW_LABEL") {
         if(ArraySize(parts) < 5) return;
         color c = StringToColorRGB(parts[3]);
         DrawLabel(parts[1], parts[2], c, (int)StringToInteger(parts[4]));
+        needs_redraw = true;
         return;
     }
     if(action == "DRAW_TEXT") {
         if(ArraySize(parts) < 6) return;
         color c = StringToColorRGB(parts[4]);
         DrawText(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), c, parts[5]);
+        needs_redraw = true;
         return;
     }
     if(action == "DRAW_TREND") {
         if(ArraySize(parts) < 8) return;
         color c = StringToColorRGB(parts[6]);
         DrawTrend(parts[1], (int)StringToInteger(parts[2]), StringToDouble(parts[3]), (int)StringToInteger(parts[4]), StringToDouble(parts[5]), c, (int)StringToInteger(parts[7]));
+        needs_redraw = true;
         return;
     }
     if(action == "DRAW_LINE") {
         if(ArraySize(parts) < 5) return;
         color c = StringToColorRGB(parts[3]);
         DrawHLine(parts[1], StringToDouble(parts[2]), c, (int)StringToInteger(parts[4]));
+        needs_redraw = true;
         return;
     }
-    if(action == "CLEAN_CHART") { ObjectsDeleteAll(0, "Py_"); return; }
-    
-    // Legacy handling (kept for backward compat, but now uses new commands)
+    if(action == "CLEAN_CHART") { 
+        ObjectsDeleteAll(0, "Py_"); 
+        needs_redraw = true;
+        return; 
+    }
+
+    // Legacy TF change (deprecated but kept)
     if(action == "CHANGE_TF") {
         if(ArraySize(parts) < 3) return;
         int tf = (int)StringToInteger(parts[2]);
@@ -326,33 +440,27 @@ void ProcessCommand(string cmd) {
         if(tf==1) p=PERIOD_M1; else if(tf==5) p=PERIOD_M5; else if(tf==15) p=PERIOD_M15;
         else if(tf==30) p=PERIOD_M30; else if(tf==60) p=PERIOD_H1;
         else if(tf==240) p=PERIOD_H4; else if(tf==1440) p=PERIOD_D1;
-        ChartSetSymbolPeriod(0, symbol, p); 
+        ChartSetSymbolPeriod(0, symbol, p);
+        g_current_period = p;
+        g_tf_string = GetTFString();
+        g_force_candle_reload = true;
         GlobalVariableDel("Py_Req_History");
         return;
     }
-    
-    if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") { 
+   
+    if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") {
         SymbolSelect(symbol, true);
-        ChartSetSymbolPeriod(0, symbol, _Period); 
+        ChartSetSymbolPeriod(0, symbol, g_current_period);
+        g_force_candle_reload = true;
         GlobalVariableDel("Py_Req_History");
-        return; 
+        return;
     }
-    
+   
     double lot = (ArraySize(parts) >= 3) ? StringToDouble(parts[2]) : DefaultLot;
     double sl = (ArraySize(parts) >= 4) ? StringToDouble(parts[3]) : 0;
     double tp = (ArraySize(parts) >= 5) ? StringToDouble(parts[4]) : 0;
     double price = (ArraySize(parts) >= 6) ? StringToDouble(parts[5]) : 0;
 
-    if(action == "GET_HISTORY") {
-        if(ArraySize(parts) < 3) return;
-        int count = (int)StringToInteger(parts[2]);
-        int available = iBars(_Symbol, _Period);
-        if(count > available) count = available;
-        if(count > 0) GlobalVariableSet("Py_Req_History", count);
-        return;
-    }
-
-    // FIXED: Wrapped trade action chain in proper blocks to fix parsing/else chaining issues
     if(action == "BUY") {
         TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
     }
@@ -377,60 +485,57 @@ void ProcessCommand(string cmd) {
     else if(action == "CLOSE_TICKET") {
         CloseTicket((long)StringToInteger(parts[1]));
     }
+
+    // Batch redraw at end of processing
+    if(needs_redraw) {
+        ChartRedraw();
+        needs_redraw = false;
+    }
 }
 
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeRequest r;
     MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
-    
+   
     int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
     double stops_level = SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(s, SYMBOL_POINT);
     double ask = SymbolInfoDouble(s, SYMBOL_ASK);
     double bid = SymbolInfoDouble(s, SYMBOL_BID);
     double entry_price = (t == ORDER_TYPE_BUY) ? ask : bid;
-
     r.action = TRADE_ACTION_DEAL;
-    r.symbol = s; 
-    r.volume = v; 
-    r.type = t; 
+    r.symbol = s;
+    r.volume = v;
+    r.type = t;
     r.price = entry_price;
-
-    // VALIDATION: Ensure SL/TP are not within the broker's forbidden "StopsLevel" zone
     if(sl > 0) {
         if(t == ORDER_TYPE_BUY && sl > (bid - stops_level)) sl = bid - stops_level;
         if(t == ORDER_TYPE_SELL && sl < (ask + stops_level)) sl = ask + stops_level;
         r.sl = NormalizeDouble(sl, digits);
     }
-    
     if(tp > 0) {
         if(t == ORDER_TYPE_BUY && tp < (bid + stops_level)) tp = bid + stops_level;
         if(t == ORDER_TYPE_SELL && tp > (ask - stops_level)) tp = ask - stops_level;
         r.tp = NormalizeDouble(tp, digits);
     }
-    
     r.type_filling = GetFillingMode(s);
     if(!OrderSend(r, res)) Print("❌ Trade Fail: ", res.retcode);
 }
 
 void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
-    MqlTradeRequest r; MqlTradeResult res; 
+    MqlTradeRequest r; MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
-    
+   
     int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
-
-    r.action = TRADE_ACTION_PENDING; 
-    r.symbol = s; 
-    r.volume = v; 
-    r.type = t; 
-    r.price = NormalizeDouble(p, digits); 
-    
+    r.action = TRADE_ACTION_PENDING;
+    r.symbol = s;
+    r.volume = v;
+    r.type = t;
+    r.price = NormalizeDouble(p, digits);
     if(sl > 0) r.sl = NormalizeDouble(sl, digits);
     if(tp > 0) r.tp = NormalizeDouble(tp, digits);
-    
     r.deviation = 20;
     r.type_filling = GetFillingMode(s);
-    
     if(!OrderSend(r, res)) Print("❌ Pending Fail: ", res.retcode);
 }
 
@@ -439,17 +544,17 @@ void ClosePositions(string s, string m) {
         if(PositionGetSymbol(i) == s) {
             double p = PositionGetDouble(POSITION_PROFIT);
             if((m=="WIN" && p<=0) || (m=="LOSS" && p>=0)) continue;
-            
+           
             MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
-            r.action=TRADE_ACTION_DEAL; 
-            r.position=PositionGetTicket(i); 
-            r.symbol=s; 
+            r.action=TRADE_ACTION_DEAL;
+            r.position=PositionGetTicket(i);
+            r.symbol=s;
             r.volume=PositionGetDouble(POSITION_VOLUME);
-            r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
+            r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY;
             r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID);
             r.deviation = 20;
-            r.type_filling = GetFillingMode(s); 
-            
+            r.type_filling = GetFillingMode(s);
+           
             if(!OrderSend(r, res)) Print("❌ Close Fail: ", res.retcode);
             else Print("✅ Closed Position: ", r.position);
         }
@@ -460,15 +565,15 @@ void CloseTicket(long ticket) {
     if(PositionSelectByTicket(ticket)) {
         MqlTradeRequest r; MqlTradeResult res;
         ZeroMemory(r); ZeroMemory(res);
-        r.action=TRADE_ACTION_DEAL; 
-        r.position=ticket; 
-        r.symbol=PositionGetString(POSITION_SYMBOL); 
+        r.action=TRADE_ACTION_DEAL;
+        r.position=ticket;
+        r.symbol=PositionGetString(POSITION_SYMBOL);
         r.volume=PositionGetDouble(POSITION_VOLUME);
-        r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY; 
+        r.type=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY;
         r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(r.symbol,SYMBOL_ASK):SymbolInfoDouble(r.symbol,SYMBOL_BID);
         r.deviation = 20;
         r.type_filling = GetFillingMode(r.symbol);
-        
+       
         if(!OrderSend(r, res)) Print("❌ Close Ticket Fail: ", res.retcode);
         else Print("✅ Closed Ticket #", ticket);
     } else {
@@ -476,23 +581,24 @@ void CloseTicket(long ticket) {
     }
 }
 
-// Drawing Functions
+// Drawing Functions (optimized: no redundant redraws)
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     string n = "Py_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_RECTANGLE, 0, 0, 0, 0, 0);
-    datetime t1 = iTime(_Symbol, _Period, b1);
-    datetime t2 = iTime(_Symbol, _Period, b2);
-    if(t1 <= 0) t1 = iTime(_Symbol, _Period, iBars(_Symbol, _Period)-1);
+    datetime t1 = iTime(_Symbol, g_current_period, b1);
+    datetime t2 = iTime(_Symbol, g_current_period, b2);
+    if(t1 <= 0) t1 = iTime(_Symbol, g_current_period, iBars(_Symbol, g_current_period)-1);
     ObjectSetInteger(0, n, OBJPROP_TIME, 0, t1);
     ObjectSetDouble(0, n, OBJPROP_PRICE, 0, p1);
     ObjectSetInteger(0, n, OBJPROP_TIME, 1, t2);
     ObjectSetDouble(0, n, OBJPROP_PRICE, 1, p2);
     ObjectSetInteger(0, n, OBJPROP_COLOR, c);
-    ObjectSetInteger(0, n, OBJPROP_FILL, false); 
+    ObjectSetInteger(0, n, OBJPROP_FILL, false);
     ObjectSetInteger(0, n, OBJPROP_WIDTH, 1);
     ObjectSetInteger(0, n, OBJPROP_BACK, true);
-    ChartRedraw();
+    // Redraw deferred
 }
+
 void DrawHLine(string name, double price, color c, int style) {
     string n = "Py_H_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_HLINE, 0, 0, price);
@@ -500,9 +606,10 @@ void DrawHLine(string name, double price, color c, int style) {
     ObjectSetInteger(0, n, OBJPROP_COLOR, c);
     ObjectSetInteger(0, n, OBJPROP_STYLE, style);
     ObjectSetInteger(0, n, OBJPROP_WIDTH, 2);
-    ObjectSetInteger(0, n, OBJPROP_BACK, false); 
-    ChartRedraw();
+    ObjectSetInteger(0, n, OBJPROP_BACK, false);
+    // Redraw deferred
 }
+
 void DrawLabel(string name, string text, color c, int y) {
     string n = "Py_Lbl_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_LABEL, 0, 0, 0);
@@ -513,25 +620,29 @@ void DrawLabel(string name, string text, color c, int y) {
     ObjectSetInteger(0, n, OBJPROP_CORNER, CORNER_LEFT_UPPER);
     ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 10);
     ObjectSetInteger(0, n, OBJPROP_BACK, false);
-    ChartRedraw();
+    // Redraw deferred
 }
+
 void DrawText(string name, int b, double p, color c, string t) {
     string n = "Py_Txt_" + name;
-    if(ObjectFind(0, n) >= 0) ObjectDelete(0, n); 
-    ObjectCreate(0, n, OBJ_TEXT, 0, iTime(_Symbol, _Period, b), p);
+    if(ObjectFind(0, n) >= 0) ObjectDelete(0, n);
+    ObjectCreate(0, n, OBJ_TEXT, 0, iTime(_Symbol, g_current_period, b), p);
     ObjectSetString(0, n, OBJPROP_TEXT, t);
     ObjectSetInteger(0, n, OBJPROP_COLOR, c);
     ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 10);
     ObjectSetInteger(0, n, OBJPROP_ANCHOR, ANCHOR_LEFT_LOWER);
+    // Redraw deferred
 }
+
 void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w) {
     string n = "Py_Tr_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_TREND, 0, 0, 0, 0, 0);
-    ObjectSetInteger(0, n, OBJPROP_TIME, 0, iTime(_Symbol, _Period, b1));
+    ObjectSetInteger(0, n, OBJPROP_TIME, 0, iTime(_Symbol, g_current_period, b1));
     ObjectSetDouble(0, n, OBJPROP_PRICE, 0, p1);
-    ObjectSetInteger(0, n, OBJPROP_TIME, 1, iTime(_Symbol, _Period, b2));
+    ObjectSetInteger(0, n, OBJPROP_TIME, 1, iTime(_Symbol, g_current_period, b2));
     ObjectSetDouble(0, n, OBJPROP_PRICE, 1, p2);
     ObjectSetInteger(0, n, OBJPROP_COLOR, c);
     ObjectSetInteger(0, n, OBJPROP_WIDTH, w);
     ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, true);
+    // Redraw deferred
 }
