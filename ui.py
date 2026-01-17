@@ -1,4 +1,4 @@
-# ui.py (Fully Fixed - Enhanced for symbol sync logging and auto-select)
+# ui.py (Fully Fixed: All Optimizations, Dedup, Smooth Trades, No Loops)
 import time
 import queue
 import logging
@@ -7,6 +7,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledText
+from collections import deque  # For simple dedup queue
 
 class QueueHandler(logging.Handler):
     """Class to send logging records to a queue"""
@@ -28,7 +29,7 @@ class TradingApp(ttk.Window):
         self.risk = risk_manager
         self.telegram_bot = telegram_bot
        
-        self.log_queue = queue.Queue()
+        self.log_queue = queue.Queue(maxsize=1000)  # Limit queue to prevent memory bloat
         self.bot_running = False
         self.bot_thread = None
        
@@ -42,17 +43,33 @@ class TradingApp(ttk.Window):
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
        
+        # Cache for optimizations
+        self.last_avail_syms = []
+        self.last_account_info = None
+        self.last_active_symbol = None
+        self.last_active_tf = None
+       
+        # Button references for smooth feedback
+        self.buy_btn = None
+        self.sell_btn = None
+        self.toast_label = None  # For toasts
+       
+        # NEW: Log deduplication cache (last 10s of messages to suppress spam)
+        self.last_logs = deque(maxlen=50)  # FIFO queue for recent msgs with timestamps
+        self.log_suppress_threshold = 2.0  # Suppress if duplicate within 2s
+       
         self._setup_logging()
         self._build_ui()
         self._start_log_polling()
-        self._start_data_refresh()
+        self._start_light_refresh()  # Start light refresh for basics
+        self._start_heavy_refresh()  # Start heavy refresh for symbols/TF
        
-        self.after(1000, self.toggle_bot)
+        self.after(0, self.toggle_bot)  # Immediate start, no delay
 
     def _setup_logging(self):
         # 1. Get the ROOT logger to capture signals from EVERY file
         root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
+        root_logger.setLevel(logging.INFO)  # Consider WARNING for production to reduce volume
         # 2. CLEAR existing handlers to prevent UI freezing or duplicate logs
         if root_logger.hasHandlers():
             root_logger.handlers.clear()
@@ -153,10 +170,12 @@ class TradingApp(ttk.Window):
        
         grid_frame = ttk.Frame(exec_frame)
         grid_frame.pack(fill=X, padx=20, pady=15)
-        ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline",
-                   command=lambda: self.manual_trade("BUY")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline",
-                   command=lambda: self.manual_trade("SELL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
+        self.buy_btn = ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline",
+                                  command=lambda: self.manual_trade("BUY"))
+        self.buy_btn.pack(side=LEFT, fill=X, expand=YES, padx=5)
+        self.sell_btn = ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline",
+                                   command=lambda: self.manual_trade("SELL"))
+        self.sell_btn.pack(side=LEFT, fill=X, expand=YES, padx=5)
        
         close_frame = ttk.Frame(exec_frame)
         close_frame.pack(fill=X, padx=20, pady=(5, 15))
@@ -239,7 +258,7 @@ class TradingApp(ttk.Window):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
         logging.info(f"Auto-Trading {state}")
 
-    # FIXED: Enhanced update_symbol – Trigger connector refresh
+    # FIXED: Enhanced update_symbol – Trigger connector refresh (no immediate refresh call)
     def update_symbol(self, event=None):
         sym = self.symbol_var.get()
         if sym:
@@ -249,18 +268,14 @@ class TradingApp(ttk.Window):
             if hasattr(self.connector, 'refresh_symbols'):
                 self.connector.refresh_symbols()
             logging.info(f"🔄 UI Symbol Changed to {sym} – Queued for MT5, Refreshing...")
-            # FIXED: Force immediate UI sync to reflect optimistic update
-            self._start_data_refresh()  # Trigger one-time refresh
 
-    # FIXED: Enhanced update_timeframe – Similar
+    # FIXED: Enhanced update_timeframe – Similar (no immediate refresh call)
     def update_timeframe(self, event=None):
         tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
         minutes = tf_map.get(self.tf_var.get(), 5)
         if hasattr(self.connector, 'change_timeframe'):
             self.connector.change_timeframe(self.symbol_var.get(), minutes)
         logging.info(f"🔄 UI TF Changed to {self.tf_var.get()} ({minutes}min) – Queued for MT5, Refreshing...")
-        # FIXED: Force immediate UI sync to reflect optimistic update
-        self._start_data_refresh()  # Trigger one-time refresh
 
     # ENHANCED: Add force_refresh() method with symbols-specific logic
     def force_refresh(self):
@@ -293,13 +308,72 @@ class TradingApp(ttk.Window):
             self.bot_thread.start()
             logging.info("System Engine Started.")
 
+    # OPTIMIZED: Threaded manual_trade for smooth, non-blocking response
     def manual_trade(self, action):
-        try: vol = float(self.lot_var.get())
-        except: vol = 0.01
+        try:
+            vol = float(self.lot_var.get())
+        except ValueError:
+            vol = 0.01  # Fallback
         sym = self.symbol_var.get()
-        if hasattr(self.connector, 'send_order'):
-            self.connector.send_order(action, sym, vol, 0, 0)
-        logging.info(f"Manual {action} ({vol} lots) on {sym}")
+        
+        # Instant UI feedback: Disable button + show "SENDING..."
+        btn = self._get_buy_sell_button(action)
+        original_text = f"{action} MARKET"
+        if btn:
+            btn.configure(text=f"{action}ING...", state="disabled", bootstyle="primary")  # Visual cue
+        
+        # Fire-and-forget thread for heavy work
+        def send_in_background():
+            try:
+                if hasattr(self.connector, 'send_order'):
+                    self.connector.send_order(action, sym, vol, 0, 0)
+                # Log in thread (non-blocking for UI)
+                logging.info(f"Manual {action} ({vol} lots) on {sym} - Executed")
+                
+                # Success callback: Re-enable + flash green
+                self.after(0, lambda: self._on_trade_success(btn, original_text, action, vol))
+            except Exception as e:
+                logging.error(f"Trade failed: {e}")
+                # Error callback
+                self.after(0, lambda: self._on_trade_error(btn, original_text, str(e)))
+        
+        threading.Thread(target=send_in_background, daemon=True).start()
+
+    def _get_buy_sell_button(self, action):
+        """Helper to get button reference for feedback."""
+        if action == "BUY":
+            return self.buy_btn
+        elif action == "SELL":
+            return self.sell_btn
+        return None
+
+    def _on_trade_success(self, btn, original_text, action, vol):
+        """Handle successful trade feedback."""
+        if btn:
+            btn.configure(text=original_text, state="normal", bootstyle="success-outline")
+            # Smooth flash: Green pulse
+            btn.configure(bootstyle="success")
+            self.after(300, lambda: btn.configure(bootstyle="success-outline"))
+        # Toast notification
+        self.show_toast(f"{action} Order Sent! ({vol} lots)", "success")
+
+    def _on_trade_error(self, btn, original_text, error_msg):
+        """Handle trade error feedback."""
+        if btn:
+            btn.configure(text=original_text, state="normal", bootstyle="danger-outline")
+        # Quick error popup (non-blocking)
+        self.show_toast(f"Trade Error: {error_msg}", "error")
+
+    def show_toast(self, message, toast_type="info"):
+        """Show smooth toast notification."""
+        if self.toast_label:
+            self.toast_label.destroy()  # Clear old
+        self.toast_label = ttk.Label(self, text=message, bootstyle=f"{toast_type}-inverse")
+        self.toast_label.place(relx=0.5, rely=0.1, anchor="center")  # Top-center
+        # Fade out smoothly
+        def fade_out(delay=2000):
+            self.after(delay, self.toast_label.destroy)
+        fade_out()
 
     def manual_close(self, mode):
         """
@@ -318,82 +392,66 @@ class TradingApp(ttk.Window):
                 self.connector.command_queue.append(cmd)
            
         logging.info(f"Manual Close ({mode}) request sent for {sym}")
+        self.show_toast(f"Close {mode} Request Sent for {sym}", "info")
 
     def clear_logs(self):
         self.log_area.text.configure(state='normal')
         self.log_area.text.delete(1.0, tk.END)
+        self.last_logs.clear()  # Clear dedup cache too
         self.log_area.text.configure(state='disabled')
 
+    # FIXED: Enhanced log polling with deduplication to prevent spam loops
     def _start_log_polling(self):
-        # This runs every 100ms to pull logs from the bot thread into the UI
-        while not self.log_queue.empty():
+        batch = []
+        max_batch = 10  # Cap batch to prevent long blocks
+        while len(batch) < max_batch and not self.log_queue.empty():
             try:
                 record = self.log_queue.get_nowait()
-                # Use your existing formatter logic
                 msg = self.log_formatter(record)
-               
-                # FIX: Target the internal .text attribute of the ScrolledText widget
-                self.log_area.text.configure(state='normal')
-                self.log_area.text.insert(tk.END, msg + "\n", record.levelname)
-                self.log_area.text.see(tk.END) # Auto-scroll to latest signal
-                self.log_area.text.configure(state='disabled')
+                full_msg = msg + "\n"  # For comparison
+                
+                # NEW: Dedup check - skip if identical to recent log within threshold
+                now = time.time()
+                should_log = True
+                for ts, prev_msg in list(self.last_logs):
+                    if now - ts < self.log_suppress_threshold and prev_msg == full_msg:
+                        should_log = False
+                        break  # Suppress duplicate
+                    elif now - ts > self.log_suppress_threshold + 1:  # Prune old entries
+                        self.last_logs.remove((ts, prev_msg))
+                
+                if should_log:
+                    self.last_logs.append((now, full_msg))
+                    batch.append((full_msg, record.levelname))
             except queue.Empty:
                 break
-        self.after(100, self._start_log_polling)
+        
+        if batch:
+            self.log_area.text.configure(state='normal')
+            for msg, tag in batch:
+                self.log_area.text.insert(tk.END, msg, tag)
+            self.log_area.text.see(tk.END)
+            self.log_area.text.configure(state='disabled')
+        
+        self.after(200, self._start_log_polling)  # Slower poll: reduces CPU, still responsive
 
     def log_formatter(self, record):
         time_str = time.strftime('%H:%M:%S', time.localtime(record.created))
         return f"[{time_str}] {record.getMessage()}"
 
-    # FIXED: Enhanced _start_data_refresh – Better sync, error handling, and force refresh if empty
-    def _start_data_refresh(self):
-        """
-        FIXED: Enhanced Auto-Sync Logic.
-        Prevents 'snapback' by only updating UI variables when the MT5 EA 
-        reports a change that matches the user's intent.
-        """
-        # 1. Sync the Available Symbols List (Market Watch)
-        if hasattr(self.connector, 'available_symbols'):
-            avail_syms = self.connector.available_symbols
-            current_dropdown = list(self.sym_combo['values']) if self.sym_combo['values'] else []
-            
-            # Update the list if it differs from MT5 Market Watch
-            if avail_syms and sorted(current_dropdown) != sorted(avail_syms):
-                self.sym_combo['values'] = avail_syms
-                # ENHANCED: Auto-select the first if current is not in list (e.g., invalid default)
-                if self.symbol_var.get() not in avail_syms:
-                    self.symbol_var.set(avail_syms[0])
-                    self.sym_combo.set(avail_syms[0])
-                    logging.info(f"🔄 Auto-selected first synced symbol: {avail_syms[0]}")
-                logging.info(f"📋 UI Dropdown Updated: {len(avail_syms)} symbols synced from MT5")
+    # OPTIMIZED: Light refresh for frequent updates (account info, status) every 2s
+    def _start_light_refresh(self):
+        self._light_refresh()
+        self.after(2000, self._start_light_refresh)
 
-        # 2. SMART SYNC: Active Symbol
-        if hasattr(self.connector, 'active_symbol'):
-            ea_active = self.connector.active_symbol
-            ui_selected = self.symbol_var.get()
-            
-            # Only force a UI update if the EA is reporting something different
-            # AND the user isn't currently trying to change it.
-            if ui_selected != ea_active:
-                logging.info(f"🤝 Sync: UI updated to MT5 active symbol: {ea_active} (was {ui_selected})")
-                self.symbol_var.set(ea_active)
-                self.sym_combo.set(ea_active)
-
-        # 3. SMART SYNC: Active Timeframe
-        if hasattr(self.connector, 'active_tf'):
-            ea_tf = self.connector.active_tf
-            ui_tf = self.tf_var.get()
-            if ui_tf != ea_tf:
-                logging.info(f"🤝 Sync: UI updated to MT5 active TF: {ea_tf}")
-                self.tf_var.set(ea_tf)
-                self.tf_combo.set(ea_tf)
-
-        # 4. Refresh Server Status & Account Metrics
+    def _light_refresh(self):
+        # 4. Refresh Server Status & Account Metrics (cached checks)
         if hasattr(self.connector, 'server') and self.connector.server:
             self.lbl_server.configure(text="SERVER: ONLINE", bootstyle="success-inverse")
-       
-        if self.connector.account_info:
-            info = self.connector.account_info
+        
+        current_info = self.connector.account_info
+        if current_info != self.last_account_info:
+            info = current_info
             self.lbl_acc_mode.configure(text="DEMO" if info.get('is_demo', True) else "REAL")
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
@@ -407,8 +465,9 @@ class TradingApp(ttk.Window):
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
+            self.last_account_info = current_info  # Cache
 
-        # NEW: Check for pending mismatches and log
+        # NEW: Check for pending mismatches and log (only if changed)
         if hasattr(self.connector, 'pending_changes'):
             pending = self.connector.pending_changes
             if pending.get('symbol') and pending['symbol'] != self.symbol_var.get():
@@ -416,8 +475,48 @@ class TradingApp(ttk.Window):
             if pending.get('tf') and pending['tf'] != self.tf_var.get():
                 logging.warning(f"⚠️ Pending TF Sync Lag: UI={self.tf_var.get()}, Pending={pending['tf']}")
 
-        # Slower refresh (1s) is essential to give the EA time to respond to POSTs
-        self.after(1000, self._start_data_refresh)
+    # OPTIMIZED: Heavy refresh for infrequent/heavy ops (symbols/TF sync) every 5s
+    def _start_heavy_refresh(self):
+        self._heavy_refresh()
+        self.after(5000, self._start_heavy_refresh)
+
+    def _heavy_refresh(self):
+        # 1. Sync the Available Symbols List (Market Watch) - direct compare
+        if hasattr(self.connector, 'available_symbols'):
+            avail_syms = self.connector.available_symbols
+            if avail_syms != self.last_avail_syms:
+                current_dropdown = list(self.sym_combo['values']) if self.sym_combo['values'] else []
+                if sorted(current_dropdown) != sorted(avail_syms):  # Keep sorted for safety
+                    self.sym_combo['values'] = avail_syms
+                    # ENHANCED: Auto-select the first if current is not in list (e.g., invalid default)
+                    if self.symbol_var.get() not in avail_syms:
+                        self.symbol_var.set(avail_syms[0])
+                        self.sym_combo.set(avail_syms[0])
+                        logging.info(f"🔄 Auto-selected first synced symbol: {avail_syms[0]}")
+                    logging.info(f"📋 UI Dropdown Updated: {len(avail_syms)} symbols synced from MT5")
+                self.last_avail_syms = avail_syms[:]  # Cache copy
+
+        # 2. SMART SYNC: Active Symbol (cached)
+        if hasattr(self.connector, 'active_symbol'):
+            ea_active = self.connector.active_symbol
+            if ea_active != self.last_active_symbol:
+                ui_selected = self.symbol_var.get()
+                if ui_selected != ea_active:
+                    logging.info(f"🤝 Sync: UI updated to MT5 active symbol: {ea_active} (was {ui_selected})")
+                    self.symbol_var.set(ea_active)
+                    self.sym_combo.set(ea_active)
+                self.last_active_symbol = ea_active
+
+        # 3. SMART SYNC: Active Timeframe (cached)
+        if hasattr(self.connector, 'active_tf'):
+            ea_tf = self.connector.active_tf
+            if ea_tf != self.last_active_tf:
+                ui_tf = self.tf_var.get()
+                if ui_tf != ea_tf:
+                    logging.info(f"🤝 Sync: UI updated to MT5 active TF: {ea_tf}")
+                    self.tf_var.set(ea_tf)
+                    self.tf_combo.set(ea_tf)
+                self.last_active_tf = ea_tf
 
 if __name__ == "__main__":
     pass

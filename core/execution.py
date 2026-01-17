@@ -10,67 +10,62 @@ from core.asset_detector import detect_asset_type  # For logging
 logger = logging.getLogger("Execution")
 
 class MT5RequestHandler(BaseHTTPRequestHandler):
-    # execution.py (Fully Fixed do_POST with Priority Response and Async Processing)
-
     def do_POST(self):
-        """
-        Optimized POST handler to minimize MT5 latency and resolve 10018 errors.
-        """
         try:
-            # 1. READ INCOMING DATA
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length).decode('utf-8')
             data = parse_qs(post_data)
 
-            # 2. PRIORITY: FETCH PENDING COMMANDS IMMEDIATELY
-            # We fetch the queue first so we can respond to MT5 as quickly as possible.
+            # 1. PRIORITY RESPONSE: Send commands back to MT5 immediately
             with self.connector.lock:
-                if self.connector.command_queue:
-                    resp = ";".join(self.connector.command_queue)
-                    self.connector.command_queue = [] 
-                else:
-                    resp = "OK"
+                resp = ";".join(self.connector.command_queue) if self.connector.command_queue else "OK"
+                self.connector.command_queue = [] 
             
-            # 3. IMMEDIATE RESPONSE TO MT5
-            # By sending the 200 OK and commands here, the MT5 WebRequest is released 
-            # while Python continues to process the heavy candle/account data below.
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(resp.encode())
 
-            # 4. BACKGROUND DATA PROCESSING (After Response)
+            # 2. DATA PROCESSING: Parse incoming data from MT5
             
-            # Handle Symbol and Timeframe Confirmation
-            if 'symbol' in data:
-                new_symbol = data['symbol'][0]
+            # --- FIXED: SYMBOL LIST PARSING ---
+            if 'symbols' in data:
+                # MQL5 sends symbols as a pipe-separated string (e.g., "XAUUSD|EURUSD")
+                sym_list = data['symbols'][0].split('|')
                 with self.connector.lock:
-                    self.connector.active_symbol = new_symbol
+                    # Filter out any empty strings and update available_symbols
+                    self.connector.available_symbols = [s for s in sym_list if s]
+                logger.info(f"✅ Synced {len(self.connector.available_symbols)} symbols from MT5.")
+
+            # Handle Active Symbol/TF Confirmation
+            if 'symbol' in data:
+                with self.connector.lock:
+                    self.connector.active_symbol = data['symbol'][0]
                     self.connector.pending_changes['symbol'] = None
 
             if 'tf' in data:
-                new_tf = data['tf'][0].upper()
                 with self.connector.lock:
-                    self.connector.active_tf = new_tf
+                    self.connector.active_tf = data['tf'][0].upper()
                     self.connector.pending_changes['tf'] = None
 
-            # Handle Bid/Ask Persistence (Prevents 0.0 values)
+            # Handle Bid/Ask/Account
             if 'bid' in data and 'ask' in data:
                 with self.connector.lock:
                     self.connector._account_data['bid'] = float(data['bid'][0])
                     self.connector._account_data['ask'] = float(data['ask'][0])
 
-            # Handle Account Updates
             if 'balance' in data:
                 with self.connector.lock:
                     self.connector._account_data.update({
                         'balance': float(data.get('balance', [0])[0]),
                         'equity': float(data.get('acct_equity', [0])[0]),
                         'profit': float(data.get('profit', [0])[0]),
-                        'total_count': int(data.get('buy_count', [0])[0]) + int(data.get('sell_count', [0])[0])
+                        'total_count': int(data.get('buy_count', [0])[0]) + int(data.get('sell_count', [0])[0]),
+                        'buy_count': int(data.get('buy_count', [0])[0]),
+                        'sell_count': int(data.get('sell_count', [0])[0])
                     })
 
-            # Handle Candle Sync (Heavy Operation)
+            # Handle Candle Sync
             raw_candles = data.get('candles', [''])[0]
             if raw_candles:
                 tf_key = data.get('tf', ['M5'])[0].upper()
@@ -88,15 +83,8 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Critical do_POST Error: {e}")
-            # Note: headers might have already been sent, so we handle safely
-            try:
-                self.send_error(500)
-            except:
-                pass
 
-    def log_message(self, format, *args):
-        # Suppress default HTTP logs
-        pass
+    def log_message(self, format, *args): pass
 
 class MT5Connector:
     def __init__(self, host='127.0.0.1', port=8001):
