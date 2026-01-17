@@ -191,7 +191,7 @@ class MT5Connector:
             "H1": [], "H4": [], "D1": [], "W1": []
         }
         
-        self.available_symbols = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm"]  # FALLBACK: Initial common symbols
+        self.available_symbols = []  # FALLBACK: Initial common symbols
         self.running = False
         self.telegram_bot = None
         self.active_symbol = "XAUUSDm"  # Track active EA symbol

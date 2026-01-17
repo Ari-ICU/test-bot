@@ -89,16 +89,9 @@ class TradingApp(ttk.Window):
         self._build_console_tab()
         self._build_settings_tab()
 
-        # NEW: Set initial combobox values with fallback (before packing)
-        fallback_symbols = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm", "USDJPYm"]
-        self.sym_combo['values'] = fallback_symbols  # Initial population
-
         # FIXED: Ensure initial selection matches connector
         self.sym_combo.set(self.connector.active_symbol)
-        self.tf_combo.set(self.connector.active_tf)
-
-        # ENHANCED: Log fallback usage
-        logging.info(f"🔄 UI Initialized with Fallback Symbols: {len(fallback_symbols)} – Waiting for MT5 sync")
+        self.tf_combo.set(self.connector.active_tf)    
 
     def _build_dashboard_tab(self):
         content = ttk.Frame(self.tab_dashboard)
