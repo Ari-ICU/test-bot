@@ -64,6 +64,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         'bid': float(data.get('bid', [0.0])[0]),
                         'ask': float(data.get('ask', [0.0])[0])
                     }
+            if 'bid' in data:
+                with self.connector.lock:
+                    self.connector._account_data['bid'] = float(data['bid'][0])
+            if 'ask' in data:
+                with self.connector.lock:
+                    self.connector._account_data['ask'] = float(data['ask'][0])
 
             # ENHANCED: Handle Available Symbols List from MT5 (e.g., Market Watch) - Flexible parsing
             raw_symbols = data.get('symbols', [''])[0]

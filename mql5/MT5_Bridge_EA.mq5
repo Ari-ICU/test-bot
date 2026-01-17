@@ -256,8 +256,8 @@ void OnTimer() {
     post_freezer.Add("&symbol=" + _Symbol);
     post_freezer.Add("&symbols=" + g_symbols_list);
     post_freezer.Add("&tf=" + g_tf_string);
-    post_freezer.Add(prices_changed ? "&bid=" + DoubleToString(bid, _Digits) : ""); // Send only if changed
-    post_freezer.Add(prices_changed ? "&ask=" + DoubleToString(ask, _Digits) : "");
+    post_freezer.Add("&bid=" + DoubleToString(bid, _Digits));
+    post_freezer.Add("&ask=" + DoubleToString(ask, _Digits));
     post_freezer.Add("&balance=" + DoubleToString(g_cached_balance, 2));
     post_freezer.Add("&profit=" + DoubleToString(g_cached_profit, 2));
     post_freezer.Add("&acct_equity=" + DoubleToString(g_cached_equity, 2));

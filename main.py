@@ -69,9 +69,13 @@ def bot_logic(app):
             
             # FIXED: Early Price Validation – Skip if invalid (e.g., MT5 not synced)
             if bid <= 0 or ask <= 0:
-                logger.warning(f"⏳ Invalid prices for {symbol}: Bid={bid}, Ask={ask} – Waiting for MT5 sync...")
-                time.sleep(10)  # Longer wait for quote sync
-                continue
+                # Check if we are even receiving account updates
+                if info.get('name') == 'Disconnected':
+                    logger.error("❌ MT5 NOT CONNECTED: No account data received yet.")
+                else:
+                    logger.warning(f"⏳ Price missing for {symbol}. Check if EA is sending 'bid'/'ask' keys.")
+            time.sleep(10)
+            continue
             
             # FIXED: Asset Type Detection & Logging (now after price check)
             asset_type = detect_asset_type(symbol)
