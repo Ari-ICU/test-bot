@@ -498,13 +498,12 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
    
-    // 1. Identify Action for Logging
-    string tradeAction = (t == ORDER_TYPE_BUY) ? "BUY" : "SELL"; // Fixes 'undeclared identifier'
+    // Define tradeAction to fix the "undeclared identifier" error
+    string tradeAction = (t == ORDER_TYPE_BUY) ? "BUY" : "SELL"; 
    
     int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
     double stops_level = SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(s, SYMBOL_POINT);
    
-    // 2. Fetch Fresh Prices
     double ask = SymbolInfoDouble(s, SYMBOL_ASK);
     double bid = SymbolInfoDouble(s, SYMBOL_BID);
     double entry_price = (t == ORDER_TYPE_BUY) ? ask : bid;
@@ -514,11 +513,11 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     r.volume = v;
     r.type = t;
     
-    // 3. CRITICAL: Normalize Price (Fixes 10018)
+    // CRITICAL: Normalize Price (Fixes 10018)
     r.price = NormalizeDouble(entry_price, digits); 
-    r.deviation = 10; // Allow slight slippage to ensure fill
+    r.deviation = 10; 
 
-    // 4. Validate SL/TP against Broker Stop Levels
+    // Validate SL/TP against broker requirements
     if(sl > 0) {
         if(t == ORDER_TYPE_BUY && sl > (bid - stops_level)) sl = bid - stops_level;
         if(t == ORDER_TYPE_SELL && sl < (ask + stops_level)) sl = ask + stops_level;
@@ -530,15 +529,14 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
         r.tp = NormalizeDouble(tp, digits);
     }
 
-    // 5. CRITICAL: Force IOC Filling (Fixes 10018 for ECN/Gold symbols)
+    // CRITICAL: Force IOC Filling (Fixes 10018 for ECN/Gold symbols)
     r.type_filling = GetFillingMode(s);
     if(r.type_filling == ORDER_FILLING_RETURN) {
         r.type_filling = ORDER_FILLING_IOC; 
     }
     
-    // 6. Execute and Log
     if(!OrderSend(r, res)) {
-        Print("❌ Trade Fail: ", res.retcode, " | Action: ", tradeAction, " | Mode: ", r.type_filling);
+        Print("❌ Trade Fail: ", res.retcode, " | Action: ", tradeAction, " | Mode: ", (int)r.type_filling);
     } else {
         Print("🚀 Trade Executed: ", tradeAction, " ", s, " Ticket: ", res.order);
     }
