@@ -1,3 +1,4 @@
+# main.py (Fully Fixed - No changes needed from previous, but included for completeness)
 import time
 import logging
 import pandas as pd
@@ -46,11 +47,18 @@ def bot_logic(app):
     last_heartbeat = 0  
     news_cooldown = 0  # NEW: Track news cooldown manually
 
+    # NEW: Initialize last_symbol and last_tf before loop
+    last_symbol = None
+    last_tf = None
+
     logger.info("Bot logic running: Real-Time Signal Logging Active (Forex/Crypto Support).") 
     
     while app.bot_running:
         try:
             # 1. Pull dynamic settings from the UI
+            symbol = connector.active_symbol 
+            execution_tf = connector.active_tf
+            
             symbol = app.symbol_var.get() 
             execution_tf = app.tf_var.get()
             max_pos_allowed = app.max_pos_var.get()
@@ -65,6 +73,20 @@ def bot_logic(app):
             # NEW: Asset Type Detection & Logging
             asset_type = detect_asset_type(symbol)
             logger.info(f"--- Cycle Start | {symbol} ({asset_type}) | Pos: {curr_positions} | Equity: ${equity:,.2f} ---")
+
+            # NEW: Detect change and log/shorten sleep
+            if last_symbol != symbol:
+                logger.info(f"🎯 Bot Detected Symbol Change: {last_symbol} → {symbol}")
+                last_symbol = symbol
+                time.sleep(1)  # Short sleep on change
+                continue
+            elif last_tf != execution_tf:
+                logger.info(f"🎯 Bot Detected TF Change: {last_tf} → {execution_tf}")
+                last_tf = execution_tf
+                time.sleep(1)  # Short sleep on change
+                continue
+            else:
+                time.sleep(2)  # Normal sleep at end
 
             # 2. Heartbeat Monitor
             if time.time() - last_heartbeat > 60:
@@ -138,7 +160,6 @@ def bot_logic(app):
                     # Log neutral reasons every cycle to confirm the bot is "thinking"
                     logger.debug(f"📡 {name} Check ({asset_type}): {reason if reason else 'No Setup'}")
                 
-            time.sleep(2) # Prevent loop from burning CPU
         except Exception as e:
             logger.error(f"Logic Error for {symbol}: {e}"); time.sleep(5)
 

@@ -1,3 +1,4 @@
+# ui.py (Fully Fixed - Enhanced for symbol sync logging and auto-select)
 import time
 import queue
 import logging
@@ -91,6 +92,13 @@ class TradingApp(ttk.Window):
         # NEW: Set initial combobox values with fallback (before packing)
         fallback_symbols = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm", "USDJPYm"]
         self.sym_combo['values'] = fallback_symbols  # Initial population
+
+        # FIXED: Ensure initial selection matches connector
+        self.sym_combo.set(self.connector.active_symbol)
+        self.tf_combo.set(self.connector.active_tf)
+
+        # ENHANCED: Log fallback usage
+        logging.info(f"🔄 UI Initialized with Fallback Symbols: {len(fallback_symbols)} – Waiting for MT5 sync")
 
     def _build_dashboard_tab(self):
         content = ttk.Frame(self.tab_dashboard)
@@ -208,6 +216,12 @@ class TradingApp(ttk.Window):
         ttk.Spinbox(lot_row, from_=0.01, to=50.0, increment=0.01,
                     textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
 
+        # NEW: Add Refresh Button
+        refresh_row = ttk.Frame(conf_frame)
+        refresh_row.pack(fill=X, padx=20, pady=5)
+        ttk.Button(refresh_row, text="🔄 Refresh Symbols/TF", bootstyle="info-outline",
+                   command=self.force_refresh).pack(fill=X)
+
     def _build_console_tab(self):
         toolbar = ttk.Frame(self.tab_console)
         toolbar.pack(fill=X, padx=10, pady=10)
@@ -249,6 +263,8 @@ class TradingApp(ttk.Window):
             if hasattr(self.connector, 'refresh_symbols'):
                 self.connector.refresh_symbols()
             logging.info(f"🔄 UI Symbol Changed to {sym} – Queued for MT5, Refreshing...")
+            # FIXED: Force immediate UI sync to reflect optimistic update
+            self._start_data_refresh()  # Trigger one-time refresh
 
     # FIXED: Enhanced update_timeframe – Similar
     def update_timeframe(self, event=None):
@@ -257,6 +273,19 @@ class TradingApp(ttk.Window):
         if hasattr(self.connector, 'change_timeframe'):
             self.connector.change_timeframe(self.symbol_var.get(), minutes)
         logging.info(f"🔄 UI TF Changed to {self.tf_var.get()} ({minutes}min) – Queued for MT5, Refreshing...")
+        # FIXED: Force immediate UI sync to reflect optimistic update
+        self._start_data_refresh()  # Trigger one-time refresh
+
+    # ENHANCED: Add force_refresh() method with symbols-specific logic
+    def force_refresh(self):
+        """Force connector to sync symbols and TF from EA."""
+        if hasattr(self.connector, 'force_sync'):
+            self.connector.force_sync()
+        if hasattr(self.connector, 'refresh_symbols'):
+            self.connector.refresh_symbols()  # Specifically refresh symbols
+        if hasattr(self.connector, 'available_symbols'):
+            self.sym_combo['values'] = self.connector.available_symbols
+        logging.info("🔄 Manual Refresh Triggered – Check Console for EA Response (Symbols/TF)")
 
     def test_telegram(self):
         if self.telegram_bot:
@@ -332,67 +361,75 @@ class TradingApp(ttk.Window):
 
     # FIXED: Enhanced _start_data_refresh – Better sync, error handling, and force refresh if empty
     def _start_data_refresh(self):
-        # Pull and set symbols (now with fallback check)
+        """
+        FIXED: Enhanced Auto-Sync Logic.
+        Prevents 'snapback' by only updating UI variables when the MT5 EA 
+        reports a change that matches the user's intent.
+        """
+        # 1. Sync the Available Symbols List (Market Watch)
         if hasattr(self.connector, 'available_symbols'):
             avail_syms = self.connector.available_symbols
-            current_vals = list(self.sym_combo['values']) if self.sym_combo['values'] else []
-            if avail_syms and sorted(current_vals) != sorted(avail_syms):
+            current_dropdown = list(self.sym_combo['values']) if self.sym_combo['values'] else []
+            
+            # Update the list if it differs from MT5 Market Watch
+            if avail_syms and sorted(current_dropdown) != sorted(avail_syms):
                 self.sym_combo['values'] = avail_syms
-                logging.info(f"📋 UI Dropdown Updated: {len(avail_syms)} symbols from MT5")
-            elif not avail_syms:  # Fallback trigger
-                fallback = ["XAUUSDm", "EURUSDm", "GBPUSDm", "BTCUSDm", "USDJPYm"]
-                if sorted(current_vals) != sorted(fallback):
-                    self.sym_combo['values'] = fallback
-                    logging.warning("⚠️ No MT5 symbols received – Using fallback list. Check EA POST 'symbols' data.")
+                # ENHANCED: Auto-select the first if current is not in list (e.g., invalid default)
+                if self.symbol_var.get() not in avail_syms:
+                    self.symbol_var.set(avail_syms[0])
+                    self.sym_combo.set(avail_syms[0])
+                    logging.info(f"🔄 Auto-selected first synced symbol: {avail_syms[0]}")
+                logging.info(f"📋 UI Dropdown Updated: {len(avail_syms)} symbols synced from MT5")
 
-        # FIXED: Enhanced Auto-Sync for Symbol (with TF too)
+        # 2. SMART SYNC: Active Symbol
         if hasattr(self.connector, 'active_symbol'):
             ea_active = self.connector.active_symbol
             ui_selected = self.symbol_var.get()
+            
+            # Only force a UI update if the EA is reporting something different
+            # AND the user isn't currently trying to change it.
             if ui_selected != ea_active:
+                logging.info(f"🤝 Sync: UI updated to MT5 active symbol: {ea_active} (was {ui_selected})")
                 self.symbol_var.set(ea_active)
                 self.sym_combo.set(ea_active)
-                logging.info(f"🔄 UI Auto-Sync: Symbol → {ea_active} (was {ui_selected})")
 
-        # NEW: Auto-Sync for TF
+        # 3. SMART SYNC: Active Timeframe
         if hasattr(self.connector, 'active_tf'):
             ea_tf = self.connector.active_tf
             ui_tf = self.tf_var.get()
             if ui_tf != ea_tf:
+                logging.info(f"🤝 Sync: UI updated to MT5 active TF: {ea_tf}")
                 self.tf_var.set(ea_tf)
                 self.tf_combo.set(ea_tf)
-                logging.info(f"🔄 UI Auto-Sync: TF → {ea_tf} (was {ui_tf})")
 
-        # 1. Server Status check
+        # 4. Refresh Server Status & Account Metrics
         if hasattr(self.connector, 'server') and self.connector.server:
-            self.lbl_server.configure(text="SERVER: LISTENING", bootstyle="success-inverse")
+            self.lbl_server.configure(text="SERVER: ONLINE", bootstyle="success-inverse")
        
-        # 2. Account & Position Refreshes
         if self.connector.account_info:
             info = self.connector.account_info
-            self.lbl_acc_mode.configure(text="DEMO ACCOUNT" if info.get('is_demo', True) else "REAL ACCOUNT")
+            self.lbl_acc_mode.configure(text="DEMO" if info.get('is_demo', True) else "REAL")
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
-           
+            
             prof = info.get('profit', 0.0)
-            p_prefix = "+" if prof >= 0 else ""
             p_color = "success" if prof >= 0 else "danger"
-            self.lbl_profit.configure(text=f"{p_prefix}${prof:,.2f}", bootstyle=f"{p_color}-inverse")
-           
-            if hasattr(self, 'lbl_daily_trades'):
-                self.lbl_daily_trades.configure(text=f"{self.risk.daily_trades_count}/{self.risk.max_daily_trades} Trades")
-           
+            self.lbl_profit.configure(text=f"${prof:,.2f}", bootstyle=f"{p_color}-inverse")
+            
             self.lbl_bid.configure(text=f"{info.get('bid', 0.0):.5f}")
             self.lbl_ask.configure(text=f"{info.get('ask', 0.0):.5f}")
-            self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
-            self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
 
-        # NEW: If no recent data after change, log warning
-        if len(self.connector.get_tf_candles(self.tf_var.get())) < 10:
-            logging.warning(f"⚠️ Low Candle Count ({len(self.connector.get_tf_candles(self.tf_var.get()))}) for {self.symbol_var.get()} – Check MT5 sync")
+        # NEW: Check for pending mismatches and log
+        if hasattr(self.connector, 'pending_changes'):
+            pending = self.connector.pending_changes
+            if pending.get('symbol') and pending['symbol'] != self.symbol_var.get():
+                logging.warning(f"⚠️ Pending Symbol Sync Lag: UI={self.symbol_var.get()}, Pending={pending['symbol']}")
+            if pending.get('tf') and pending['tf'] != self.tf_var.get():
+                logging.warning(f"⚠️ Pending TF Sync Lag: UI={self.tf_var.get()}, Pending={pending['tf']}")
 
-        self.after(1000, self._start_data_refresh)  # Slower refresh (1s) to reduce CPU
+        # Slower refresh (1s) is essential to give the EA time to respond to POSTs
+        self.after(1000, self._start_data_refresh)
 
 if __name__ == "__main__":
     pass

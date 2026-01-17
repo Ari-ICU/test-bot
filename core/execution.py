@@ -1,3 +1,4 @@
+# execution.py (Fully Fixed - Enhanced for flexible symbol parsing and auto-sync)
 import threading
 import logging
 import json
@@ -85,22 +86,26 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         'ask': float(data.get('ask', [0.0])[0])
                     }
 
-            # NEW: Handle Available Symbols List from MT5 (e.g., Market Watch)
+            # ENHANCED: Handle Available Symbols List from MT5 (e.g., Market Watch) - Flexible parsing
             raw_symbols = data.get('symbols', [''])[0]
             if raw_symbols:
-                symbols_list = [s.strip() for s in raw_symbols.split('|') if s.strip()]  # Assume pipe-separated
+                # Flexible: Try pipe, then comma, then space-separated
+                separators = ['|', ',', ' ']
+                symbols_list = []
+                used_sep = None
+                for sep in separators:
+                    if sep in raw_symbols:
+                        symbols_list = [s.strip() for s in raw_symbols.split(sep) if s.strip()]
+                        used_sep = sep
+                        break
+                if not symbols_list:
+                    symbols_list = [raw_symbols.strip()]  # Fallback to single
                 with self.connector.lock:
                     if self.connector.available_symbols != symbols_list:
                         self.connector.available_symbols = symbols_list
-                        logger.info(f"📋 Updated Available Symbols from MT5: {len(symbols_list)} symbols (e.g., {symbols_list[:3]})")
-
-            # NEW: Update Active Symbol from EA
-            if 'symbol' in data:
-                new_symbol = data['symbol'][0]
-                with self.connector.lock:
-                    if self.connector.active_symbol != new_symbol:
-                        self.connector.active_symbol = new_symbol
-                        logger.info(f"EA Active Symbol Updated: {new_symbol} ({detect_asset_type(new_symbol)})")
+                        logger.info(f"📋 Updated Available Symbols from MT5: {len(symbols_list)} symbols (e.g., {symbols_list[:3]}) – Separator: {used_sep if used_sep else 'none'}")
+                    else:
+                        logger.debug(f"📋 Symbols unchanged: {len(symbols_list)} items")
 
             # FIXED: Enhanced TF Handling – Ensure active_tf is set and log for UI sync
             if 'tf' in data:
@@ -109,6 +114,24 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     if hasattr(self.connector, 'active_tf') and self.connector.active_tf != new_tf:
                         self.connector.active_tf = new_tf
                         logger.info(f"🔄 Confirmed TF Change from MT5: {new_tf} – Triggering UI Refresh")
+                    # FIXED: Add confirmation/revert logic if pending changes mismatch
+                    if self.connector.pending_changes.get('tf') and self.connector.pending_changes['tf'] != new_tf:
+                        logger.warning(f"⚠️ TF Change Failed: Reverting from {self.connector.active_tf} to {new_tf}")
+                        self.connector.active_tf = new_tf
+                    self.connector.pending_changes['tf'] = None  # Clear pending
+
+            # NEW: Update Active Symbol from EA
+            if 'symbol' in data:
+                new_symbol = data['symbol'][0]
+                with self.connector.lock:
+                    if self.connector.active_symbol != new_symbol:
+                        self.connector.active_symbol = new_symbol
+                        logger.info(f"EA Active Symbol Updated: {new_symbol} ({detect_asset_type(new_symbol)})")
+                    # FIXED: Add confirmation/revert logic if pending changes mismatch
+                    if self.connector.pending_changes.get('symbol') and self.connector.pending_changes['symbol'] != new_symbol:
+                        logger.warning(f"⚠️ Symbol Change Failed: Reverting from {self.connector.active_symbol} to {new_symbol}")
+                        self.connector.active_symbol = new_symbol
+                    self.connector.pending_changes['symbol'] = None  # Clear pending
 
             # Prepare response for MT5 (Sends any pending commands)
             resp = "OK"
@@ -174,6 +197,12 @@ class MT5Connector:
         self.active_symbol = "XAUUSDm"  # Track active EA symbol
         self.active_tf = "M5"  # NEW: Track active TF
 
+        # FIXED: Add pending_changes for optimistic updates
+        self.pending_changes = {'symbol': None, 'tf': None}  # Track pending for optimistic UI
+
+        # ENHANCED: Log fallback on init
+        logger.info(f"🔄 Initialized with Fallback Symbols: {len(self.available_symbols)} (e.g., {self.available_symbols[:3]}) – Awaiting MT5 POST")
+
     @property
     def account_info(self):
         """Thread-safe getter for account data"""
@@ -191,37 +220,51 @@ class MT5Connector:
     def set_telegram(self, tg_bot):
         self.telegram_bot = tg_bot
 
-    # FIXED: Enhanced change_symbol – Add confirmation wait (poll for new active_symbol)
+    # FIXED: Update change_symbol with optimistic update
     def change_symbol(self, new_symbol):
         with self.lock:
+            # 1. Clear candle data for ALL timeframes so strategies don't use old data
             for tf in self.tf_data:
-                self.tf_data[tf] = []  # Clear old data
-            self.command_queue.append(f"SYMBOL_CHANGE|{new_symbol}|{self.active_tf}")
+                self.tf_data[tf] = []  
+            
+            # 2. Optimistically update internal state (revert on EA failure if needed)
             old_symbol = self.active_symbol
-            self.active_symbol = new_symbol  # Optimistically update
-            logger.info(f"🔄 Queued Symbol Change: {old_symbol} → {new_symbol} (TF: {self.active_tf}) – Waiting for MT5 Confirmation...")
-        
-        # NEW: Wait briefly for MT5 to confirm (prevents UI lag)
-        time.sleep(2)  # Give EA time to switch and POST back
+            self.active_symbol = new_symbol
+            self.pending_changes['symbol'] = new_symbol
+            
+            # 3. Queue the command for the EA to pick up on its next poll
+            self.command_queue.append(f"SYMBOL_CHANGE|{new_symbol}|{self.active_tf}")
+            
+            logger.info(f"🔄 UI Request: Change to {new_symbol} (from {old_symbol}). Queued & Optimistically Updated.")
 
-    # FIXED: Enhanced change_timeframe – Similar confirmation
+    # FIXED: Update change_timeframe with optimistic update
     def change_timeframe(self, symbol, minutes):
         tf_map = {1: "M1", 5: "M5", 15: "M15", 30: "M30", 60: "H1", 240: "H4", 1440: "D1"}
         new_tf = tf_map.get(minutes, "M5")
         with self.lock:
-            self.tf_data[new_tf] = []  # Clear for reload
-            self.command_queue.append(f"TF_CHANGE|{new_tf}|{symbol}")
+            # Clear data for the new TF to force a fresh reload from MT5
+            self.tf_data[new_tf] = []  
+            
+            # Optimistically update
             old_tf = self.active_tf
             self.active_tf = new_tf
-            logger.info(f"🔄 Queued TF Change: {old_tf} → {new_tf} ({minutes}min) for {symbol} – Waiting for MT5 Confirmation...")
-        
-        time.sleep(2)  # Wait for EA to switch TF and send new candles
+            self.pending_changes['tf'] = new_tf
+            
+            self.command_queue.append(f"TF_CHANGE|{new_tf}|{symbol}")
+            logger.info(f"🔄 UI Request: Change TF to {new_tf} (from {old_tf}). Queued & Optimistically Updated.")
 
-    # NEW: Method to force refresh symbols (call from UI if needed)
+    # ENHANCED: Update refresh_symbols to queue a request
     def refresh_symbols(self):
-        # In real setup, this could trigger MT5 to send symbols via a queued command like "GET_SYMBOLS"
-        # For now, log and rely on next POST
-        logger.info("🔄 Forcing Symbol List Refresh – Check MT5 POST for 'symbols' data")
+        with self.lock:
+            self.command_queue.append("GET_SYMBOLS")
+        logger.info("🔄 Forcing Symbol List Refresh – Queued GET_SYMBOLS for MT5")
+
+    # NEW: Add force_sync() for manual refresh (callable from UI)
+    def force_sync(self):
+        """Force a full sync from EA (e.g., re-POLL symbols/TF)."""
+        with self.lock:
+            self.command_queue.append("SYNC_REQUEST")  # EA-side: Trigger a full POST
+            logger.info("🔄 Force Sync Requested – Awaiting EA Response.")
 
     def send_order(self, action, symbol, lot, sl, tp):
         """Send order to queue for EA execution."""
@@ -248,6 +291,7 @@ class MT5Connector:
             self.telegram_bot.send_message(f"📈 Order Sent: {action} {symbol} Lot:{lot}")
         return True
 
+    # ENHANCED: In start(), queue an initial sync request
     def start(self):
         """Starts the HTTP server for MT5 communication"""
         try:
@@ -256,7 +300,10 @@ class MT5Connector:
             self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
             self.server_thread.start()
             self.running = True
-            logger.info(f"Execution Engine (HTTP) Started on {self.host}:{self.port}")
+            # NEW: Queue initial sync request for EA
+            with self.lock:
+                self.command_queue.append("GET_SYMBOLS")  # EA should respond with symbols POST
+            logger.info(f"Execution Engine (HTTP) Started on {self.host}:{self.port} – Sent GET_SYMBOLS request")
             return True
         except Exception as e:
             logger.error(f"Failed to start Execution Engine: {e}")
