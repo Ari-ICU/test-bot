@@ -21,6 +21,7 @@ import filters.spread as spread
 import filters.news as news
 from core.indicators import Indicators 
 from core.asset_detector import detect_asset_type
+from core.predictor import AIPredictor
 
 # --- Enhanced Logger Setup ---
 def setup_logger():
@@ -77,6 +78,9 @@ def bot_logic(app):
     news_cooldown = 0
     last_auto_state = app.auto_trade_var.get()
     last_processed_candle_time = 0  # NEW: Smart Scan Tracker
+    
+    # Initialize AI Predictor
+    ai_predictor = AIPredictor()
 
     logger.info("🤖 Bot Logic Initialized: Real-Time Signals Active.") 
     
@@ -203,6 +207,7 @@ def bot_logic(app):
                 logger.info(f"📊 Market Health | Symbol: {symbol} | ADX: {curr_adx:.1f} | RSI: {curr_rsi:.1f}")
 
             base_strategies = [
+                ("AI_Predict", lambda: ai_predictor.predict(df)),
                 ("Trend", lambda: trend.analyze_trend_setup(candles, df=df, patterns=patterns)),
                 ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df=df)),
                 ("Breakout", lambda: breakout.analyze_breakout_setup(candles, df=df)),

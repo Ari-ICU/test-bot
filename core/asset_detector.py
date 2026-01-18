@@ -9,15 +9,21 @@ def detect_asset_type(symbol: str) -> str:
     """
     symbol_upper = symbol.upper().replace('M', '')  # Ignore suffixes like 'm'
     
-    forex_keywords = ["XAU", "EUR", "GBP", "USD", "JPY", "AUD", "CAD", "CHF", "NZD"]
-    crypto_keywords = ["BTC", "ETH", "ADA", "DOT", "SOL", "CRYPTO"]
+    forex_keywords = [
+        "XAU", "XAG", "EUR", "GBP", "USD", "JPY", "AUD", "CAD", "CHF", "NZD", 
+        "HKD", "SGD", "MXN", "ZAR", "CNH", "TRY", "RUB", "BRL"
+    ]
+    crypto_keywords = [
+        "BTC", "ETH", "ADA", "DOT", "SOL", "CRYPTO", "XRP", "LTC", "LINK", 
+        "XLM", "BNB", "AVAX", "DOGE", "SHIB", "TRX", "MATIC"
+    ]
     
     if any(kw in symbol_upper for kw in crypto_keywords):
-        logger.info(f"Detected CRYPTO: {symbol}")
         return "crypto"
     elif any(kw in symbol_upper for kw in forex_keywords):
-        logger.info(f"Detected FOREX: {symbol}")
         return "forex"
     else:
-        logger.warning(f"Unknown asset type for {symbol}; defaulting to forex")
+        # Check for common crypto suffixes or patterns if keywords fail
+        if "USD" in symbol_upper and (len(symbol_upper) > 6 or symbol_upper[:3] in ["TRX", "XRP"]):
+             return "crypto"
         return "forex"

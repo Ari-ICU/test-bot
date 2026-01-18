@@ -1,3 +1,7 @@
 feedparser
 nltk
 ttkbootstrap
+scikit-learn
+joblib
+pandas
+numpy

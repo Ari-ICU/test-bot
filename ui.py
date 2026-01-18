@@ -133,6 +133,7 @@ class TradingApp(ttk.Window):
        
         self.strat_ui_items = {}
         strat_list = [
+            ("AI_Predict", "AI Smart Predictor"),
             ("Trend", "Trend Following"), 
             ("Scalp", "M5 Scalper"), 
             ("Breakout", "Breakout Engine"), 
