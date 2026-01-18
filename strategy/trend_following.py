@@ -61,14 +61,16 @@ def analyze_trend_setup(candles, df=None, patterns=None):
 
         # --- BUY LOGIC ---
         if is_uptrend:
-            # B. Momentum Confirmation (MACD)
-            if current['macd'] <= current['macd_signal']:
-                return "NEUTRAL", "Trend: Bullish but MACD Bearish"
+            # B. Momentum Confirmation (Dynamic)
+            # Normal: MACD > Signal
+            # Aggressive: MACD > 0 (Bullish bias) even if below signal
+            is_momentum_bullish = current['macd'] > current['macd_signal'] or (current['macd'] > 0 and current['adx'] > 30)
             
-            # C. Trend Strength
-            if current['adx'] <= 15:
-                return "NEUTRAL", "Trend: Bullish but Low Strength (ADX < 15)"
-
+            if not is_momentum_bullish:
+                return "NEUTRAL", "Trend: Bullish but MACD Bearish/Weak"
+            
+            # C. Trend Strength (Already filtered by Aggressive ADX check later)
+            
             # D. Entry Trigger
             trigger_found = False
             trigger_name = ""
@@ -81,18 +83,19 @@ def analyze_trend_setup(candles, df=None, patterns=None):
 
             if trigger_found:
                 return "BUY", f"Trend: Confluence ({trigger_name})"
+            elif current['adx'] > 25:
+                return "BUY", "Trend: Aggressive (Strong ADX)"
             else:
-                return "NEUTRAL", "Trend: Bullish but No Pattern Trigger"
+                return "NEUTRAL", "Trend: Bullish but No Pattern/Weak ADX"
 
         # --- SELL LOGIC ---
         if is_downtrend:
-            # B. Momentum Confirmation (MACD)
-            if current['macd'] >= current['macd_signal']:
-                return "NEUTRAL", "Trend: Bearish but MACD Bullish"
+            # B. Momentum Confirmation (Dynamic)
+            is_momentum_bearish = current['macd'] < current['macd_signal'] or (current['macd'] < 0 and current['adx'] > 30)
             
-            if current['adx'] <= 15:
-                return "NEUTRAL", "Trend: Bearish but Low Strength (ADX < 15)"
-
+            if not is_momentum_bearish:
+                return "NEUTRAL", "Trend: Bearish but MACD Bullish/Weak"
+            
             trigger_found = False
             trigger_name = ""
 
@@ -104,8 +107,10 @@ def analyze_trend_setup(candles, df=None, patterns=None):
 
             if trigger_found:
                 return "SELL", f"Trend: Confluence ({trigger_name})"
+            elif current['adx'] > 25:
+                return "SELL", "Trend: Aggressive (Strong ADX)"
             else:
-                return "NEUTRAL", "Trend: Bearish but No Pattern Trigger"
+                return "NEUTRAL", "Trend: Bearish but No Pattern/Weak ADX"
 
         return "NEUTRAL", "Trend: No Trade Setup"
         

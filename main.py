@@ -173,6 +173,13 @@ def bot_logic(app):
 
             # --- STRATEGY SCAN ---
             strategy_results = []
+            
+            # Diagnostic for visibility
+            curr_adx = df['adx'].iloc[-1] if 'adx' in df else 0
+            curr_rsi = df['rsi'].iloc[-1] if 'rsi' in df else 50
+            if heartbeat_limiter.allow("market_diagnostics"):
+                logger.info(f"📊 Market Health | Symbol: {symbol} | ADX: {curr_adx:.1f} | RSI: {curr_rsi:.1f}")
+
             base_strategies = [
                 ("Trend", lambda: trend.analyze_trend_setup(candles, df=df, patterns=patterns)),
                 ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df=df)),

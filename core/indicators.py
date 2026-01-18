@@ -29,17 +29,36 @@ class Indicators:
 
     @staticmethod
     def calculate_adx(df, period=14):
-        """Average Directional Index (Trend Strength)"""
-        plus_dm = df['high'].diff()
-        minus_dm = df['low'].diff()
-        plus_dm = plus_dm.where((plus_dm > 0) & (plus_dm > minus_dm), 0.0)
-        minus_dm = -minus_dm.where((minus_dm > 0) & (minus_dm > plus_dm), 0.0)
+        """Corrected Wilder's ADX (Trend Strength)"""
+        df_copy = df.copy()
         
-        tr = Indicators.calculate_atr(df, period)
-        plus_di = 100 * (plus_dm.rolling(window=period).mean() / tr)
-        minus_di = 100 * (minus_dm.rolling(window=period).mean() / tr)
-        dx = 100 * np.abs((plus_di - minus_di) / (plus_di + minus_di))
-        return dx.rolling(window=period).mean()
+        # 1. TR and DM components
+        high_low = df_copy['high'] - df_copy['low']
+        high_close = np.abs(df_copy['high'] - df_copy['close'].shift())
+        low_close = np.abs(df_copy['low'] - df_copy['close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        
+        up_move = df_copy['high'].diff()
+        down_move = df_copy['low'].shift() - df_copy['low']
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+        
+        # 2. Smooth TR and DM using Wilder's (EMA-like)
+        alpha = 1 / period
+        atr_smoothed = tr.ewm(alpha=alpha, adjust=False).mean()
+        plus_dm_smoothed = pd.Series(plus_dm).ewm(alpha=alpha, adjust=False).mean()
+        minus_dm_smoothed = pd.Series(minus_dm).ewm(alpha=alpha, adjust=False).mean()
+        
+        # 3. DI+ and DI-
+        plus_di = 100 * (plus_dm_smoothed / atr_smoothed)
+        minus_di = 100 * (minus_dm_smoothed / atr_smoothed)
+        
+        # 4. DX and ADX
+        dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.ewm(alpha=alpha, adjust=False).mean()
+        
+        return adx
 
     @staticmethod
     def calculate_supertrend(df, period=10, multiplier=3):

@@ -55,11 +55,13 @@ class TelegramBot:
                 "chat_id": target_chat, 
                 "text": text, 
                 "parse_mode": "HTML",
-                "disable_web_page_preview": True
+                "disable_web_page_preview": True,
+                "disable_notification": "Heartbeat" in text or "Scanning" in text
             }
-            requests.post(url, json=payload, timeout=5)
+            requests.post(url, json=payload, timeout=15)
         except Exception as e:
-            print(f"❌ Failed to send Telegram message: {e}")
+            # Silent fail for network jitters
+            pass
 
     def process_webhook_update(self, update):
         """Processes incoming JSON update from Telegram Webhook"""

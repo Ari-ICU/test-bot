@@ -42,30 +42,32 @@ def analyze_scalping_setup(candles, df=None):
         if pd.isna(current['rsi']) or pd.isna(current['stoch_k']):
             return "NEUTRAL", "NaN in indicators"
         
-        # Use 45/55 instead of 40/60 to catch more signals on lower timeframes
-        is_rsi_buy = current['rsi'] < 45 
-        is_rsi_sell = current['rsi'] > 55
+        # Widen zones for "High Frequency" requested by user
+        is_rsi_buy = current['rsi'] < 50 
+        is_rsi_sell = current['rsi'] > 50
         
         # Check for Stochastic Crossover (Bullish/Bearish)
         bullish_cross = prev['stoch_k'] <= prev['stoch_d'] and current['stoch_k'] > current['stoch_d']
         bearish_cross = prev['stoch_k'] >= prev['stoch_d'] and current['stoch_k'] < current['stoch_d']
-
+ 
         # --- SCALP BUY LOGIC ---
         # Trigger if price is near/above EMA and momentum is recovering from low levels
-        if current['close'] > current['ema_50']:
+        is_near_ema = abs(current['close'] - current['ema_50']) < (current['close'] * 0.0002) # Within 0.02%
+        
+        if current['close'] > current['ema_50'] or (is_near_ema and bullish_cross):
             if is_rsi_buy:
-                if bullish_cross and current['stoch_k'] < 30: # Raised from 20 to 30 for better entry
-                    return "BUY", "Scalp: Trend Up + RSI Oversold + Bullish Stoch Cross"
+                if bullish_cross and current['stoch_k'] < 40: 
+                    return "BUY", "Scalp: Trend Up + Bullish Momentum"
             
             # Added: Mean Reversion Buy (Price dip in uptrend)
             elif current['low'] < current['ema_50'] and bullish_cross:
-                return "BUY", "Scalp: Dip to EMA + Stoch Recovery"
-
+                return "BUY", "Scalp: Dip to EMA + Recovery"
+ 
         # --- SCALP SELL LOGIC ---
-        elif current['close'] < current['ema_50']:
+        elif current['close'] < current['ema_50'] or (is_near_ema and bearish_cross):
             if is_rsi_sell:
-                if bearish_cross and current['stoch_k'] > 70: # Lowered from 80 to 70 for better entry
-                    return "SELL", "Scalp: Trend Down + RSI Overbought + Bearish Stoch Cross"
+                if bearish_cross and current['stoch_k'] > 60: 
+                    return "SELL", "Scalp: Trend Down + Bearish Momentum"
                     
             # Added: Mean Reversion Sell (Price spike in downtrend)
             elif current['high'] > current['ema_50'] and bearish_cross:
