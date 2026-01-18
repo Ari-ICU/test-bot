@@ -228,6 +228,20 @@ def bot_logic(app):
                 summary_str = " | ".join(neutral_summaries)
                 logger.info(f"🔍 Scanning {symbol} ({execution_tf}) | Status: NEUTRAL | {summary_str}")
 
+            # --- UPDATE TELEGRAM PERSISTENT ANALYSIS ---
+            active_patterns = [k.replace('_', ' ').title() for k,v in patterns.items() if v]
+            pat_str = ", ".join(active_patterns[:3]) if active_patterns else "Consolidating"
+            sentiment = "BULLISH" if df['close'].iloc[-1] > df['ema_200'].iloc[-1] else "BEARISH"
+            
+            # Use the first active signal for AI Prediction or NEUTRAL
+            pred = signals_this_cycle[0].split(":")[1].strip() if signals_this_cycle else "NEUTRAL"
+            
+            telegram_bot.track_analysis(
+                prediction=pred,
+                patterns=pat_str,
+                sentiment=sentiment
+            )
+
             # --- EXECUTION ---
             trade_executed = False
             for name, (action, reason) in strategy_results:

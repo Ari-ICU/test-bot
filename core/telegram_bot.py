@@ -16,6 +16,11 @@ class TelegramBot:
         self.api_url = f"https://api.telegram.org/bot{token}"
         self.last_update_id = 0
         self.is_polling = False
+        self.last_analysis = {
+            "prediction": "NEUTRAL",
+            "patterns": "Scanning...",
+            "sentiment": "NEUTRAL"
+        }
 
     def start_polling(self):
         """Starts a background thread to poll for commands"""
@@ -41,6 +46,14 @@ class TelegramBot:
 
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
+
+    def track_analysis(self, prediction, patterns, sentiment):
+        """Updates the internal cache for the /analysis command"""
+        self.last_analysis = {
+            "prediction": prediction,
+            "patterns": patterns if patterns else "None detected",
+            "sentiment": sentiment
+        }
 
     def send_message(self, text, chat_id=None):
         """Sends a text message to Telegram with HTML formatting"""
@@ -143,12 +156,13 @@ class TelegramBot:
             is_blocked, headline = is_high_impact_news_near(sym)
             news_str = headline if headline else "No major news"
             
+            la = self.last_analysis
             response = (
                 f"🔍 <b>Market Analysis: {sym} ({tf})</b>\n\n"
-                "🤖 <b>AI Prediction:</b> NEUTRAL\n"
+                f"🤖 <b>AI Prediction:</b> {la['prediction']}\n"
                 f"📰 <b>News:</b> {news_str}\n"
-                "📊 <b>Pattern:</b> Scanning...\n"
-                "⚡ <b>Sentiment:</b> BULLISH\n\n"
+                f"📊 <b>Pattern:</b> {la['patterns']}\n"
+                f"⚡ <b>Sentiment:</b> {la['sentiment']}\n\n"
                 "<i>Use Dashboard for deep confluence logs.</i>"
             )
 
