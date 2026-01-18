@@ -82,6 +82,23 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 with self.connector.lock:
                     self.connector.tf_data[tf_key] = parsed
 
+            if 'active_trades' in data:
+                raw_trades = data['active_trades'][0]
+                parsed_trades = []
+                if raw_trades:
+                    for t in raw_trades.split('|'):
+                        parts = t.split(',')
+                        if len(parts) >= 5:
+                            parsed_trades.append({
+                                'ticket': parts[0],
+                                'symbol': parts[1],
+                                'type': 0 if parts[2] == "BUY" else 1,
+                                'volume': float(parts[3]),
+                                'profit': float(parts[4])
+                            })
+                with self.connector.lock:
+                    self.connector._open_positions = parsed_trades
+
         except Exception as e:
             logger.error(f"Critical do_POST Error: {e}")
 
@@ -107,6 +124,7 @@ class MT5Connector:
             'buy_count': 0,
             'sell_count': 0
         }
+        self._open_positions = [] # Store parsed trades
 
         # FULL TIMEFRAME SUPPORT: Expanded to hold data for all required strategy timeframes
         self.tf_data = {
@@ -131,6 +149,11 @@ class MT5Connector:
         """Thread-safe getter for account data"""
         with self.lock:
             return self._account_data.copy()
+
+    def get_open_positions(self):
+        """Thread-safe getter for current active trades"""
+        with self.lock:
+            return self._open_positions.copy()
 
     def get_tf_candles(self, timeframe_str, count=300):
         """Thread-safe access to candle data received from MT5 Bridge"""

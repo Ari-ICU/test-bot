@@ -260,6 +260,8 @@ def main():
         return
 
     risk = RiskManager(conf.data)
+    telegram_bot.set_risk_manager(risk)
+    
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     logger.info("🎉 MT5 Algo Terminal Launched.")
     
