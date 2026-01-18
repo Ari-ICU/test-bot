@@ -214,49 +214,21 @@ class TelegramLogHandler(logging.Handler):
             msg = record.getMessage()
 
             # 1. Define Emojis & Styles based on content keywords
-            if "TP Hit" in msg or "Profit" in msg:
-                emoji = "💰"
-                header = "TAKE PROFIT"
-            elif "SL Hit" in msg or "Loss" in msg:
-                emoji = "🛑"
-                header = "STOP LOSS"
-            elif "Signals Detected" in msg:
-                emoji = "🎯"
-                header = "SIGNAL DETECTED"
-            elif "Executed" in msg:
-                emoji = "🚀"
-                header = "TRADE OPENED"
-            elif "Engine Transition" in msg:
-                emoji = "⚡"
-                header = "ENGINE STATUS"
-            elif "Heartbeat" in msg:
-                emoji = "💓"
-                header = "SYSTEM ALIVE"
-            elif "EXECUTING" in msg or "Order Sent" in msg:
-                emoji = "🚀"
-                header = "NEW TRADE"
-            elif "News Signal" in msg or "News Update" in msg or "News Block" in msg:
-                emoji = "📰"
-                header = "NEWS ALERT"
-            elif record.levelno == logging.ERROR:
-                emoji = "🚨"
-                header = "ERROR"
-            elif record.levelno == logging.WARNING:
-                emoji = "⚠️"
-                header = "WARNING"
-            elif "STARTED" in msg or "Launched" in msg:
-                emoji = "✅"
-                header = "SYSTEM"
-            else:
-                emoji = "ℹ️"
-                header = "INFO"
+            if "TP Hit" in msg or "Profit" in msg: emoji, header = "💰", "TAKE PROFIT"
+            elif "SL Hit" in msg or "Loss" in msg: emoji, header = "🛑", "STOP LOSS"
+            elif "Signals Detected" in msg: emoji, header = "🎯", "SIGNAL DETECTED"
+            elif "Executed" in msg: emoji, header = "🚀", "TRADE OPENED"
+            elif "Engine Transition" in msg: emoji, header = "⚡", "ENGINE STATUS"
+            elif record.levelno >= logging.ERROR: emoji, header = "🚨", "ERROR"
+            elif record.levelno >= logging.WARNING: emoji, header = "⚠️", "WARNING"
+            else: emoji, header = "ℹ️", "INFO"
 
-            # 2. Format the Message (Clean HTML)
-            clean_msg = msg.replace("EXECUTING:", "").replace("TP Hit:", "").replace("SL Hit:", "").strip()
+            # 2. Format the Message
+            clean_msg = msg.replace("EXECUTING:", "").strip()
             formatted_text = f"{emoji} <b>{header}</b>\n{clean_msg}"
 
-            # 3. Send
-            self.bot.send_message(formatted_text)
+            # 3. Send in BACKGROUND THREAD (Non-blocking)
+            threading.Thread(target=self.bot.send_message, args=(formatted_text,), daemon=True).start()
             
         except Exception:
             self.handleError(record)

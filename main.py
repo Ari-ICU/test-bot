@@ -76,6 +76,7 @@ def bot_logic(app):
     last_heartbeat = 0  
     news_cooldown = 0
     last_auto_state = app.auto_trade_var.get()
+    last_processed_candle_time = 0  # NEW: Smart Scan Tracker
 
     logger.info("🤖 Bot Logic Initialized: Real-Time Signals Active.") 
     
@@ -143,7 +144,21 @@ def bot_logic(app):
                     logger.info(f"⏳ Waiting for adequate candle data... Currently: {len(candles) if candles else 0}/200")
                 time.sleep(5); continue
 
-            # --- PRE-TRADE FILTERS ---
+            # --- SMART SCAN GATEKEEPER ---
+            # Only run heavy calcs if a new candle is detected or it's been > 15s
+            current_candle_time = candles[-1]['time'] if candles else 0
+            is_new_candle = current_candle_time > last_processed_candle_time
+            
+            # Force scan if we haven't scanned in 15 seconds (even on same candle)
+            force_time_refresh = (now_ts - news_cooldown) > 15 
+            
+            if not is_new_candle and not force_time_refresh:
+                time.sleep(2); continue
+            
+            last_processed_candle_time = current_candle_time
+            news_cooldown = now_ts # Use this as last_scan_time
+            
+            # --- ACCOUNT HEALTH & PRE-TRADE FILTERS ---
             if curr_positions >= max_pos_allowed:
                 if filter_limiter.allow(f"max_pos_{symbol}"):
                     logger.info(f"⏸️ Max open positions ({max_pos_allowed}) reached for SYMBOL: {symbol}. Trading paused for this symbol.")

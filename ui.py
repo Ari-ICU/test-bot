@@ -467,6 +467,12 @@ class TradingApp(ttk.Window):
             for msg, tag in batch:
                 self.log_area.text.insert(tk.END, msg, tag)
             self.log_area.text.see(tk.END)
+            
+            # NEW: Truncate Main Console to keep it light (max 500 lines)
+            current_lines = int(self.log_area.text.index('end-1c').split('.')[0])
+            if current_lines > 500:
+                self.log_area.text.delete('1.0', f'{current_lines-500}.0')
+                
             self.log_area.text.configure(state='disabled')
             
             # Update Dashboard Mini-Console
