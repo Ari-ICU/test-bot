@@ -236,11 +236,12 @@ def bot_logic(app):
             # Use the first active signal for AI Prediction or NEUTRAL
             pred = signals_this_cycle[0].split(":")[1].strip() if signals_this_cycle else "NEUTRAL"
             
-            telegram_bot.track_analysis(
-                prediction=pred,
-                patterns=pat_str,
-                sentiment=sentiment
-            )
+            if app.telegram_bot:
+                app.telegram_bot.track_analysis(
+                    prediction=pred,
+                    patterns=pat_str,
+                    sentiment=sentiment
+                )
 
             # --- EXECUTION ---
             trade_executed = False
