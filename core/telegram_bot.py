@@ -92,6 +92,7 @@ class TelegramBot:
                 "🔹 /status - Account & Config\n"
                 "🔹 /positions - Manage Open Trades\n"
                 "🔹 /analysis - Technical Analysis\n"
+                "🔹 /news - Real-Time News Feed\n"
                 "🔹 /settings - Strategy & Risk"
             )
 
@@ -134,12 +135,34 @@ class TelegramBot:
         elif command == "/analysis":
             sym = self.connector.active_symbol if self.connector else "N/A"
             tf = self.connector.active_tf if self.connector else "N/A"
+            
+            # Fetch news for analysis
+            from filters.news import is_high_impact_news_near
+            is_blocked, headline = is_high_impact_news_near(sym)
+            news_str = headline if headline else "No major news"
+            
             response = (
                 f"🔍 <b>Market Analysis: {sym} ({tf})</b>\n\n"
                 "🤖 <b>AI Prediction:</b> NEUTRAL\n"
+                f"📰 <b>News:</b> {news_str}\n"
                 "📊 <b>Pattern:</b> Scanning...\n"
                 "⚡ <b>Sentiment:</b> BULLISH\n\n"
                 "<i>Use Dashboard for deep confluence logs.</i>"
+            )
+
+        # 4b. /NEWS - Direct News Check
+        elif command == "/news":
+            sym = self.connector.active_symbol if self.connector else "USD"
+            from filters.news import is_high_impact_news_near
+            is_blocked, headline = is_high_impact_news_near(sym)
+            status = "🔴 BLOCKED" if is_blocked else "🟢 CLEAR"
+            
+            response = (
+                f"📰 <b>Real-Time News Feed</b>\n"
+                f"📦 Asset: <b>{sym}</b>\n"
+                f"🚦 Status: <b>{status}</b>\n\n"
+                f"🗞️ <b>Latest Headline:</b>\n"
+                f"<i>{headline if headline else 'No news data available.'}</i>"
             )
 
         # 5. /SETTINGS - Strategy & Risk
@@ -195,7 +218,7 @@ class TelegramLogHandler(logging.Handler):
             elif "EXECUTING" in msg or "Order Sent" in msg:
                 emoji = "🚀"
                 header = "NEW TRADE"
-            elif "News Signal" in msg:
+            elif "News Signal" in msg or "News Update" in msg or "News Block" in msg:
                 emoji = "📰"
                 header = "NEWS ALERT"
             elif record.levelno == logging.ERROR:
