@@ -69,18 +69,29 @@ class AIPredictor:
 
         # Get Prediction and Probability
         try:
-            prediction_idx = self.model.predict(features)[0]
-            probabilities = self.model.predict_proba(features)[0]
-            confidence = probabilities[prediction_idx]
+            # Flatten to 1D array if needed
+            preds = self.model.predict(features)
+            prediction = preds[0] if hasattr(preds, "__len__") else preds
+            
+            probs = self.model.predict_proba(features)
+            probabilities = probs[0] if len(probs.shape) > 1 else probs
+            
+            # Find the index of the predicted class in the model's classes
+            class_list = list(self.model.classes_)
+            if prediction in class_list:
+                class_idx = class_list.index(prediction)
+                confidence = probabilities[class_idx]
+            else:
+                confidence = 0.0
 
             mapping = {1: "BUY", -1: "SELL", 0: "NEUTRAL"}
-            action = mapping.get(prediction_idx, "NEUTRAL")
+            action = mapping.get(prediction, "NEUTRAL")
             
             # Only return signal if confidence is high (e.g., > 60%)
             if confidence < 0.60:
-                return "NEUTRAL", confidence
+                return "NEUTRAL", float(confidence)
                 
-            return action, confidence
+            return action, float(confidence)
         except Exception as e:
             logger.error(f"AI Prediction error: {e}")
             return "NEUTRAL", 0.0
