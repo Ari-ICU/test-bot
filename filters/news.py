@@ -44,7 +44,7 @@ class NewsFilter:
 
     def get_sentiment_signal(self, current_symbol="XAUUSD"):
         if (datetime.now() - self.last_signal_time).seconds < 300:
-            return "NEUTRAL", "", "NONE", 1.0
+            return "NEUTRAL", "", "NONE", 1.0, ""
 
         # Filter sources by asset type
         asset_type = detect_asset_type(current_symbol)
@@ -65,38 +65,41 @@ class NewsFilter:
                     for kw in self.bearish_keywords:
                         if kw in title.lower():
                             self.last_signal_time = datetime.now()
-                            return "SELL", f"News ({kw}): {title[:30]}", category, risk_mod
+                            link = entry.link if hasattr(entry, 'link') else ""
+                            return "SELL", f"News ({kw}): {title[:30]}", category, risk_mod, link
 
                     for kw in self.bullish_keywords:
                         if kw in title.lower():
                             self.last_signal_time = datetime.now()
-                            return "BUY", f"News ({kw}): {title[:30]}", category, risk_mod
+                            link = entry.link if hasattr(entry, 'link') else ""
+                            return "BUY", f"News ({kw}): {title[:30]}", category, risk_mod, link
                             
             except Exception as e:
                 logger.error(f"News Analysis Error: {e}")
         
-        return "NEUTRAL", "", "NONE", 1.0
+        return "NEUTRAL", "", "NONE", 1.0, ""
 
 # --- FIXED: CACHING FOR NEWS FILTER ---
 _news_cache = {
     'last_update': datetime.min,
     'blocked': False,
     'reason': "",
+    'link': "",
     'expiry': 60  
 }
 
 def is_high_impact_news_near(symbol):
     """
     Checks if there is high-impact news for the symbol or USD/BTC.
-    Returns (is_blocked, headline)
+    Returns (is_blocked, headline, link)
     """
     now = datetime.now()
     if (now - _news_cache['last_update']).total_seconds() < _news_cache['expiry']:
-        return _news_cache['blocked'], _news_cache['reason']
+        return _news_cache['blocked'], _news_cache['reason'], _news_cache['link']
 
     try:
         nf = NewsFilter() 
-        action, reason, category, risk_mod = nf.get_sentiment_signal(symbol)
+        action, reason, category, risk_mod, link = nf.get_sentiment_signal(symbol)
         
         is_blocked = False
         if (category in ["FUNDAMENTAL", detect_asset_type(symbol).upper()]) and action != "NEUTRAL":
@@ -105,7 +108,8 @@ def is_high_impact_news_near(symbol):
         _news_cache['last_update'] = now
         _news_cache['blocked'] = is_blocked
         _news_cache['reason'] = reason
-        return is_blocked, reason
+        _news_cache['link'] = link
+        return is_blocked, reason, link
     except Exception as e:
         logger.error(f"Error in news filter wrapper: {e}")
-        return False, ""
+        return False, "", ""

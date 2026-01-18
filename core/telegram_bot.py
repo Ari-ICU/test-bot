@@ -153,8 +153,9 @@ class TelegramBot:
             
             # Fetch news for analysis
             from filters.news import is_high_impact_news_near
-            is_blocked, headline = is_high_impact_news_near(sym)
+            is_blocked, headline, link = is_high_impact_news_near(sym)
             news_str = headline if headline else "No major news"
+            if link: news_str += f"\n<a href='{link}'>🔗 Read More</a>"
             
             la = self.last_analysis
             response = (
@@ -170,7 +171,7 @@ class TelegramBot:
         elif command == "/news":
             sym = self.connector.active_symbol if self.connector else "USD"
             from filters.news import is_high_impact_news_near
-            is_blocked, headline = is_high_impact_news_near(sym)
+            is_blocked, headline, link = is_high_impact_news_near(sym)
             status = "🔴 BLOCKED" if is_blocked else "🟢 CLEAR"
             
             response = (
@@ -180,6 +181,8 @@ class TelegramBot:
                 f"🗞️ <b>Latest Headline:</b>\n"
                 f"<i>{headline if headline else 'No news data available.'}</i>"
             )
+            if link:
+                response += f"\n\n🔗 <a href='{link}'>Read Source Article</a>"
 
         # 5. /SETTINGS - Strategy & Risk
         elif command == "/settings":

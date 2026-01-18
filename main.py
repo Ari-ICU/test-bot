@@ -133,13 +133,21 @@ def bot_logic(app):
                 time.sleep(10); continue
             
             # --- NEWS FILTER ---
-            is_news_blocked, news_headline = news.is_high_impact_news_near(symbol)
+            is_news_blocked, news_headline, news_link = news.is_high_impact_news_near(symbol)
             if is_news_blocked:
                 if filter_limiter.allow(f"news_block_{symbol}"):
-                    logger.warning(f"📰 News Block Active: {news_headline}")
+                    logger.warning(f"📰 News Block Active: {news_headline} | Link: {news_link}")
+                
+                # --- SYNC TO UI ---
+                def show_news_block():
+                    for name in app.strat_ui_items:
+                        app.strat_ui_items[name]["status"].configure(text="PAUSED", bootstyle="warning")
+                        app.strat_ui_items[name]["reason"].configure(text=f"News: {news_headline[:15]}...")
+                app.after(0, show_news_block)
+                
                 time.sleep(10); continue
             elif news_headline and filter_limiter.allow(f"news_info_{news_headline[:15]}"):
-                logger.info(f"📰 News Update: {news_headline}")
+                logger.info(f"📰 News Update: {news_headline} | Link: {news_link}")
 
             # --- DATA SYNC CHECK ---
             candles = connector.get_tf_candles(execution_tf, count=500)
