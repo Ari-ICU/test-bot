@@ -152,14 +152,32 @@ def bot_logic(app):
 
             signals_this_cycle = []
             neutral_summaries = []
+            
             for name, strat_func in base_strategies:
                 try:
                     action, reason = strat_func()
                     strategy_results.append((name, (action, reason)))
+                    
+                    # --- SYNC TO UI ---
+                    color = "secondary"
                     if action != "NEUTRAL":
+                        color = "success" if action == "BUY" else "danger"
                         signals_this_cycle.append(f"{name}: {action}")
-                    else:
+                    elif "Trend:" in reason or "Confluence" in reason or "Consolidating" in reason:
+                        color = "warning"
+                    
+                    def update_ui(n=name, a=action, r=reason, c=color):
+                        if n in app.strat_ui_items:
+                            app.strat_ui_items[n]["status"].configure(text=a, bootstyle=f"{c}")
+                            # Trim reason for UI
+                            display_reason = r.replace(f"{n}:", "").strip()
+                            app.strat_ui_items[n]["reason"].configure(text=display_reason[:40])
+                    
+                    app.after(0, update_ui)
+
+                    if action == "NEUTRAL":
                         neutral_summaries.append(f"{name}: {reason[:30]}")
+
                 except Exception as e:
                     logger.error(f"Strategy {name} failed: {e}")
 
@@ -167,7 +185,6 @@ def bot_logic(app):
             if signals_this_cycle:
                 logger.info(f"🎯 Signals Detected: {', '.join(signals_this_cycle)}")
             elif heartbeat_limiter.allow("scanning_feedback"):
-                # Show a condensed summary of why it's neutral
                 summary_str = " | ".join(neutral_summaries)
                 logger.info(f"🔍 Scanning {symbol} ({execution_tf}) | Status: NEUTRAL | {summary_str}")
 

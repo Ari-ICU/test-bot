@@ -11,15 +11,15 @@ def analyze_breakout_setup(candles):
     low_20 = df['low'].rolling(window=20).min()
     
     curr = df.iloc[-1]
-    prev = df.iloc[-2]
     
     # 1. Breakout UP
-    # Price broke 20-day high AND volume is increasing (simple check)
-    if curr['close'] > high_20.iloc[-2]:
+    high_target = high_20.iloc[-2]
+    if curr['close'] > high_target:
         return "BUY", "Breakout: New 20-period High"
         
     # 2. Breakout DOWN
-    if curr['close'] < low_20.iloc[-2]:
+    low_target = low_20.iloc[-2]
+    if curr['close'] < low_target:
         return "SELL", "Breakout: New 20-period Low"
         
-    return "NEUTRAL", ""
+    return "NEUTRAL", "Breakout: Price is Consolidating"

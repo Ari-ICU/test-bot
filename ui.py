@@ -125,18 +125,23 @@ class TradingApp(ttk.Window):
             setattr(self, var_name, lbl)
             return lbl
 
-        # --- ROW 1: STRATEGY ENGINE STATUS ---
+        # --- ROW 1: STRATEGY ENGINE MONITOR ---
         strategy_monitor = ttk.Labelframe(content, text=" Active Strategy Engine ")
         strategy_monitor.pack(fill=X, pady=(0, 15))
         strategy_monitor_inner = ttk.Frame(strategy_monitor)
         strategy_monitor_inner.pack(fill=BOTH, expand=YES, padx=10, pady=10)
        
-        strat_list = ["ICT Silver Bullet", "Trend Confluence", "M5 Scalper"]
-        for strat in strat_list:
+        self.strat_ui_items = {}
+        strat_list = [("Trend", "Trend Following"), ("Scalp", "M5 Scalper"), ("Breakout", "Breakout Engine")]
+        for key, name in strat_list:
             f = ttk.Frame(strategy_monitor_inner)
             f.pack(side=LEFT, expand=YES)
-            ttk.Label(f, text=strat, font=("Helvetica", 9)).pack()
-            ttk.Label(f, text="READY", font=("Helvetica", 12, "bold"), bootstyle=SUCCESS).pack()
+            ttk.Label(f, text=name, font=("Helvetica", 9)).pack()
+            status_lbl = ttk.Label(f, text="WAITING", font=("Helvetica", 11, "bold"), bootstyle=SECONDARY)
+            status_lbl.pack()
+            reason_lbl = ttk.Label(f, text="...", font=("Helvetica", 7), bootstyle=LIGHT)
+            reason_lbl.pack()
+            self.strat_ui_items[key] = {"status": status_lbl, "reason": reason_lbl}
 
         # --- ROW 2: ACCOUNT STATS ---
         stats_frame = ttk.Frame(content)
