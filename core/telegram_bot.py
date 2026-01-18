@@ -171,11 +171,12 @@ class TelegramBot:
         elif command == "/settings":
             if self.risk_manager:
                 rm = self.risk_manager
+                cool_off_mins = int(rm.cool_off_period / 60)
                 response = (
                     "⚙️ <b>Strategy & Risk Settings</b>\n"
-                    f"🛑 Max Daily Trades: <b>{getattr(rm, 'max_daily_trades', 'N/A')}</b>\n"
-                    f"📉 Max Drawdown: <b>{getattr(rm, 'max_drawdown_pct', 'N/A')}%</b>\n"
-                    f"⌛ Cool-off: <b>60 min</b>\n\n"
+                    f"🛑 Max Daily Trades: <b>{getattr(rm, 'max_daily_trades', 5)}</b>\n"
+                    f"📉 Max Drawdown: <b>{getattr(rm, 'max_drawdown_limit', 5.0)}%</b>\n"
+                    f"⌛ Cool-off: <b>{cool_off_mins} min</b>\n\n"
                     f"✅ <b>Auto-Trading:</b> ACTIVE"
                 )
             else:

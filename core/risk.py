@@ -11,7 +11,8 @@ class RiskManager:
         """
         self.config = config.get('risk', {})
         self.risk_per_trade = self.config.get('risk_per_trade', 1.0) 
-        self.max_daily_loss = self.config.get('max_daily_loss', 5.0) 
+        self.max_daily_loss = self.config.get('daily_loss_limit', 5.0) # Corrected key
+        self.max_drawdown_limit = self.config.get('max_drawdown', 5.0) # Corrected key
         self.min_lot = 0.01
         self.max_lot = 10.0  # Broker limit
         
