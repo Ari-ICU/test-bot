@@ -249,7 +249,8 @@ def bot_logic(app):
                     app.after(0, update_ui)
 
                     if action == "NEUTRAL" and reason:
-                        neutral_summaries.append(f"{name}: {reason[:30]}")
+                        display_reason = f"{reason*100:.1f}%" if isinstance(reason, (int, float)) else str(reason)[:30]
+                        neutral_summaries.append(f"{name}: {display_reason}")
 
                 except Exception as e:
                     logger.error(f"Strategy {name} failed: {e}")
