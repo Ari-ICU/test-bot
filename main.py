@@ -29,7 +29,7 @@ def setup_logger():
         logger.handlers.clear()
     
     logger.setLevel(logging.INFO)
-    logger.propagate = False
+    logger.propagate = True
 
     class CustomFormatter(logging.Formatter):
         format_str = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -40,6 +40,12 @@ def setup_logger():
     handler = logging.StreamHandler()
     handler.setFormatter(CustomFormatter())
     logger.addHandler(handler)
+
+    # ADDED: File Handler for persistent bot activity log
+    file_handler = logging.FileHandler("bot_activity.log", encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"))
+    logger.addHandler(file_handler)
+    
     return logger
 
 class RateLimiter:

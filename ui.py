@@ -56,7 +56,7 @@ class TradingApp(ttk.Window):
        
         # NEW: Log deduplication cache (last 10s of messages to suppress spam)
         self.last_logs = deque(maxlen=50)  # FIFO queue for recent msgs with timestamps
-        self.log_suppress_threshold = 2.0  # Suppress if duplicate within 2s
+        self.log_suppress_threshold = 1.0  # Reduced to 1s for more real-time feel
        
         self._setup_logging()
         self._build_ui()
@@ -239,10 +239,29 @@ class TradingApp(ttk.Window):
         ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
         ttk.Spinbox(lot_row, from_=0.01, to=50, textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
 
+        # --- ROW 6: RECENT ACTIVITY FEED (DASHBOARD MINI-CONSOLE) ---
+        activity_frame = ttk.Labelframe(content, text=" Recent Activity Feed ")
+        activity_frame.pack(fill=BOTH, expand=YES, pady=(15, 0))
+        
+        self.mini_log_area = ScrolledText(activity_frame, bootstyle="dark", height=8, autohide=True)
+        self.mini_log_area.pack(fill=BOTH, expand=YES, padx=5, pady=5)
+        self.mini_log_area.text.configure(font=("Consolas", 9), state='disabled')
+        
+        # Tags for mini-log
+        self.mini_log_area.text.tag_config('INFO', foreground='lightgreen')
+        self.mini_log_area.text.tag_config('WARNING', foreground='#f0ad4e')
+        self.mini_log_area.text.tag_config('ERROR', foreground='#d9534f')
+
     def _build_console_tab(self):
         # Console Setup with ScrolledText
         console_frame = ttk.Frame(self.tab_console)
         console_frame.pack(fill=BOTH, expand=YES, padx=20, pady=20)
+        
+        btn_frame = ttk.Frame(console_frame)
+        btn_frame.pack(fill=X, pady=(0, 10))
+        ttk.Button(btn_frame, text="🗑️ Clear Console Logs", bootstyle="danger-outline", command=self.clear_logs).pack(side=RIGHT)
+        ttk.Label(btn_frame, text="Live System Feed", font=("Helvetica", 12, "bold")).pack(side=LEFT)
+
         self.log_area = ScrolledText(console_frame, bootstyle="secondary", height=30, width=120, autohide=True)
         self.log_area.pack(fill=BOTH, expand=YES)
         # Configure tags for log levels
@@ -423,10 +442,10 @@ class TradingApp(ttk.Window):
                 record = self.log_queue.get_nowait()
                 raw_msg = record.getMessage()
                 
-                # NEW: Dedup check - skip if identical raw msg within 10s
+                # NEW: Dedup check - skip if identical raw msg within threshold
                 now = time.time()
                 should_log = True
-                suppress_threshold = 10.0
+                suppress_threshold = self.log_suppress_threshold
                 
                 for ts, prev_raw in list(self.last_logs):
                     if now - ts < suppress_threshold and prev_raw == raw_msg:
@@ -443,11 +462,24 @@ class TradingApp(ttk.Window):
                 break
         
         if batch:
+            # Update Main Console
             self.log_area.text.configure(state='normal')
             for msg, tag in batch:
                 self.log_area.text.insert(tk.END, msg, tag)
             self.log_area.text.see(tk.END)
             self.log_area.text.configure(state='disabled')
+            
+            # Update Dashboard Mini-Console
+            if hasattr(self, 'mini_log_area'):
+                self.mini_log_area.text.configure(state='normal')
+                for msg, tag in batch:
+                    self.mini_log_area.text.insert(tk.END, msg, tag)
+                self.mini_log_area.text.see(tk.END)
+                # Keep only last 100 lines in mini-log to keep it light
+                num_lines = int(self.mini_log_area.text.index('end-1c').split('.')[0])
+                if num_lines > 100:
+                    self.mini_log_area.text.delete('1.0', f'{num_lines-100}.0')
+                self.mini_log_area.text.configure(state='disabled')
         
         self.after(200, self._start_log_polling)  # Slower poll: reduces CPU, still responsive
 
