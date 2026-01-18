@@ -273,6 +273,15 @@ def main():
         return
 
     risk = RiskManager(conf.data)
+    
+    # Sync initial trade count with existing positions
+    time.sleep(2) # Give connector a moment to fetch initial account info
+    current_pos = connector.account_info.get('total_count', 0)
+    if current_pos > 0:
+        for _ in range(current_pos):
+            risk.record_trade()
+        logger.info(f"📋 Risk Sync: Detected {current_pos} existing positions. Daily Discipline updated.")
+
     telegram_bot.set_risk_manager(risk)
     
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
