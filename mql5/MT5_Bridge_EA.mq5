@@ -11,7 +11,7 @@ string g_symbols_list = "";
 datetime g_last_symbols_update = 0;
 string g_candle_history = "";
 datetime g_last_candle_update = 0;
-int g_candles_to_send = 200;
+int g_candles_to_send = 1000;
 string g_tf_string = "";
 ENUM_TIMEFRAMES g_current_period = PERIOD_CURRENT;
 double g_last_bid = 0, g_last_ask = 0;
@@ -498,11 +498,14 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
    
-    // Define tradeAction to fix the "undeclared identifier" error
     string tradeAction = (t == ORDER_TYPE_BUY) ? "BUY" : "SELL"; 
-   
-    int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
-    double stops_level = SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(s, SYMBOL_POINT);
+    double tick_size = SymbolInfoDouble(s, SYMBOL_TRADE_TICK_SIZE);
+    double stops_level_pts = (double)SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL);
+    double point = SymbolInfoDouble(s, SYMBOL_POINT);
+    double stops_level = stops_level_pts * point;
+    // Add a small 2-point buffer to stops_level to avoid boundary errors
+    double safety_buffer = 2.0 * point;
+    double min_dist = (stops_level + safety_buffer);
    
     double ask = SymbolInfoDouble(s, SYMBOL_ASK);
     double bid = SymbolInfoDouble(s, SYMBOL_BID);
@@ -513,32 +516,43 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     r.volume = v;
     r.type = t;
     
-    // CRITICAL: Normalize Price (Fixes 10018)
-    r.price = NormalizeDouble(entry_price, digits); 
-    r.deviation = 10; 
+    // Normalize to TICK SIZE (more robust than NormalizeDouble)
+    r.price = MathRound(entry_price / tick_size) * tick_size;
+    r.deviation = 20; // Increased for crypto volatility
 
-    // Validate SL/TP against broker requirements
+    // Validate SL/TP
     if(sl > 0) {
-        if(t == ORDER_TYPE_BUY && sl > (bid - stops_level)) sl = bid - stops_level;
-        if(t == ORDER_TYPE_SELL && sl < (ask + stops_level)) sl = ask + stops_level;
-        r.sl = NormalizeDouble(sl, digits);
-    }
-    if(tp > 0) {
-        if(t == ORDER_TYPE_BUY && tp < (bid + stops_level)) tp = bid + stops_level;
-        if(t == ORDER_TYPE_SELL && tp > (ask - stops_level)) tp = ask - stops_level;
-        r.tp = NormalizeDouble(tp, digits);
-    }
-
-    // CRITICAL: Force IOC Filling (Fixes 10018 for ECN/Gold symbols)
-    r.type_filling = GetFillingMode(s);
-    if(r.type_filling == ORDER_FILLING_RETURN) {
-        r.type_filling = ORDER_FILLING_IOC; 
+        if(t == ORDER_TYPE_BUY && sl > (bid - min_dist)) sl = bid - min_dist;
+        if(t == ORDER_TYPE_SELL && sl < (ask + min_dist)) sl = ask + min_dist;
+        r.sl = MathRound(sl / tick_size) * tick_size;
+    } else {
+        r.sl = 0;
     }
     
-    if(!OrderSend(r, res)) {
-        Print("❌ Trade Fail: ", res.retcode, " | Action: ", tradeAction, " | Mode: ", (int)r.type_filling);
+    if(tp > 0) {
+        if(t == ORDER_TYPE_BUY && tp < (ask + min_dist)) tp = ask + min_dist;
+        if(t == ORDER_TYPE_SELL && tp > (bid - min_dist)) tp = bid - min_dist;
+        r.tp = MathRound(tp / tick_size) * tick_size;
     } else {
-        Print("🚀 Trade Executed: ", tradeAction, " ", s, " Ticket: ", res.order);
+        r.tp = 0;
+    }
+
+    r.type_filling = GetFillingMode(s);
+    if(r.type_filling == ORDER_FILLING_RETURN) r.type_filling = ORDER_FILLING_IOC; 
+    
+    if(!OrderSend(r, res)) {
+        PrintFormat("❌ Trade Fail: %d | %s %s | Price: %f, SL: %f, TP: %f | StopsDist: %f, Mode: %d", 
+                    res.retcode, tradeAction, s, r.price, r.sl, r.tp, min_dist, (int)r.type_filling);
+        
+        // AUTO-RECOVERY: If 10017, try without stops as fallback
+        if(res.retcode == 10017) {
+            Print("⚠️ 10017 Detected - Retrying without SL/TP for safety...");
+            r.sl = 0; r.tp = 0;
+            if(OrderSend(r, res)) Print("✅ Fallback Trade Success (No Stops)");
+            else Print("❌ Fallback Fail: ", res.retcode);
+        }
+    } else {
+        PrintFormat("🚀 Trade Executed: %s %s Ticket: %d (SL: %f, TP: %f)", tradeAction, s, res.order, r.sl, r.tp);
     }
 }
 

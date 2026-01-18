@@ -68,14 +68,32 @@ def bot_logic(app):
     risk = app.risk
     last_heartbeat = 0  
     news_cooldown = 0
-    last_symbol = None
-    last_tf = None
+    last_auto_state = app.auto_trade_var.get()
 
     logger.info("🤖 Bot Logic Initialized: Real-Time Signals Active.") 
     
     while app.bot_running:
         try:
-            cycle_start = time.time()
+            now_ts = time.time()
+            curr_auto_state = app.auto_trade_var.get()
+
+            # --- ENGINE STATE TRANSITION LOG ---
+            if curr_auto_state != last_auto_state:
+                if curr_auto_state:
+                    logger.info("⚡ Engine Transition: AUTO-TRADING ENGAGED - Monitoring Markets...")
+                else:
+                    logger.info("🛑 Engine Transition: AUTO-TRADING DISENGAGED - Standing By.")
+                last_auto_state = curr_auto_state
+            
+            # --- HEARTBEAT LOG (Every 60s) ---
+            if heartbeat_limiter.allow("bot_alive"):
+                status = "AUTO-ACTIVE" if curr_auto_state else "PAUSED (Manual Only)"
+                logger.info(f"💓 Bot Heartbeat | Status: {status} | Symbol: {connector.active_symbol} | TF: {connector.active_tf}")
+
+            if not app.auto_trade_var.get():
+                time.sleep(2)
+                continue
+
             symbol = connector.active_symbol
             execution_tf = connector.active_tf
             max_pos_allowed = app.max_pos_var.get()
@@ -88,28 +106,43 @@ def bot_logic(app):
             
             if bid <= 0 or ask <= 0:
                 time.sleep(5); continue
+
+            # --- RISK MANAGEMENT GATEKEEPER ---
+            drawdown = 0
+            if curr_balance > 0:
+                drawdown = ((curr_balance - equity) / curr_balance) * 100
             
-            # --- FIXED NEWS FILTER CALL ---
-            # Correctly handle the single boolean return
+            can_trade, reason = risk.can_trade(drawdown)
+            if not can_trade:
+                if filter_limiter.allow(f"risk_block_{reason[:10]}"):
+                    logger.warning(f"🛡️ Risk Block: {reason}")
+                time.sleep(10); continue
+            
+            # --- NEWS FILTER ---
             is_news_blocked = news.is_high_impact_news_near(symbol)
             if is_news_blocked:
                 if filter_limiter.allow(f"news_block_{symbol}"):
                     logger.warning(f"📰 News Filter Active: Trades blocked for {symbol}")
                 time.sleep(10); continue
 
+            # --- DATA SYNC CHECK ---
+            candles = connector.get_tf_candles(execution_tf, count=500)
+            if not candles or len(candles) < 200:
+                if heartbeat_limiter.allow("waiting_data"):
+                    logger.info(f"⏳ Waiting for adequate candle data... Currently: {len(candles) if candles else 0}/200")
+                time.sleep(5); continue
+
             # --- PRE-TRADE FILTERS ---
             if curr_positions >= max_pos_allowed:
-                time.sleep(10); continue
-
-            candles = connector.get_tf_candles(execution_tf)
-            if not candles or len(candles) < 50:
+                if filter_limiter.allow(f"max_pos_{symbol}"):
+                    logger.info(f"⏸️ Max open positions ({max_pos_allowed}) reached for {symbol}")
                 time.sleep(10); continue
 
             df = pd.DataFrame(candles)
             atr_series = Indicators.calculate_atr(df)
             current_atr = atr_series.iloc[-1] if not atr_series.empty else 0
 
-            # --- ROBUST STRATEGY ANALYSIS ---
+            # --- STRATEGY SCAN ---
             strategy_results = []
             base_strategies = [
                 ("Trend", lambda: trend.analyze_trend_setup(candles)),
@@ -117,14 +150,26 @@ def bot_logic(app):
                 ("Breakout", lambda: breakout.analyze_breakout_setup(candles))
             ]
 
+            signals_this_cycle = []
+            neutral_summaries = []
             for name, strat_func in base_strategies:
                 try:
-                    result = strat_func()
-                    # Defensive check for consistent (action, reason) unpacking
-                    if isinstance(result, (tuple, list)) and len(result) >= 2:
-                        strategy_results.append((name, (result[0], result[1])))
+                    action, reason = strat_func()
+                    strategy_results.append((name, (action, reason)))
+                    if action != "NEUTRAL":
+                        signals_this_cycle.append(f"{name}: {action}")
+                    else:
+                        neutral_summaries.append(f"{name}: {reason[:30]}")
                 except Exception as e:
                     logger.error(f"Strategy {name} failed: {e}")
+
+            # Feedback log for active scanning
+            if signals_this_cycle:
+                logger.info(f"🎯 Signals Detected: {', '.join(signals_this_cycle)}")
+            elif heartbeat_limiter.allow("scanning_feedback"):
+                # Show a condensed summary of why it's neutral
+                summary_str = " | ".join(neutral_summaries)
+                logger.info(f"🔍 Scanning {symbol} ({execution_tf}) | Status: NEUTRAL | {summary_str}")
 
             # --- EXECUTION ---
             trade_executed = False
@@ -135,7 +180,8 @@ def bot_logic(app):
                     dynamic_lot = risk.calculate_lot_size(curr_balance, current_price, sl, symbol, equity)
                     
                     if connector.send_order(action, symbol, dynamic_lot, sl, tp):
-                        logger.info(f"🚀 {action} {symbol} | Strategy: {name} | Reason: {reason}")
+                        logger.info(f"🚀 {action} {symbol} Executed | Strategy: {name} | Reason: {reason} | Lot: {dynamic_lot}")
+                        risk.record_trade()
                         trade_executed = True
                         time.sleep(60); break
 

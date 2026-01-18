@@ -256,7 +256,9 @@ class TradingApp(ttk.Window):
 
     def on_auto_trade_toggle(self):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
-        logging.info(f"Auto-Trading {state}")
+        msg = f"🚀 Auto-Trading {state} - Real-Time Analysis Active" if state == "ENABLED" \
+              else f"⏸️ Auto-Trading {state} - Switching to Manual Mode"
+        logging.getLogger("Main").info(msg)
 
     # FIXED: Enhanced update_symbol – Trigger connector refresh (no immediate refresh call)
     def update_symbol(self, event=None):
@@ -407,21 +409,23 @@ class TradingApp(ttk.Window):
         while len(batch) < max_batch and not self.log_queue.empty():
             try:
                 record = self.log_queue.get_nowait()
-                msg = self.log_formatter(record)
-                full_msg = msg + "\n"  # For comparison
+                raw_msg = record.getMessage()
                 
-                # NEW: Dedup check - skip if identical to recent log within threshold
+                # NEW: Dedup check - skip if identical raw msg within 10s
                 now = time.time()
                 should_log = True
-                for ts, prev_msg in list(self.last_logs):
-                    if now - ts < self.log_suppress_threshold and prev_msg == full_msg:
+                suppress_threshold = 10.0
+                
+                for ts, prev_raw in list(self.last_logs):
+                    if now - ts < suppress_threshold and prev_raw == raw_msg:
                         should_log = False
-                        break  # Suppress duplicate
-                    elif now - ts > self.log_suppress_threshold + 1:  # Prune old entries
-                        self.last_logs.remove((ts, prev_msg))
+                        break
+                    elif now - ts > suppress_threshold + 5:
+                        self.last_logs.remove((ts, prev_raw))
                 
                 if should_log:
-                    self.last_logs.append((now, full_msg))
+                    self.last_logs.append((now, raw_msg))
+                    full_msg = self.log_formatter(record) + "\n"
                     batch.append((full_msg, record.levelname))
             except queue.Empty:
                 break
@@ -465,6 +469,12 @@ class TradingApp(ttk.Window):
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
+            
+            # Update Daily Discipline from RiskManager
+            daily_count = getattr(self.risk, 'daily_trades_count', 0)
+            max_daily = getattr(self.risk, 'max_daily_trades', 5)
+            self.lbl_daily_trades.configure(text=f"{daily_count}/{max_daily} Trades")
+            
             self.last_account_info = current_info  # Cache
 
         # NEW: Check for pending mismatches and log (only if changed)

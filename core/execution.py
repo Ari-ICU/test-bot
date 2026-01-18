@@ -31,11 +31,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             # --- FIXED: SYMBOL LIST PARSING ---
             if 'symbols' in data:
                 # MQL5 sends symbols as a pipe-separated string (e.g., "XAUUSD|EURUSD")
-                sym_list = data['symbols'][0].split('|')
+                sym_list = [s for s in data['symbols'][0].split('|') if s]
                 with self.connector.lock:
-                    # Filter out any empty strings and update available_symbols
-                    self.connector.available_symbols = [s for s in sym_list if s]
-                logger.info(f"✅ Synced {len(self.connector.available_symbols)} symbols from MT5.")
+                    prev_count = len(self.connector.available_symbols)
+                    self.connector.available_symbols = sym_list
+                    if len(sym_list) != prev_count:
+                        logger.info(f"✅ Synced {len(sym_list)} symbols from MT5.")
 
             # Handle Active Symbol/TF Confirmation
             if 'symbol' in data:

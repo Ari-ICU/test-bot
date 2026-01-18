@@ -77,21 +77,35 @@ class NewsFilter:
         
         return "NEUTRAL", "", "NONE", 1.0
 
-# --- FIXED: FUNCTION CALLED BY MAIN.PY ---
+# --- FIXED: CACHING FOR NEWS FILTER ---
+_news_cache = {
+    'last_update': datetime.min,
+    'blocked': False,
+    'expiry': 300  # 5 minutes
+}
+
 def is_high_impact_news_near(symbol):
     """
     Checks if there is high-impact news for the symbol or USD/BTC.
+    Uses a 5-minute cache to prevent spamming RSS feeds.
     """
+    now = datetime.now()
+    if (now - _news_cache['last_update']).total_seconds() < _news_cache['expiry']:
+        return _news_cache['blocked']
+
     try:
         nf = NewsFilter() 
         action, reason, category, risk_mod = nf.get_sentiment_signal(symbol)
         
         # High impact if Fundamental or asset-specific
+        is_blocked = False
         if (category in ["FUNDAMENTAL", detect_asset_type(symbol).upper()]) and action != "NEUTRAL":
             logger.warning(f"High Impact News Detected for {symbol}: {reason}")
-            return True
+            is_blocked = True
             
-        return False
+        _news_cache['last_update'] = now
+        _news_cache['blocked'] = is_blocked
+        return is_blocked
     except Exception as e:
         logger.error(f"Error in news filter wrapper: {e}")
         return False
