@@ -153,19 +153,25 @@ void UpdatePositionsCache() {
     StringFreezer trades_freezer;
 
     for(int i=0; i<total_pos; i++) {
-        if(PositionGetSymbol(i) == _Symbol) {
+        // IMPORTANT: Must select position by ticket/index before accessing properties
+        ulong ticket = PositionGetTicket(i); 
+        if(ticket <= 0) continue;
+        
+        if(PositionGetString(POSITION_SYMBOL) == _Symbol) {
             double vol = PositionGetDouble(POSITION_VOLUME);
             double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
             long type = PositionGetInteger(POSITION_TYPE);
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            
             sum_price_vol += (open_price * vol);
             sum_vol += vol;
+            
             if(type == POSITION_TYPE_BUY) buy_count++;
             else if(type == POSITION_TYPE_SELL) sell_count++;
 
-            // Build active_trades only for this symbol
-            ulong ticket = PositionGetTicket(i);
             string type_str = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-            string trade_line = IntegerToString(ticket) + "," + _Symbol + "," + type_str + "," + DoubleToString(vol, 2) + "," + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2);
+            string trade_line = IntegerToString(ticket) + "," + _Symbol + "," + type_str + "," + DoubleToString(vol, 2) + "," + DoubleToString(profit, 2);
+            
             if(trades_freezer.Len() > 0) trades_freezer.Add("|");
             trades_freezer.Add(trade_line);
         }

@@ -28,6 +28,9 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
             # 2. DATA PROCESSING: Parse incoming data from MT5
             
+            # --- SANITIZE DATA (Strip null bits from strings) ---
+            data = {k: [v[0].replace('\x00', '').strip() if v else ""] for k, v in data.items()}
+
             # --- FIXED: SYMBOL LIST PARSING ---
             if 'symbols' in data:
                 # MQL5 sends symbols as a pipe-separated string (e.g., "XAUUSD|EURUSD")
@@ -100,7 +103,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     self.connector._open_positions = parsed_trades
 
         except Exception as e:
-            logger.error(f"Critical do_POST Error: {e}")
+            logger.error(f"Critical do_POST Error: {e} | Raw Data Sample: {str(data)[:100]}")
 
     def log_message(self, format, *args): pass
 

@@ -140,7 +140,7 @@ def bot_logic(app):
             # --- PRE-TRADE FILTERS ---
             if curr_positions >= max_pos_allowed:
                 if filter_limiter.allow(f"max_pos_{symbol}"):
-                    logger.info(f"⏸️ Max open positions ({max_pos_allowed}) reached for {symbol}")
+                    logger.info(f"⏸️ Max open positions ({max_pos_allowed}) reached for SYMBOL: {symbol}. Trading paused for this symbol.")
                 time.sleep(10); continue
 
             df = pd.DataFrame(candles)
@@ -274,13 +274,21 @@ def main():
 
     risk = RiskManager(conf.data)
     
-    # Sync initial trade count with existing positions
-    time.sleep(2) # Give connector a moment to fetch initial account info
+    # Sync initial trade count with existing positions (wait for first poll)
+    logger.info("📡 Syncing Initial Account State...")
+    for _ in range(10): # Wait up to 10s
+        current_pos = connector.account_info.get('total_count', 0)
+        if current_pos > 0 or connector.server: # Found data or at least connection
+            break
+        time.sleep(1)
+    
     current_pos = connector.account_info.get('total_count', 0)
     if current_pos > 0:
         for _ in range(current_pos):
             risk.record_trade()
-        logger.info(f"📋 Risk Sync: Detected {current_pos} existing positions. Daily Discipline updated.")
+        logger.info(f"📋 Risk Sync: Detected {current_pos} existing positions on {connector.active_symbol}. Daily Discipline updated.")
+    else:
+        logger.info("📋 Risk Sync: No active positions detected.")
 
     telegram_bot.set_risk_manager(risk)
     
