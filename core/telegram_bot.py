@@ -79,6 +79,18 @@ class TelegramLogHandler(logging.Handler):
             elif "SL Hit" in msg or "Loss" in msg:
                 emoji = "🛑"
                 header = "STOP LOSS"
+            elif "Signals Detected" in msg:
+                emoji = "🎯"
+                header = "SIGNAL DETECTED"
+            elif "Executed" in msg:
+                emoji = "🚀"
+                header = "TRADE OPENED"
+            elif "Engine Transition" in msg:
+                emoji = "⚡"
+                header = "ENGINE STATUS"
+            elif "Heartbeat" in msg:
+                emoji = "💓"
+                header = "SYSTEM ALIVE"
             elif "EXECUTING" in msg or "Order Sent" in msg:
                 emoji = "🚀"
                 header = "NEW TRADE"
@@ -91,7 +103,7 @@ class TelegramLogHandler(logging.Handler):
             elif record.levelno == logging.WARNING:
                 emoji = "⚠️"
                 header = "WARNING"
-            elif "Bot logic initialized" in msg or "Connector started" in msg:
+            elif "STARTED" in msg or "Launched" in msg:
                 emoji = "✅"
                 header = "SYSTEM"
             else:

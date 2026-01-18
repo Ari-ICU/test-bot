@@ -8,7 +8,7 @@ from bot_settings import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager
 from core.session import get_detailed_session_status, is_silver_bullet
-from core.telegram_bot import TelegramBot
+from core.telegram_bot import TelegramBot, TelegramLogHandler
 from ui import TradingApp
 import strategy.trend_following as trend
 import strategy.ict_silver_bullet as ict_strat
@@ -249,6 +249,11 @@ def main():
         connector=connector
     )
     connector.set_telegram(telegram_bot)
+    
+    # ADDED: Send all main logs to Telegram
+    tg_handler = TelegramLogHandler(telegram_bot)
+    tg_handler.setLevel(logging.INFO)
+    logger.addHandler(tg_handler)
 
     if not connector.start(): 
         logger.error("❌ Connector Startup Failed.")
