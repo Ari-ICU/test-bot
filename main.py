@@ -15,6 +15,7 @@ import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
 import strategy.breakout as breakout
 import strategy.tbs_turtle as tbs_strat
+import strategy.reversal as reversal_strat
 import filters.volatility as volatility
 import filters.spread as spread
 import filters.news as news
@@ -139,15 +140,44 @@ def bot_logic(app):
                 time.sleep(10); continue
 
             df = pd.DataFrame(candles)
+            
+            # --- CONSOLIDATED COMPUTATION (SINGLE-COMPUTE) ---
+            # 1. Indicators
+            df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
+            df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
+            df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
+            df['adx'] = Indicators.calculate_adx(df)
+            
+            st_res = Indicators.calculate_supertrend(df)
+            df['supertrend'] = st_res[0] if isinstance(st_res, (tuple, list)) else pd.Series([False]*len(df))
+            
+            macd_res = Indicators.calculate_macd(df['close'])
+            if isinstance(macd_res, (tuple, list)) and len(macd_res) >= 3:
+                df['macd'], df['macd_signal'], df['macd_hist'] = macd_res
+            
+            bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'])
+            df['upper_bb'], df['lower_bb'] = bb_upper, bb_lower
+            df['is_squeezing'] = Indicators.is_bollinger_squeeze(df)
+            
+            stoch_k, stoch_d = Indicators.calculate_stoch(df)
+            df['stoch_k'], df['stoch_d'] = stoch_k, stoch_d
+            
             atr_series = Indicators.calculate_atr(df)
             current_atr = atr_series.iloc[-1] if not atr_series.empty else 0
+
+            # 2. Patterns (Computed once per cycle)
+            from core.patterns import detect_patterns
+            patterns = detect_patterns(candles, df=df)
 
             # --- STRATEGY SCAN ---
             strategy_results = []
             base_strategies = [
-                ("Trend", lambda: trend.analyze_trend_setup(candles)),
-                ("Scalp", lambda: scalping.analyze_scalping_setup(candles)),
-                ("Breakout", lambda: breakout.analyze_breakout_setup(candles))
+                ("Trend", lambda: trend.analyze_trend_setup(candles, df=df, patterns=patterns)),
+                ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df=df)),
+                ("Breakout", lambda: breakout.analyze_breakout_setup(candles, df=df)),
+                ("ICT_SB", lambda: ict_strat.analyze_ict_setup(candles, df=df, patterns=patterns)),
+                ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df=df, patterns=patterns)),
+                ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
 
             signals_this_cycle = []
@@ -163,19 +193,19 @@ def bot_logic(app):
                     if action != "NEUTRAL":
                         color = "success" if action == "BUY" else "danger"
                         signals_this_cycle.append(f"{name}: {action}")
-                    elif "Trend:" in reason or "Confluence" in reason or "Consolidating" in reason:
+                    elif reason and any(k in reason for k in ["Trend:", "Confluence", "Consolidating", "Outside", "No Pattern"]):
                         color = "warning"
                     
                     def update_ui(n=name, a=action, r=reason, c=color):
                         if n in app.strat_ui_items:
                             app.strat_ui_items[n]["status"].configure(text=a, bootstyle=f"{c}")
-                            # Trim reason for UI
                             display_reason = r.replace(f"{n}:", "").strip()
+                            if not display_reason: display_reason = "Scanning..."
                             app.strat_ui_items[n]["reason"].configure(text=display_reason[:40])
                     
                     app.after(0, update_ui)
 
-                    if action == "NEUTRAL":
+                    if action == "NEUTRAL" and reason:
                         neutral_summaries.append(f"{name}: {reason[:30]}")
 
                 except Exception as e:

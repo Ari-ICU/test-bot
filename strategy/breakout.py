@@ -1,10 +1,10 @@
 import pandas as pd
 from core.indicators import Indicators
 
-def analyze_breakout_setup(candles):
-    if not candles or len(candles) < 20: return "NEUTRAL", ""
-    
-    df = pd.DataFrame(candles)
+def analyze_breakout_setup(candles, df=None):
+    if df is None:
+        if not candles or len(candles) < 20: return "NEUTRAL", "Insufficient data"
+        df = pd.DataFrame(candles)
     
     # Donchian Channels (20-period High/Low)
     high_20 = df['high'].rolling(window=20).max()

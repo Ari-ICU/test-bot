@@ -5,26 +5,30 @@ from core.patterns import detect_patterns
 
 logger = logging.getLogger(__name__)
 
-def analyze_reversal_setup(candles, rsi_threshold=30, bb_period=20):
-    if not candles or len(candles) < 30: 
-        return "NEUTRAL", "Insufficient data (<30 candles)"
-    
-    df = pd.DataFrame(candles)
+def analyze_reversal_setup(candles, df=None, patterns=None, bb_period=20):
+    if df is None:
+        if not candles or len(candles) < 30: 
+            return "NEUTRAL", "Insufficient data (<30 candles)"
+        df = pd.DataFrame(candles)
     
     try:
-        # Calculate RSI & Bollinger Bands
-        df['rsi'] = Indicators.calculate_rsi(df['close'])
-        df['sma'] = Indicators.calculate_sma(df['close'], bb_period)
-        std = df['close'].rolling(window=bb_period).std()
-        df['upper_bb'] = df['sma'] + (std * 2)
-        df['lower_bb'] = df['sma'] - (std * 2)
+        # 1. Reuse or Calculate RSI & Bollinger Bands
+        if 'rsi' not in df:
+            df['rsi'] = Indicators.calculate_rsi(df['close'])
         
-        df = df.dropna()
-        if len(df) < 1:
+        if 'upper_bb' not in df:
+            bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'], bb_period)
+            df['upper_bb'], df['lower_bb'] = bb_upper, bb_lower
+        
+        # Drop NaN safely
+        df_clean = df.dropna(subset=['rsi', 'lower_bb', 'upper_bb'])
+        if len(df_clean) < 1:
             return "NEUTRAL", "No valid data after NaN drop"
         
-        curr = df.iloc[-1]
-        patterns = detect_patterns(candles)
+        curr = df_clean.iloc[-1]
+        
+        if patterns is None:
+            patterns = detect_patterns(candles, df=df)
         
         if pd.isna(curr['rsi']) or pd.isna(curr['lower_bb']):
             return "NEUTRAL", "NaN in indicators"

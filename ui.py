@@ -132,7 +132,14 @@ class TradingApp(ttk.Window):
         strategy_monitor_inner.pack(fill=BOTH, expand=YES, padx=10, pady=10)
        
         self.strat_ui_items = {}
-        strat_list = [("Trend", "Trend Following"), ("Scalp", "M5 Scalper"), ("Breakout", "Breakout Engine")]
+        strat_list = [
+            ("Trend", "Trend Following"), 
+            ("Scalp", "M5 Scalper"), 
+            ("Breakout", "Breakout Engine"), 
+            ("ICT_SB", "ICT Silver Bullet"), 
+            ("TBS_Turtle", "TBS Turtle"), 
+            ("Reversal", "Reversal Engine")
+        ]
         for key, name in strat_list:
             f = ttk.Frame(strategy_monitor_inner)
             f.pack(side=LEFT, expand=YES)

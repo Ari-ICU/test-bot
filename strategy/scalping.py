@@ -4,40 +4,31 @@ from core.indicators import Indicators
 
 logger = logging.getLogger(__name__)
 
-def analyze_scalping_setup(candles):
+def analyze_scalping_setup(candles, df=None):
     """
     Optimized M1/M5 Scalping Strategy:
     1. Trend: Price relative to EMA 50.
     2. Momentum: RSI (14) expanded zones for better frequency.
     3. Trigger: Stochastic Cross with buffer logic.
     """
-    if not candles or len(candles) < 50:
-        return "NEUTRAL", "Insufficient data (<50 candles)"
+    if df is None:
+        if not candles or len(candles) < 50:
+            return "NEUTRAL", "Insufficient data (<50 candles)"
+        df = pd.DataFrame(candles)
 
-    df = pd.DataFrame(candles)
-    
     try:
-        # 1. Calculate Indicators using the Indicators class
-        df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
-        df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
+        # Check for pre-calculated indicators or calculate them
+        if 'ema_50' not in df:
+            df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
+        if 'rsi' not in df:
+            df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
         
-        # FIXED: Robust unpack for Stochastic (handle if returns >2, e.g., %K, %D, slow%D)
-        stoch_result = Indicators.calculate_stoch(df)
-        if isinstance(stoch_result, (tuple, list)):
-            if len(stoch_result) < 2:
-                logger.debug("⚠️ Stochastic returned <2 values; padding with NaN")
-                stoch_k, stoch_d = pd.Series([None]*len(df)), pd.Series([None]*len(df))
+        if 'stoch_k' not in df:
+            stoch_result = Indicators.calculate_stoch(df)
+            if isinstance(stoch_result, (tuple, list)) and len(stoch_result) >= 2:
+                df['stoch_k'], df['stoch_d'] = stoch_result[0], stoch_result[1]
             else:
-                stoch_k = stoch_result[0]
-                stoch_d = stoch_result[1]
-                if len(stoch_result) > 2:
-                    logger.debug(f"⚠️ Stochastic returned {len(stoch_result)} values; truncated to 2")
-        else:
-            logger.warning("⚠️ Stochastic returned non-iterable; fallback to NEUTRAL")
-            return "NEUTRAL", "Stochastic calc failed"
-        
-        df['stoch_k'] = stoch_k
-        df['stoch_d'] = stoch_d
+                return "NEUTRAL", "Stochastic calc failed"
         
         # Drop rows with NaN (edge case for short data)
         df = df.dropna()

@@ -1,12 +1,14 @@
 import pandas as pd
 
-def detect_patterns(candles):
+def detect_patterns(candles, df=None):
     """
     Analyzes candlestick data for advanced patterns.
     Returns a dictionary of boolean signals.
     """
-    df = pd.DataFrame(candles)
-    if len(df) < 30: return {} # Increased history requirement
+    if df is None:
+        df = pd.DataFrame(candles)
+    
+    if len(df) < 30: return {}
 
     c = df.iloc[-1]   # Current candle
     p1 = df.iloc[-2]  # Previous

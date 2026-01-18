@@ -5,7 +5,7 @@ from core.patterns import detect_patterns
 
 logger = logging.getLogger(__name__)
 
-def analyze_trend_setup(candles):
+def analyze_trend_setup(candles, df=None, patterns=None):
     """
     Advanced Trend Strategy (Confluence):
     1. Trend: Price > EMA200 + SuperTrend Green.
@@ -13,38 +13,30 @@ def analyze_trend_setup(candles):
     3. Strength: ADX > 25.
     4. Trigger: Pattern (Flag, FVG, Demand, Engulfing).
     """
-    if not candles or len(candles) < 50:
-        return "NEUTRAL", "Insufficient data (<50 candles)"
-
-    df = pd.DataFrame(candles)
+    if df is None:
+        if not candles or len(candles) < 50:
+            return "NEUTRAL", "Insufficient data (<50 candles)"
+        df = pd.DataFrame(candles)
     
     try:
-        # 1. Calculate Indicators
-        df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
-        df['adx'] = Indicators.calculate_adx(df)
+        # Calculate Indicators only if not present
+        if 'ema_200' not in df:
+            df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
+        if 'adx' not in df:
+            df['adx'] = Indicators.calculate_adx(df)
         
-        # FIXED: Robust unpack for SuperTrend (expect 3: supertrend, dir, atr?)
-        st_result = Indicators.calculate_supertrend(df)
-        if isinstance(st_result, (tuple, list)) and len(st_result) >= 1:
-            df['supertrend'] = st_result[0]
-            if len(st_result) > 3:
-                logger.debug(f"⚠️ SuperTrend returned {len(st_result)} values; truncated to 3")
-                st_result = st_result[:3]
-        else:
-            logger.warning("⚠️ SuperTrend invalid; fallback")
-            df['supertrend'] = pd.Series([False]*len(df))
+        # SuperTrend
+        if 'supertrend' not in df:
+            st_result = Indicators.calculate_supertrend(df)
+            df['supertrend'] = st_result[0] if isinstance(st_result, (tuple, list)) else pd.Series([False]*len(df))
         
-        # FIXED: Robust unpack for MACD (expect 3: macd, signal, hist?)
-        macd_result = Indicators.calculate_macd(df['close'])
-        if isinstance(macd_result, (tuple, list)) and len(macd_result) >= 2:
-            df['macd'] = macd_result[0]
-            df['macd_signal'] = macd_result[1]
-            if len(macd_result) > 3:
-                logger.debug(f"⚠️ MACD returned {len(macd_result)} values; truncated to 3")
-                macd_result = macd_result[:3]
-        else:
-            logger.warning("⚠️ MACD invalid; fallback")
-            df['macd'] = df['macd_signal'] = pd.Series([0]*len(df))
+        # MACD
+        if 'macd' not in df:
+            macd_res = Indicators.calculate_macd(df['close'])
+            if isinstance(macd_res, (tuple, list)) and len(macd_res) >= 2:
+                df['macd'], df['macd_signal'] = macd_res[0], macd_res[1]
+            else:
+                df['macd'] = df['macd_signal'] = pd.Series([0]*len(df))
         
         # Drop NaN rows
         df = df.dropna()
@@ -52,7 +44,10 @@ def analyze_trend_setup(candles):
             return "NEUTRAL", "No valid data after NaN drop"
         
         current = df.iloc[-1]
-        patterns = detect_patterns(candles)
+        
+        if patterns is None:
+            from core.patterns import detect_patterns
+            patterns = detect_patterns(candles, df=df)
         
         signal = "NEUTRAL"
         reasons = []
