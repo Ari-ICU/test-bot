@@ -97,7 +97,9 @@ def bot_logic(app):
 
             symbol = connector.active_symbol
             execution_tf = connector.active_tf
+            # --- ACCOUNT HEALTH ---
             max_pos_allowed = app.max_pos_var.get()
+            ui_lot_size = app.lot_var.get()
 
             info = connector.account_info
             bid, ask = info.get('bid', 0.0), info.get('ask', 0.0)
@@ -158,11 +160,10 @@ def bot_logic(app):
                 df['macd'], df['macd_signal'], df['macd_hist'] = macd_res
             
             bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'])
-            df['upper_bb'], df['lower_bb'] = bb_upper, bb_lower
-            df['is_squeezing'] = Indicators.is_bollinger_squeeze(df)
-            
             stoch_k, stoch_d = Indicators.calculate_stoch(df)
+            df['upper_bb'], df['lower_bb'] = bb_upper, bb_lower
             df['stoch_k'], df['stoch_d'] = stoch_k, stoch_d
+            df['is_squeezing'] = Indicators.is_bollinger_squeeze(df)
             
             atr_series = Indicators.calculate_atr(df)
             current_atr = atr_series.iloc[-1] if not atr_series.empty else 0
@@ -192,9 +193,9 @@ def bot_logic(app):
             signals_this_cycle = []
             neutral_summaries = []
             
-            for name, strat_func in base_strategies:
+            for name, engine in base_strategies:
                 try:
-                    action, reason = strat_func()
+                    action, reason = engine()
                     strategy_results.append((name, (action, reason)))
                     
                     # --- SYNC TO UI ---
@@ -233,10 +234,12 @@ def bot_logic(app):
                 if action != "NEUTRAL" and not trade_executed:
                     current_price = ask if action == "BUY" else bid
                     sl, tp = risk.calculate_sl_tp(current_price, action, current_atr, symbol)
-                    dynamic_lot = risk.calculate_lot_size(curr_balance, current_price, sl, symbol, equity)
                     
-                    if connector.send_order(action, symbol, dynamic_lot, sl, tp):
-                        logger.info(f"🚀 {action} {symbol} Executed | Strategy: {name} | Reason: {reason} | Lot: {dynamic_lot}")
+                    # PRIORITY: Respect the UI Lot size requested by the user
+                    final_lot = ui_lot_size 
+                    
+                    if connector.send_order(action, symbol, final_lot, sl, tp):
+                        logger.info(f"🚀 {action} {symbol} Executed | Strategy: {name} | Reason: {reason} | Lot: {final_lot}")
                         risk.record_trade()
                         trade_executed = True
                         time.sleep(60); break
