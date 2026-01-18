@@ -249,6 +249,7 @@ def main():
         connector=connector
     )
     connector.set_telegram(telegram_bot)
+    telegram_bot.start_polling() # Enable command listening
     
     # ADDED: Send all main logs to Telegram
     tg_handler = TelegramLogHandler(telegram_bot)

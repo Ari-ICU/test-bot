@@ -1,6 +1,8 @@
 import requests
 import logging
 import json
+import threading
+import time
 
 # Define a logger specifically for Telegram-related errors
 logger = logging.getLogger("Telegram")
@@ -10,8 +12,32 @@ class TelegramBot:
         self.token = token
         self.chat_id = authorized_chat_id
         self.connector = connector
-        self.risk_manager = None # Will be set by main
+        self.risk_manager = None
         self.api_url = f"https://api.telegram.org/bot{token}"
+        self.last_update_id = 0
+        self.is_polling = False
+
+    def start_polling(self):
+        """Starts a background thread to poll for commands"""
+        if not self.token or self.is_polling: return
+        self.is_polling = True
+        threading.Thread(target=self._polling_loop, daemon=True).start()
+        logger.info("📡 Telegram Command Polling Started.")
+
+    def _polling_loop(self):
+        while self.is_polling:
+            try:
+                url = f"{self.api_url}/getUpdates"
+                params = {"offset": self.last_update_id + 1, "timeout": 30}
+                resp = requests.get(url, params=params, timeout=35).json()
+                
+                if resp.get("ok"):
+                    for update in resp.get("result", []):
+                        self.last_update_id = update["update_id"]
+                        self.process_webhook_update(update)
+            except Exception as e:
+                time.sleep(5) # Error backoff
+            time.sleep(1)
 
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
