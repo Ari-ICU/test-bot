@@ -229,14 +229,21 @@ def bot_logic(app):
                     if action != "NEUTRAL":
                         color = "success" if action == "BUY" else "danger"
                         signals_this_cycle.append(f"{name}: {action}")
-                    elif reason and any(k in reason for k in ["Trend:", "Confluence", "Consolidating", "Outside", "No Pattern"]):
+                    elif isinstance(reason, str) and any(k in reason for k in ["Trend:", "Confluence", "Consolidating", "Outside", "No Pattern"]):
                         color = "warning"
                     
                     def update_ui(n=name, a=action, r=reason, c=color):
                         if n in app.strat_ui_items:
                             app.strat_ui_items[n]["status"].configure(text=a, bootstyle=f"{c}")
-                            display_reason = r.replace(f"{n}:", "").strip()
-                            if not display_reason: display_reason = "Scanning..."
+                            
+                            # Handle different reason types (String vs Confidence Float)
+                            if isinstance(r, (int, float)):
+                                display_reason = f"Confidence: {r*100:.1f}%"
+                            else:
+                                display_reason = str(r).replace(f"{n}:", "").strip()
+                            
+                            if not display_reason or display_reason == "0.0%": 
+                                display_reason = "Scanning..."
                             app.strat_ui_items[n]["reason"].configure(text=display_reason[:40])
                     
                     app.after(0, update_ui)
