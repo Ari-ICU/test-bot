@@ -1,4 +1,4 @@
-# ui.py (Fully Fixed: All Optimizations, Dedup, Smooth Trades, No Loops)
+# ui.py 
 import time
 import queue
 import logging
