@@ -69,29 +69,34 @@ class AIPredictor:
 
         # Get Prediction and Probability
         try:
-            # Flatten to 1D array if needed
+            # 1. Get raw prediction
             preds = self.model.predict(features)
-            prediction = preds[0] if hasattr(preds, "__len__") else preds
+            # Extract scalar prediction (handles both array-like and scalar outputs)
+            prediction = preds[0] if hasattr(preds, "__iter__") else preds
             
+            # 2. Get probabilities
             probs = self.model.predict_proba(features)
-            probabilities = probs[0] if len(probs.shape) > 1 else probs
+            # Flatten to 1D to safely handle (1, n_classes) or (n_classes,) shapes
+            probs_flat = np.array(probs).flatten()
             
-            # Find the index of the predicted class in the model's classes
-            class_list = list(self.model.classes_)
-            if prediction in class_list:
-                class_idx = class_list.index(prediction)
-                confidence = probabilities[class_idx]
+            # 3. Safely find the index of the predicted class
+            classes = list(self.model.classes_)
+            if prediction in classes:
+                idx = classes.index(prediction)
+                # Safely extract confidence from the flattened array
+                confidence = float(probs_flat[idx]) if idx < len(probs_flat) else 0.0
             else:
                 confidence = 0.0
 
+            # 4. Map to trade action
             mapping = {1: "BUY", -1: "SELL", 0: "NEUTRAL"}
             action = mapping.get(prediction, "NEUTRAL")
             
-            # Only return signal if confidence is high (e.g., > 60%)
+            # Filter by confidence (min 60% threshold)
             if confidence < 0.60:
-                return "NEUTRAL", float(confidence)
+                return "NEUTRAL", confidence
                 
-            return action, float(confidence)
+            return action, confidence
         except Exception as e:
             logger.error(f"AI Prediction error: {e}")
             return "NEUTRAL", 0.0
