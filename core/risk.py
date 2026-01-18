@@ -77,15 +77,21 @@ class RiskManager:
         logger.info(f"Calculated lot: {final_lot} for {symbol} (type: {asset_type}, risk: ${risk_amount:.2f})")
         return min(final_lot, self.max_lot) 
 
-    def calculate_sl_tp(self, price, action, atr, symbol, digits=5, risk_reward_ratio=1.5):  # Increased RR for crypto
+    def calculate_sl_tp(self, price, action, atr, symbol, digits=5, risk_reward_ratio=1.5, timeframe="M5"):
         """
         Dynamic SL/TP: Tighter for forex, wider for crypto volatility.
+        NEW: Adjusted for M1 timeframe to allow tighter scalping stops.
         """
         asset_type = detect_asset_type(symbol)
         atr_mult = self.config.get('scalping', {}).get(f"{asset_type}_atr_multiplier", 1.0)
         volatility = atr * atr_mult if (atr and atr > 0) else price * 0.001  # 0.1% buffer
         
-        min_dist = price * 0.0005 if asset_type == "forex" else price * 0.005  # Wider for crypto
+        # M1 Specific: Allow much tighter stops for fast scalping
+        if timeframe == "M1":
+            min_dist = price * 0.0002 if asset_type == "forex" else price * 0.002
+        else:
+            min_dist = price * 0.0005 if asset_type == "forex" else price * 0.005 
+            
         sl_dist = max(volatility * 1.5, min_dist)  # Snug SL
         tp_dist = sl_dist * risk_reward_ratio  # Balanced RR
         
@@ -104,5 +110,5 @@ class RiskManager:
             if sl >= price: sl = price - min_dist
             if tp <= price: tp = price + min_dist
 
-        logger.info(f"SL/TP for {symbol} ({asset_type}): SL={sl:.{digits}f}, TP={tp:.{digits}f}")
+        logger.info(f"SL/TP for {symbol} ({asset_type}) on {timeframe}: SL={sl:.{digits}f}, TP={tp:.{digits}f}")
         return round(sl, digits), round(tp, digits)

@@ -269,7 +269,7 @@ def bot_logic(app):
             for name, (action, reason) in strategy_results:
                 if action != "NEUTRAL" and not trade_executed:
                     current_price = ask if action == "BUY" else bid
-                    sl, tp = risk.calculate_sl_tp(current_price, action, current_atr, symbol)
+                    sl, tp = risk.calculate_sl_tp(current_price, action, current_atr, symbol, timeframe=execution_tf)
                     
                     # PRIORITY: Respect the UI Lot size requested by the user
                     final_lot = ui_lot_size 
@@ -278,7 +278,7 @@ def bot_logic(app):
                         logger.info(f"🚀 {action} {symbol} Executed | Strategy: {name} | Reason: {reason} | Lot: {final_lot}")
                         risk.record_trade()
                         trade_executed = True
-                        time.sleep(60); break
+                        time.sleep(5); break # Reduced from 60s to 5s for M1 responsiveness
 
             time.sleep(2)
                 
