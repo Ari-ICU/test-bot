@@ -86,8 +86,9 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                     self.connector.tf_data[tf_key] = parsed
 
             # Handle M1 Specific Candles (always sent for profit protection)
+            # Only update if the main chart is NOT M1 (to avoid wiping history)
             m1_raw = data.get('m1_candles', [''])[0]
-            if m1_raw:
+            if m1_raw and tf_key != "M1":
                 parsed_m1 = []
                 for c in m1_raw.split('|'):
                     parts = c.split(',')
@@ -98,7 +99,6 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                             'time': int(parts[4])
                         })
                 with self.connector.lock:
-                    # Merge or update M1 data (simple overwrite for last few bars is fine)
                     self.connector.tf_data["M1"] = parsed_m1
 
             if 'active_trades' in data:
