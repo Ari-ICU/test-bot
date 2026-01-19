@@ -70,18 +70,16 @@ class TradingApp(ttk.Window):
         self.after(0, self.toggle_bot)  # Immediate start, no delay
 
     def _setup_logging(self):
-        # 1. Get the ROOT logger to capture signals from EVERY file
+        # Cooperate with main.py - do NOT clear root handlers so terminal logging stays alive
         root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)  # Consider WARNING for production to reduce volume
-        # 2. CLEAR existing handlers to prevent UI freezing or duplicate logs
-        if root_logger.hasHandlers():
-            root_logger.handlers.clear()
-        # 3. Re-attach the QueueHandler
-        queue_handler = QueueHandler(self.log_queue)
-        formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S')
-        queue_handler.setFormatter(formatter)
-       
-        root_logger.addHandler(queue_handler)
+        root_logger.setLevel(logging.INFO)
+        
+        # Only add QueueHandler if not already present
+        if not any(isinstance(h, QueueHandler) for h in root_logger.handlers):
+            queue_handler = QueueHandler(self.log_queue)
+            formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S')
+            queue_handler.setFormatter(formatter)
+            root_logger.addHandler(queue_handler)
 
     def _build_ui(self):
         header = ttk.Frame(self)
@@ -256,8 +254,8 @@ class TradingApp(ttk.Window):
         cool_row = ttk.Frame(conf_frame)
         cool_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(cool_row, text="Cool-off (sec):", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Spinbox(cool_row, from_=0, to=300, textvariable=self.cool_off_var, width=10).pack(fill=X, pady=2)
-
+        self.cool_spin = ttk.Spinbox(cool_row, from_=0, to=300, textvariable=self.cool_off_var, width=10)
+        self.cool_spin.pack(fill=X, pady=2)
     def _build_console_tab(self):
         # Console Setup with ScrolledText
         console_frame = ttk.Frame(self.tab_console)
@@ -468,17 +466,16 @@ class TradingApp(ttk.Window):
                 break
         
         if batch:
-            # Update Main Console
+            # 1. Update Detailed Console (Tab)
             self.log_area.text.configure(state='normal')
             for msg, tag in batch:
                 self.log_area.text.insert(tk.END, msg, tag)
             self.log_area.text.see(tk.END)
             
-            # NEW: Truncate Main Console to keep it light (max 500 lines)
+            # Truncate detailed console (max 500 lines)
             current_lines = int(self.log_area.text.index('end-1c').split('.')[0])
             if current_lines > 500:
                 self.log_area.text.delete('1.0', f'{current_lines-500}.0')
-                
             self.log_area.text.configure(state='disabled')
         
         self.after(200, self._start_log_polling)  # Slower poll: reduces CPU, still responsive

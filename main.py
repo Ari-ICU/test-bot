@@ -82,12 +82,15 @@ def manage_m1_secure_profit(connector, risk, logger):
 
 # --- Enhanced Logger Setup ---
 def setup_logger():
-    logger = logging.getLogger("Main")
-    if logger.hasHandlers():
-        logger.handlers.clear()
+    import sys
+    # Use the ROOT logger to capture logs from all modules (predictor, risk, etc.)
+    root_logger = logging.getLogger()
     
-    logger.setLevel(logging.INFO)
-    logger.propagate = True
+    # Clear existing handlers to prevent duplicates
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+    
+    root_logger.setLevel(logging.INFO)
 
     class CustomFormatter(logging.Formatter):
         format_str = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -95,16 +98,20 @@ def setup_logger():
             formatter = logging.Formatter(self.format_str, datefmt="%H:%M:%S")
             return formatter.format(record)
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(CustomFormatter())
-    logger.addHandler(handler)
+    # Stream Handler (Forced to STDOUT for terminal visibility)
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(CustomFormatter())
+    root_logger.addHandler(stdout_handler)
 
-    # ADDED: File Handler for persistent bot activity log
+    # File Handler (Persistent Log)
     file_handler = logging.FileHandler("bot_activity.log", encoding='utf-8')
     file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"))
-    logger.addHandler(file_handler)
+    root_logger.addHandler(file_handler)
     
-    return logger
+    print("📢 Terminal Logger Initialized (Level: INFO)")
+    sys.stdout.flush()
+    
+    return logging.getLogger("Main")
 
 class RateLimiter:
     def __init__(self, window=30, max_per_window=3):

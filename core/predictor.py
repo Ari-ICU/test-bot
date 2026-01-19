@@ -36,19 +36,32 @@ class AIPredictor:
         if self.model is not None and self.current_asset_type == asset_type and self.current_style == style:
             return
 
-        model_path = self._get_model_path(asset_type, style)
-        if os.path.exists(model_path):
+        # 1. Try Specific Model (e.g. trading_model_forex_scalp.joblib)
+        specific_path = self._get_model_path(asset_type, style)
+        # 2. Try Style-only Model (e.g. trading_model_scalp.joblib)
+        style_path = os.path.join(self.model_dir, f"trading_model_{style}.joblib")
+        # 3. Try Legacy/Generic Model (trading_model.joblib)
+        generic_path = os.path.join(self.model_dir, "trading_model.joblib")
+
+        model_path = None
+        for path in [specific_path, style_path, generic_path]:
+            if os.path.exists(path):
+                model_path = path
+                break
+
+        if model_path:
             try:
                 self.model = joblib.load(model_path)
                 self.current_asset_type = asset_type
                 self.current_style = style
-                logger.info(f"✅ AI Model loaded: {asset_type} | {style} from {model_path}")
+                # Use logging.getLogger("Main") to ensure it goes to the primary log file
+                logging.getLogger("Main").info(f"✅ AI Model loaded: {asset_type} | {style} (using {os.path.basename(model_path)})")
             except Exception as e:
-                logger.error(f"❌ Failed to load model for {asset_type}/{style}: {e}")
+                logging.getLogger("Main").error(f"❌ Failed to load model from {model_path}: {e}")
                 self.model = None
         else:
             # Fallback to generic if specific not found
-            logger.warning(f"⚠️ No AI Model found for {asset_type}/{style}. Predictions will be NEUTRAL.")
+            logging.getLogger("Main").warning(f"⚠️ No AI Model found for {asset_type}/{style}. Checked: {[specific_path, style_path, generic_path]}")
             self.model = None
 
     def prepare_features(self, df):
@@ -93,6 +106,17 @@ class AIPredictor:
             return "NEUTRAL", 0.0
 
         try:
+            # DYNAMIC FEATURE MATCHING: 
+            # If the model has 'feature_names_in_', use only those.
+            # This handles models trained on different versions of the code.
+            if hasattr(self.model, "feature_names_in_"):
+                expected_features = list(self.model.feature_names_in_)
+                # Ensure all expected features exist in our prepared dataframe
+                for col in expected_features:
+                    if col not in features.columns:
+                        features[col] = 0.0
+                features = features[expected_features]
+            
             preds = self.model.predict(features)
             prediction = preds[0] if hasattr(preds, "__iter__") else preds
             
@@ -116,7 +140,16 @@ class AIPredictor:
                 
             return action, confidence
         except Exception as e:
-            logger.error(f"AI Prediction error: {e}")
+            # If a feature error still occurs, attempt a final fallback by stripping 'supertrend_active'
+            if "feature names" in str(e).lower() and "supertrend_active" in features.columns:
+                try:
+                    legacy_features = features.drop(columns=['supertrend_active'])
+                    preds = self.model.predict(legacy_features)
+                    # ... (rest of logic for fallback if we really wanted to be robust, 
+                    # but feature_names_in_ check above is the standard way)
+                except: pass
+            
+            logging.getLogger("Main").error(f"AI Prediction error: {e}")
             return "NEUTRAL", 0.0
 
     def train_model(self, historical_df, asset_type="forex", style="scalp"):
