@@ -214,8 +214,11 @@ def bot_logic(app):
             if heartbeat_limiter.allow("market_diagnostics"):
                 logger.info(f"📊 Market Health | Symbol: {symbol} | ADX: {curr_adx:.1f} | RSI: {curr_rsi:.1f}")
 
+            asset_type = detect_asset_type(symbol)
+            selected_style = app.style_var.get()
+            
             base_strategies = [
-                ("AI_Predict", lambda: ai_predictor.predict(df)),
+                ("AI_Predict", lambda: ai_predictor.predict(df, asset_type=asset_type, style=selected_style)),
                 ("Trend", lambda: trend.analyze_trend_setup(candles, df=df, patterns=patterns)),
                 ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df=df)),
                 ("Breakout", lambda: breakout.analyze_breakout_setup(candles, df=df)),

@@ -37,6 +37,7 @@ class TradingApp(ttk.Window):
         self.lot_var = tk.DoubleVar(value=0.01)
         self.symbol_var = tk.StringVar(value="XAUUSDm")
         self.tf_var = tk.StringVar(value="M5") # Added for Timeframe control
+        self.style_var = tk.StringVar(value="scalp") # NEW: AI Style control (scalp/swing)
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=5)
        
@@ -227,6 +228,15 @@ class TradingApp(ttk.Window):
                                      width=15, bootstyle="info")
         self.tf_combo.pack(fill=X, pady=2)
         self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
+
+        # NEW: AI Strategy Style Dropdown (Scalp/Swing)
+        style_row = ttk.Frame(conf_frame)
+        style_row.pack(fill=X, padx=20, pady=5)
+        ttk.Label(style_row, text="AI Strategy Style:", font=("Helvetica", 10)).pack(anchor=W)
+        self.style_combo = ttk.Combobox(style_row, textvariable=self.style_var,
+                                        values=["scalp", "swing"],
+                                        width=15, bootstyle="warning")
+        self.style_combo.pack(fill=X, pady=2)
 
         # Max Positions Spinbox
         pos_row = ttk.Frame(conf_frame)

@@ -1,10 +1,17 @@
-# train_ai.py
+# training/train_ai.py
+import os
+import sys
 import pandas as pd
 import logging
+import time
+
+# Add parent directory to path so we can import core modules
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from core.execution import MT5Connector
 from core.indicators import Indicators
 from core.predictor import AIPredictor
-import time
+from core.asset_detector import detect_asset_type
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Trainer")
@@ -23,43 +30,41 @@ def download_and_train():
         time.sleep(1)
     
     symbol = connector.active_symbol  # Use current symbol from MT5
-    from core.asset_detector import detect_asset_type
     asset_type = detect_asset_type(symbol)
     
-    tf_str = "M5"
-    tf_mins = 5
-    count = 5000 
+    tf_str = "H1" if asset_type == "forex" else "M15" # Higher TFs for Swing
+    tf_mins = 60 if asset_type == "forex" else 15
+    count = 10000 # Increase data for better swing patterns
     
     # NEW: Actively tell the EA to switch to the training timeframe
-    logger.info(f"🔄 Requesting {tf_str} data from MT5...")
+    logger.info(f"🔄 Requesting {tf_str} data from MT5 for SWING training...")
     connector.change_timeframe(symbol, tf_mins)
     
     logger.info(f"📥 Target: {symbol} (Type: {asset_type}, TF: {tf_str}). Waiting for {count} candles...")
     
     # Wait for candles
     candles = []
-    for i in range(60): # Wait up to 60 seconds
+    for i in range(120): # Wait up to 120 seconds for larger dataset
         candles = connector.get_tf_candles(tf_str, count=count)
-        if len(candles) >= 1000:
+        if len(candles) >= 2000:
             logger.info(f"✅ Received {len(candles)} candles. Starting training...")
             break
         
         if i % 5 == 0:
             logger.info(f"⏳ Still waiting... ({len(candles)} candles received so far)")
-            # Re-request sync if no data
             connector.force_sync()
             
         time.sleep(1)
 
     if not candles or len(candles) < 1000:
-        logger.error(f"❌ Not enough data! Only got {len(candles)} candles. Increase MT5 Chart History or check connection.")
+        logger.error(f"❌ Not enough data! Got {len(candles)} candles.")
         connector.stop()
         return
 
     df = pd.DataFrame(candles)
     
-    # Pre-calculate all indicators needed for features
-    logger.info("📊 Calculating indicators...")
+    # Pre-calculate all indicators
+    logger.info("📊 Calculating indicators (including SuperTrend for Swing)...")
     df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
     df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
     df['adx'] = Indicators.calculate_adx(df)
@@ -73,16 +78,25 @@ def download_and_train():
     stoch_k, stoch_d = Indicators.calculate_stoch(df)
     df['stoch_k'], df['stoch_d'] = stoch_k, stoch_d
     
-    # Indicators.is_bollinger_squeeze returns a scalar, we need a series for training
-    # Let's re-calculate it as a series for training
+    # SuperTrend for trend-aware swing training
+    st_res = Indicators.calculate_supertrend(df)
+    df['supertrend'] = st_res[0]
+
+    # Bollinger Squeeze
     kc_upper, kc_lower = Indicators.calculate_keltner_channels(df, 20, 1.5)
     df['is_squeezing'] = ((df['upper_bb'] < kc_upper) & (df['lower_bb'] > kc_lower)).astype(int)
 
-    # Initialize predictor and train
-    predictor = AIPredictor()
-    predictor.train_model(df)
+    # Initialize predictor
+    predictor = AIPredictor(model_dir="../models")
     
-    logger.info("✅ Training complete! Re-launch your bot to use the new AI model.")
+    # Train both modes
+    for style in ["scalp", "swing"]:
+        success = predictor.train_model(df, asset_type=asset_type, style=style)
+        if success:
+            logger.info(f"✅ {style.upper()} training for {asset_type} complete.")
+        else:
+            logger.error(f"❌ {style.upper()} training for {asset_type} failed.")
+        
     connector.stop()
 
 if __name__ == "__main__":
