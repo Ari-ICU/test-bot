@@ -360,8 +360,8 @@ def bot_logic(app):
                     current_price = ask if action == "BUY" else bid
                     sl, tp = risk.calculate_sl_tp(current_price, action, current_atr, symbol, timeframe=execution_tf)
                     
-                    # PRIORITY: Respect the UI Lot size requested by the user
-                    final_lot = ui_lot_size 
+                    # PRIORITY: Fetch the absolute latest lot size from the UI variable
+                    final_lot = app.lot_var.get() 
                     
                     if connector.send_order(action, symbol, final_lot, sl, tp):
                         logger.info(f"🚀 {action} {symbol} Executed | Strategy: {name} | Reason: {reason} | Lot: {final_lot}")

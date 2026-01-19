@@ -33,14 +33,15 @@ class TradingApp(ttk.Window):
         self.bot_running = False
         self.bot_thread = None
        
-        # Defaults
-        self.lot_var = tk.DoubleVar(value=0.01)
-        self.symbol_var = tk.StringVar(value="XAUUSDm")
-        self.tf_var = tk.StringVar(value="M5") # Added for Timeframe control
-        self.style_var = tk.StringVar(value="scalp") # NEW: AI Style control (scalp/swing)
+        # Defaults - Load from risk config if available, otherwise fallback to defaults
+        risk_conf = self.risk.config if hasattr(self.risk, 'config') else {}
+        self.lot_var = tk.DoubleVar(value=risk_conf.get('lot_size', 0.01))
+        self.symbol_var = tk.StringVar(value=self.connector.active_symbol)
+        self.tf_var = tk.StringVar(value=self.connector.active_tf) 
+        self.style_var = tk.StringVar(value="scalp") 
         self.auto_trade_var = tk.BooleanVar(value=False)
-        self.max_pos_var = tk.IntVar(value=5)
-        self.cool_off_var = tk.IntVar(value=5) # NEW: Cool-off in seconds
+        self.max_pos_var = tk.IntVar(value=risk_conf.get('max_trades', 5))
+        self.cool_off_var = tk.IntVar(value=risk_conf.get('cool_off_seconds', 5)) 
        
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")

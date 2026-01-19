@@ -484,9 +484,11 @@ void ProcessCommand(string cmd) {
     double price = (ArraySize(parts) >= 6) ? StringToDouble(parts[5]) : 0;
 
     if(action == "BUY") {
+        PrintFormat("📥 BUY Request Received: Sym=%s, Lot=%.2f, SL=%.5f, TP=%.5f", symbol, lot, sl, tp);
         TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
     }
     else if(action == "SELL") {
+        PrintFormat("📥 SELL Request Received: Sym=%s, Lot=%.2f, SL=%.5f, TP=%.5f", symbol, lot, sl, tp);
         TradeMarket(symbol, ORDER_TYPE_SELL, lot, sl, tp);
     }
     else if(action == "BUY_LIMIT") {
