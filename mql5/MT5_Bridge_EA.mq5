@@ -268,6 +268,8 @@ void OnTimer() {
     post_freezer.Add("&ask=" + DoubleToString(ask, _Digits));
     post_freezer.Add("&balance=" + DoubleToString(g_cached_balance, 2));
     post_freezer.Add("&profit=" + DoubleToString(g_cached_profit, 2));
+    post_freezer.Add("&prof_today=" + DoubleToString(g_prof_today, 2));
+    post_freezer.Add("&prof_week=" + DoubleToString(g_prof_week, 2));
     post_freezer.Add("&acct_equity=" + DoubleToString(g_cached_equity, 2));
     post_freezer.Add("&trade_mode=" + IntegerToString(g_trade_mode));
     post_freezer.Add("&buy_count=" + IntegerToString(g_cached_buy_count));

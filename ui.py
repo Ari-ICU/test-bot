@@ -163,7 +163,7 @@ class TradingApp(ttk.Window):
         # --- ROW 3: PSYCHOLOGY & MARKET ---
         mid_frame = ttk.Frame(content)
         mid_frame.pack(fill=X, pady=(0, 5))
-        self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY DISCIPLINE", "lbl_daily_trades", "dark", "0/5 Trades")
+        self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY ACTIVITY", "lbl_daily_trades", "dark", "0 Trades")
         create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
 
@@ -513,8 +513,7 @@ class TradingApp(ttk.Window):
             
             # Update Daily Discipline from RiskManager
             daily_count = getattr(self.risk, 'daily_trades_count', 0)
-            max_daily = getattr(self.risk, 'max_daily_trades', 5)
-            self.lbl_daily_trades.configure(text=f"{daily_count}/{max_daily} Trades")
+            self.lbl_daily_trades.configure(text=f"{daily_count} Trades")
             
             self.last_account_info = current_info  # Cache
 

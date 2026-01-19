@@ -30,8 +30,8 @@ class RiskManager:
         if current_drawdown_pct > self.max_daily_loss:
             return False, f"Daily drawdown limit ({self.max_daily_loss}%) reached."
 
-        if self.daily_trades_count >= self.max_daily_trades:
-            return False, f"Max daily trades ({self.max_daily_trades}) reached."
+        # if self.daily_trades_count >= self.max_daily_trades:
+        #     return False, f"Max daily trades ({self.max_daily_trades}) reached."
 
         time_since_last = time.time() - self.last_trade_time
         if time_since_last < self.cool_off_period:

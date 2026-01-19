@@ -64,6 +64,8 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                         'balance': float(data.get('balance', [0])[0]),
                         'equity': float(data.get('acct_equity', [0])[0]),
                         'profit': float(data.get('profit', [0])[0]),
+                        'prof_today': float(data.get('prof_today', [0])[0]),
+                        'prof_week': float(data.get('prof_week', [0])[0]),
                         'total_count': int(data.get('buy_count', [0])[0]) + int(data.get('sell_count', [0])[0]),
                         'buy_count': int(data.get('buy_count', [0])[0]),
                         'sell_count': int(data.get('sell_count', [0])[0])
