@@ -142,6 +142,8 @@ class MT5Connector:
             'balance': 0.0,
             'equity': 0.0,
             'profit': 0.0,
+            'prof_today': 0.0,
+            'prof_week': 0.0,
             'total_count': 0,
             'bid': 0.0,
             'ask': 0.0,

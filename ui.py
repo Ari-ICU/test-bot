@@ -164,6 +164,8 @@ class TradingApp(ttk.Window):
         mid_frame = ttk.Frame(content)
         mid_frame.pack(fill=X, pady=(0, 5))
         self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY ACTIVITY", "lbl_daily_trades", "dark", "0 Trades")
+        create_stat_card(mid_frame, "DAILY PROFIT", "lbl_prof_today", "success")
+        create_stat_card(mid_frame, "WEEKLY PROFIT", "lbl_prof_week", "success")
         create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
 
@@ -504,6 +506,14 @@ class TradingApp(ttk.Window):
             prof = info.get('profit', 0.0)
             p_color = "success" if prof >= 0 else "danger"
             self.lbl_profit.configure(text=f"${prof:,.2f}", bootstyle=f"{p_color}-inverse")
+            
+            prof_today = info.get('prof_today', 0.0)
+            t_color = "success" if prof_today >= 0 else "danger"
+            self.lbl_prof_today.configure(text=f"${prof_today:,.2f}", bootstyle=f"{t_color}-inverse")
+            
+            prof_week = info.get('prof_week', 0.0)
+            w_color = "success" if prof_week >= 0 else "danger"
+            self.lbl_prof_week.configure(text=f"${prof_week:,.2f}", bootstyle=f"{w_color}-inverse")
             
             self.lbl_bid.configure(text=f"{info.get('bid', 0.0):.5f}")
             self.lbl_ask.configure(text=f"{info.get('ask', 0.0):.5f}")
