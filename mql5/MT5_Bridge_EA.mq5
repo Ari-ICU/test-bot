@@ -298,8 +298,10 @@ void OnTimer() {
     ENUM_TIMEFRAMES htf_list[] = {PERIOD_H1, PERIOD_H4};
     for(int h=0; h<2; h++) {
         ENUM_TIMEFRAMES htf = htf_list[h];
+        if(htf == g_current_period) continue; // Skip redundant HTF
+        
         string tf_label = (htf == PERIOD_H1) ? "H1" : "H4";
-        int bars = MathMin(100, iBars(_Symbol, htf));
+        int bars = MathMin(300, iBars(_Symbol, htf)); // Increased to 300
         StringFreezer sub_freezer;
         for(int i=0; i<bars; i++) {
             if(i > 0) sub_freezer.Add("|");
@@ -434,6 +436,12 @@ void ProcessCommand(string cmd) {
         if(ArraySize(parts) < 3) return;
         g_candles_to_send = (int)StringToInteger(parts[2]);
         g_force_candle_reload = true;
+        
+        // POKE: Force MT5 to fetch history if available
+        MqlRates dummy[]; 
+        CopyRates(_Symbol, g_current_period, 0, g_candles_to_send, dummy);
+        
+        Print("📥 GET_HISTORY Requested: ", g_candles_to_send, " bars. Poked MT5 memory.");
         return;
     }
    

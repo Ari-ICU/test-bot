@@ -105,6 +105,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
             # Handle HTF Specific Candles (H1/H4)
             for h_tf in ["H1", "H4"]:
+                if h_tf == tf_key: continue # Don't overwrite main candles if they are H1/H4
                 h_raw = data.get(f"htf_{h_tf}", [""])[0]
                 if h_raw:
                     parsed_h = []

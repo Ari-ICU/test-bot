@@ -15,6 +15,7 @@ import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
 import strategy.breakout as breakout
 import strategy.tbs_turtle as tbs_strat
+import strategy.tbs_breakout_retest as tbs_retest
 import strategy.reversal as reversal_strat
 import strategy.crt_tbs_master as crt_tbs
 import filters.volatility as volatility
@@ -309,14 +310,17 @@ def bot_logic(app):
             asset_type = detect_asset_type(symbol)
             selected_style = app.style_var.get()
             
+            ui_reclaim = app.crt_reclaim_var.get()
+            
             base_strategies = [
                 ("AI_Predict", lambda: ai_predictor.predict(df, asset_type=asset_type, style=selected_style)),
                 ("Trend", lambda: trend.analyze_trend_setup(candles, df=df, patterns=patterns)),
                 ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df=df)),
                 ("Breakout", lambda: breakout.analyze_breakout_setup(candles, df=df)),
+                ("TBS_Retest", lambda: tbs_retest.analyze_tbs_retest_setup(candles, df=df, patterns=patterns)),
                 ("ICT_SB", lambda: ict_strat.analyze_ict_setup(candles, df=df, patterns=patterns)),
                 ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df=df, patterns=patterns)),
-                ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, symbol, execution_tf, htf_tf)),
+                ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, symbol, execution_tf, htf_tf, reclaim_pct=ui_reclaim)),
                 ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
 

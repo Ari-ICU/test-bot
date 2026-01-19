@@ -42,6 +42,7 @@ class TradingApp(ttk.Window):
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=risk_conf.get('max_trades', 5))
         self.cool_off_var = tk.IntVar(value=risk_conf.get('cool_off_seconds', 5)) 
+        self.crt_reclaim_var = tk.DoubleVar(value=0.25)
        
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
@@ -259,6 +260,12 @@ class TradingApp(ttk.Window):
         ttk.Label(cool_row, text="Cool-off (sec):", font=("Helvetica", 10)).pack(anchor=W)
         self.cool_spin = ttk.Spinbox(cool_row, from_=0, to=300, textvariable=self.cool_off_var, width=10)
         self.cool_spin.pack(fill=X, pady=2)
+
+        # NEW: CRT Reclaim % Spinbox
+        crt_row = ttk.Frame(conf_frame)
+        crt_row.pack(fill=X, padx=20, pady=5)
+        ttk.Label(crt_row, text="CRT Reclaim %:", font=("Helvetica", 10)).pack(anchor=W)
+        ttk.Spinbox(crt_row, from_=0.05, to=0.95, increment=0.05, textvariable=self.crt_reclaim_var, width=10).pack(fill=X, pady=2)
     def _build_console_tab(self):
         # Console Setup with ScrolledText
         console_frame = ttk.Frame(self.tab_console)

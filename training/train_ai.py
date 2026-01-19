@@ -31,27 +31,22 @@ def download_and_train():
     
     symbol = connector.active_symbol  
     asset_type = detect_asset_type(symbol)
-    original_tf_mins = connector.active_tf # Save original (e.g. M5)
     
-    # Map back to minutes for restoration
-    tf_to_mins = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
-    orig_mins = tf_to_mins.get(original_tf_mins, 5)
-
-    tf_str = "H1" if asset_type == "forex" else "M15" 
-    tf_mins = 60 if asset_type == "forex" else 15
+    # NEW: Use the CURRENTLY ACTIVE timeframe from MT5 for training.
+    # This ensures the AI is trained for the specific TF the user is trading.
+    tf_str = connector.active_tf 
+    
     count = 10000 
-    count = 5000 # Changed from 10000 to 5000 as per instruction
     
-    logger.info(f"🔄 Requesting {tf_str} data from MT5 for training... (Original was {original_tf_mins})")
-    connector.change_timeframe(symbol, tf_mins)
-    time.sleep(2) # Give it a moment to switch
-    connector.request_history(count) # Explicitly ask for 5000 (or whatever 'count' is)
+    logger.info(f"🔄 Requesting {count} candles of {tf_str} data for training symbol: {symbol}...")
+    # Trigger history collection
+    connector.request_history(count) 
     
     # Wait for candles
     candles = []
     for i in range(120):
         candles = connector.get_tf_candles(tf_str, count=count)
-        if len(candles) >= 3000: # Threshold for high-quality training
+        if len(candles) >= 5000: # Threshold for high-quality training
             logger.info(f"✅ Received {len(candles)} candles. Starting training...")
             break
         if i % 5 == 0:
@@ -60,8 +55,7 @@ def download_and_train():
         time.sleep(1)
 
     if not candles or len(candles) < 1000:
-        logger.error(f"❌ Not enough data! Reverting to {original_tf_mins}...")
-        connector.change_timeframe(symbol, orig_mins)
+        logger.error(f"❌ Not enough data! Check if symbol {symbol} is active and Market Watch is filled.")
         connector.stop()
         return
 
@@ -95,10 +89,6 @@ def download_and_train():
         if success:
             logger.info(f"✅ {style.upper()} training complete.")
         
-    # RESTORE Timeframe
-    logger.info(f"🔄 Restoration: Switching chart back to {original_tf_mins}...")
-    connector.change_timeframe(symbol, orig_mins)
-    time.sleep(1)
     connector.stop()
     logger.info("🏁 Trainer Finished.")
 

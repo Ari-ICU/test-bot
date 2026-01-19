@@ -187,22 +187,42 @@ class AIPredictor:
             buy_ret = future_return
             sell_ret = -future_return
         
-        # Determine threshold based on volatility (adaptive)
-        mult = 1.5 if style == "scalp" else 3.5
+        # Determine threshold based on median volatility (ATR-like)
+        mult = 2.0 if style == "scalp" else 4.0
         vol_ref = (data['high'] - data['low']) / data['close']
-        threshold = vol_ref.median() * mult
+        profit_hurdle = vol_ref.median() * mult
         
-        # Min thresholds
-        min_threshold = 0.0005 if asset_type == "forex" else 0.003
-        if style == "swing": min_threshold *= 2.0 # Swing target is larger
+        # Min hurdle (avoid noise)
+        min_hurdle = 0.0008 if asset_type == "forex" else 0.005 # 8 pips or 0.5%
+        if style == "swing": min_hurdle *= 2.5
         
-        if threshold < min_threshold: threshold = min_threshold
+        profit_hurdle = max(profit_hurdle, min_hurdle)
+        stop_hurdle = profit_hurdle * 0.5  # 2:1 RR simulated stop
         
-        logger.info(f"📈 {asset_type} | {style} Training Threshold: {threshold*100:.3f}% | Horizon: {horizon}")
+        logger.info(f"📈 {asset_type} | {style} Profit Hurdle: {profit_hurdle*100:.3f}% | Stop Hurdle: {stop_hurdle*100:.3f}% | Horizon: {horizon}")
         
         data['target'] = 0
-        data.loc[buy_ret > threshold, 'target'] = 1   
-        data.loc[sell_ret > threshold, 'target'] = -1 
+        
+        # PROFIT-FIRST LABELING: 
+        # Check if price hits PROFIT before STOP in the horizon window.
+        for i in range(len(data) - horizon):
+            window = data.iloc[i+1 : i+1+horizon]
+            entry_price = data.iloc[i]['close']
+            
+            # Simulated BULLISH outcome
+            max_high = window['high'].max()
+            min_low = window['low'].min()
+            
+            # Check if Profit Hurdle hit before Stop Hurdle
+            if (max_high - entry_price) / entry_price >= profit_hurdle:
+                # Basic check for stop loss hit (rough approximation)
+                if (entry_price - min_low) / entry_price < stop_hurdle:
+                    data.at[data.index[i], 'target'] = 1
+            
+            # Simulated BEARISH outcome
+            if (entry_price - min_low) / entry_price >= profit_hurdle:
+                if (max_high - entry_price) / entry_price < stop_hurdle:
+                    data.at[data.index[i], 'target'] = -1
         
         # 3. Fit Random Forest
         data = data.dropna(subset=self.feature_cols + ['target'])
