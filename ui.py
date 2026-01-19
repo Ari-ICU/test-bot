@@ -22,7 +22,7 @@ class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
         self.title("MT5 Algo Terminal - Strategy Only Mode")
-        self.geometry("1050x780")
+        self.geometry("1050x640")
        
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
@@ -257,19 +257,6 @@ class TradingApp(ttk.Window):
         ttk.Label(cool_row, text="Cool-off (sec):", font=("Helvetica", 10)).pack(anchor=W)
         ttk.Spinbox(cool_row, from_=0, to=300, textvariable=self.cool_off_var, width=10).pack(fill=X, pady=2)
 
-        # --- ROW 6: RECENT ACTIVITY FEED (DASHBOARD MINI-CONSOLE) ---
-        activity_frame = ttk.Labelframe(content, text=" Recent Activity Feed ")
-        activity_frame.pack(fill=BOTH, expand=YES, pady=(10, 0))
-        
-        self.mini_log_area = ScrolledText(activity_frame, bootstyle="dark", height=5, autohide=True)
-        self.mini_log_area.pack(fill=BOTH, expand=YES, padx=5, pady=5)
-        self.mini_log_area.text.configure(font=("Consolas", 9), state='disabled')
-        
-        # Tags for mini-log
-        self.mini_log_area.text.tag_config('INFO', foreground='lightgreen')
-        self.mini_log_area.text.tag_config('WARNING', foreground='#f0ad4e')
-        self.mini_log_area.text.tag_config('ERROR', foreground='#d9534f')
-
     def _build_console_tab(self):
         # Console Setup with ScrolledText
         console_frame = ttk.Frame(self.tab_console)
@@ -492,18 +479,6 @@ class TradingApp(ttk.Window):
                 self.log_area.text.delete('1.0', f'{current_lines-500}.0')
                 
             self.log_area.text.configure(state='disabled')
-            
-            # Update Dashboard Mini-Console
-            if hasattr(self, 'mini_log_area'):
-                self.mini_log_area.text.configure(state='normal')
-                for msg, tag in batch:
-                    self.mini_log_area.text.insert(tk.END, msg, tag)
-                self.mini_log_area.text.see(tk.END)
-                # Keep only last 100 lines in mini-log to keep it light
-                num_lines = int(self.mini_log_area.text.index('end-1c').split('.')[0])
-                if num_lines > 100:
-                    self.mini_log_area.text.delete('1.0', f'{num_lines-100}.0')
-                self.mini_log_area.text.configure(state='disabled')
         
         self.after(200, self._start_log_polling)  # Slower poll: reduces CPU, still responsive
 
