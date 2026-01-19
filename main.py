@@ -172,6 +172,10 @@ def bot_logic(app):
             # --- ACCOUNT HEALTH ---
             max_pos_allowed = app.max_pos_var.get()
             ui_lot_size = app.lot_var.get()
+            ui_cool_off = app.cool_off_var.get()
+            
+            # Sync dynamic UI settings to RiskManager
+            risk.cool_off_period = ui_cool_off
 
             info = connector.account_info
             bid, ask = info.get('bid', 0.0), info.get('ask', 0.0)

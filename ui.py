@@ -40,6 +40,7 @@ class TradingApp(ttk.Window):
         self.style_var = tk.StringVar(value="scalp") # NEW: AI Style control (scalp/swing)
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_pos_var = tk.IntVar(value=5)
+        self.cool_off_var = tk.IntVar(value=5) # NEW: Cool-off in seconds
        
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
@@ -249,6 +250,12 @@ class TradingApp(ttk.Window):
         lot_row.pack(fill=X, padx=20, pady=5)
         ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
         ttk.Spinbox(lot_row, from_=0.01, to=50, textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
+
+        # NEW: Cool-off Spinbox
+        cool_row = ttk.Frame(conf_frame)
+        cool_row.pack(fill=X, padx=20, pady=5)
+        ttk.Label(cool_row, text="Cool-off (sec):", font=("Helvetica", 10)).pack(anchor=W)
+        ttk.Spinbox(cool_row, from_=0, to=300, textvariable=self.cool_off_var, width=10).pack(fill=X, pady=2)
 
         # --- ROW 6: RECENT ACTIVITY FEED (DASHBOARD MINI-CONSOLE) ---
         activity_frame = ttk.Labelframe(content, text=" Recent Activity Feed ")

@@ -17,8 +17,8 @@ class RiskManager:
         self.max_lot = 10.0  # Broker limit
         
         # --- PSYCHOLOGY SETTINGS ---
-        self.max_daily_trades = self.config.get('max_trades', 5) # Sync with config.json key
-        self.cool_off_period = self.config.get('cool_off_minutes', 1) * 60 # Reduced default to 1 min
+        self.max_daily_trades = self.config.get('max_trades', 5) 
+        self.cool_off_period = self.config.get('cool_off_seconds', 5) # Default to 5 seconds for Active trading
         
         self.daily_trades_count = 0
         self.last_trade_time = 0
