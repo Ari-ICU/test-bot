@@ -22,7 +22,7 @@ class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
         self.title("MT5 Algo Terminal - Strategy Only Mode")
-        self.geometry("1100x900")
+        self.geometry("1050x780")
        
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
@@ -83,8 +83,8 @@ class TradingApp(ttk.Window):
 
     def _build_ui(self):
         header = ttk.Frame(self)
-        header.pack(fill=X, padx=20, pady=15)
-        title_lbl = ttk.Label(header, text="MT5 AUTO-TRADER", font=("Roboto", 20, "bold"), bootstyle="inverse-dark")
+        header.pack(fill=X, padx=15, pady=8)
+        title_lbl = ttk.Label(header, text="MT5 AUTO-TRADER", font=("Roboto", 18, "bold"), bootstyle="inverse-dark")
         title_lbl.pack(side=LEFT)
        
         status_frame = ttk.Frame(header)
@@ -95,7 +95,7 @@ class TradingApp(ttk.Window):
         self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="danger-inverse", font=("Helvetica", 10, "bold"))
         self.lbl_status.pack(side=LEFT, padx=5)
         self.tabs = ttk.Notebook(self)
-        self.tabs.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+        self.tabs.pack(fill=BOTH, expand=YES, padx=5, pady=5)
         self.tab_dashboard = ttk.Frame(self.tabs)
         self.tab_console = ttk.Frame(self.tabs)
         self.tab_settings = ttk.Frame(self.tabs)
@@ -113,24 +113,24 @@ class TradingApp(ttk.Window):
 
     def _build_dashboard_tab(self):
         content = ttk.Frame(self.tab_dashboard)
-        content.pack(fill=BOTH, expand=YES, padx=20, pady=20)
+        content.pack(fill=BOTH, expand=YES, padx=10, pady=5)
        
         def create_stat_card(parent, title, var_name, color, initial_val="$0.00"):
             frame = ttk.Frame(parent, bootstyle=f"{color}")
-            frame.pack(side=LEFT, fill=X, expand=YES, padx=5)
+            frame.pack(side=LEFT, fill=X, expand=YES, padx=3)
             inner = ttk.Frame(frame, bootstyle=f"{color}")
-            inner.pack(fill=BOTH, padx=15, pady=15)
-            ttk.Label(inner, text=title, font=("Helvetica", 10), bootstyle=f"{color}-inverse").pack(anchor=W)
-            lbl = ttk.Label(inner, text=initial_val, font=("Roboto", 22, "bold"), bootstyle=f"{color}-inverse")
+            inner.pack(fill=BOTH, padx=10, pady=8)
+            ttk.Label(inner, text=title, font=("Helvetica", 9), bootstyle=f"{color}-inverse").pack(anchor=W)
+            lbl = ttk.Label(inner, text=initial_val, font=("Roboto", 18, "bold"), bootstyle=f"{color}-inverse")
             lbl.pack(anchor=E)
             setattr(self, var_name, lbl)
             return lbl
 
         # --- ROW 1: STRATEGY ENGINE MONITOR ---
         strategy_monitor = ttk.Labelframe(content, text=" Active Strategy Engine ")
-        strategy_monitor.pack(fill=X, pady=(0, 15))
+        strategy_monitor.pack(fill=X, pady=(0, 8))
         strategy_monitor_inner = ttk.Frame(strategy_monitor)
-        strategy_monitor_inner.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+        strategy_monitor_inner.pack(fill=BOTH, expand=YES, padx=5, pady=5)
        
         self.strat_ui_items = {}
         strat_list = [
@@ -146,7 +146,7 @@ class TradingApp(ttk.Window):
             f = ttk.Frame(strategy_monitor_inner)
             f.pack(side=LEFT, expand=YES)
             ttk.Label(f, text=name, font=("Helvetica", 9)).pack()
-            status_lbl = ttk.Label(f, text="WAITING", font=("Helvetica", 11, "bold"), bootstyle=SECONDARY)
+            status_lbl = ttk.Label(f, text="WAITING", font=("Helvetica", 10, "bold"), bootstyle=SECONDARY)
             status_lbl.pack()
             reason_lbl = ttk.Label(f, text="...", font=("Helvetica", 7), bootstyle=LIGHT)
             reason_lbl.pack()
@@ -154,7 +154,7 @@ class TradingApp(ttk.Window):
 
         # --- ROW 2: ACCOUNT STATS ---
         stats_frame = ttk.Frame(content)
-        stats_frame.pack(fill=X, pady=(0, 10))
+        stats_frame.pack(fill=X, pady=(0, 5))
         create_stat_card(stats_frame, "ACCOUNT MODE", "lbl_acc_mode", "secondary", "CONNECTING...")
         create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
         create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
@@ -162,14 +162,14 @@ class TradingApp(ttk.Window):
        
         # --- ROW 3: PSYCHOLOGY & MARKET ---
         mid_frame = ttk.Frame(content)
-        mid_frame.pack(fill=X, pady=(0, 10))
+        mid_frame.pack(fill=X, pady=(0, 5))
         self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY DISCIPLINE", "lbl_daily_trades", "dark", "0/5 Trades")
         create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
 
         # --- ROW 4: POSITION COUNTS ---
         pos_frame = ttk.Frame(content)
-        pos_frame.pack(fill=X, pady=(0, 20))
+        pos_frame.pack(fill=X, pady=(0, 8))
         create_stat_card(pos_frame, "BUY POSITIONS", "lbl_buy_count", "secondary", "0")
         create_stat_card(pos_frame, "SELL POSITIONS", "lbl_sell_count", "secondary", "0")
         create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "light", "0")
@@ -252,9 +252,9 @@ class TradingApp(ttk.Window):
 
         # --- ROW 6: RECENT ACTIVITY FEED (DASHBOARD MINI-CONSOLE) ---
         activity_frame = ttk.Labelframe(content, text=" Recent Activity Feed ")
-        activity_frame.pack(fill=BOTH, expand=YES, pady=(15, 0))
+        activity_frame.pack(fill=BOTH, expand=YES, pady=(10, 0))
         
-        self.mini_log_area = ScrolledText(activity_frame, bootstyle="dark", height=8, autohide=True)
+        self.mini_log_area = ScrolledText(activity_frame, bootstyle="dark", height=5, autohide=True)
         self.mini_log_area.pack(fill=BOTH, expand=YES, padx=5, pady=5)
         self.mini_log_area.text.configure(font=("Consolas", 9), state='disabled')
         
@@ -266,14 +266,14 @@ class TradingApp(ttk.Window):
     def _build_console_tab(self):
         # Console Setup with ScrolledText
         console_frame = ttk.Frame(self.tab_console)
-        console_frame.pack(fill=BOTH, expand=YES, padx=20, pady=20)
+        console_frame.pack(fill=BOTH, expand=YES, padx=10, pady=10)
         
         btn_frame = ttk.Frame(console_frame)
         btn_frame.pack(fill=X, pady=(0, 10))
         ttk.Button(btn_frame, text="🗑️ Clear Console Logs", bootstyle="danger-outline", command=self.clear_logs).pack(side=RIGHT)
         ttk.Label(btn_frame, text="Live System Feed", font=("Helvetica", 12, "bold")).pack(side=LEFT)
 
-        self.log_area = ScrolledText(console_frame, bootstyle="secondary", height=30, width=120, autohide=True)
+        self.log_area = ScrolledText(console_frame, bootstyle="secondary", height=20, width=120, autohide=True)
         self.log_area.pack(fill=BOTH, expand=YES)
         # Configure tags for log levels
         self.log_area.text.tag_config('INFO', foreground='lightgreen')
@@ -282,7 +282,7 @@ class TradingApp(ttk.Window):
 
     def _build_settings_tab(self):
         container = ttk.Frame(self.tab_settings)
-        container.pack(fill=BOTH, expand=YES, padx=30, pady=30)
+        container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
         tg_grp = ttk.Labelframe(container, text=" Telegram Bot Integration ")
         tg_grp.pack(fill=X, pady=10)
         tg_inner = ttk.Frame(tg_grp)
