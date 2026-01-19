@@ -103,6 +103,22 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 with self.connector.lock:
                     self.connector.tf_data["M1"] = parsed_m1
 
+            # Handle HTF Specific Candles (H1/H4)
+            for h_tf in ["H1", "H4"]:
+                h_raw = data.get(f"htf_{h_tf}", [""])[0]
+                if h_raw:
+                    parsed_h = []
+                    for c in h_raw.split('|'):
+                        parts = c.split(',')
+                        if len(parts) >= 5:
+                            parsed_h.append({
+                                'high': float(parts[0]), 'low': float(parts[1]),
+                                'open': float(parts[2]), 'close': float(parts[3]),
+                                'time': int(parts[4])
+                            })
+                    with self.connector.lock:
+                        self.connector.tf_data[h_tf] = parsed_h
+
             if 'active_trades' in data:
                 raw_trades = data['active_trades'][0]
                 parsed_trades = []

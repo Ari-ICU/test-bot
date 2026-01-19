@@ -292,6 +292,25 @@ void OnTimer() {
                      IntegerToString(iTime(_Symbol, PERIOD_M1, i)));
     }
     post_freezer.Add("&m1_candles=" + m1_freezer.String());
+
+    // NEW: Always send HTF candles (H1 and H4) for CRT strategy
+    StringFreezer htf_freezer;
+    ENUM_TIMEFRAMES htf_list[] = {PERIOD_H1, PERIOD_H4};
+    for(int h=0; h<2; h++) {
+        ENUM_TIMEFRAMES htf = htf_list[h];
+        string tf_label = (htf == PERIOD_H1) ? "H1" : "H4";
+        int bars = MathMin(100, iBars(_Symbol, htf));
+        StringFreezer sub_freezer;
+        for(int i=0; i<bars; i++) {
+            if(i > 0) sub_freezer.Add("|");
+            sub_freezer.Add(DoubleToString(iHigh(_Symbol, htf, i), _Digits) + "," +
+                         DoubleToString(iLow(_Symbol, htf, i), _Digits) + "," +
+                         DoubleToString(iOpen(_Symbol, htf, i), _Digits) + "," +
+                         DoubleToString(iClose(_Symbol, htf, i), _Digits) + "," +
+                         IntegerToString(iTime(_Symbol, htf, i)));
+        }
+        post_freezer.Add("&htf_" + tf_label + "=" + sub_freezer.String());
+    }
     
     post_freezer.Add("&active_trades=" + g_cached_active_trades);
 
