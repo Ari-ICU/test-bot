@@ -124,8 +124,9 @@ class RateLimiter:
 
 logger = setup_logger()
 sync_limiter = RateLimiter(window=10, max_per_window=1)
-heartbeat_limiter = RateLimiter(window=60, max_per_window=1)
-filter_limiter = RateLimiter(window=30, max_per_window=2)
+heartbeat_limiter = RateLimiter(window=30, max_per_window=1) # Reduced from 60s
+filter_limiter = RateLimiter(window=10, max_per_window=1)
+scan_limiter = RateLimiter(window=10, max_per_window=1) # NEW: 10s feedback loop
 
 # main.py (Final Corrected Version)
 def bot_logic(app):
@@ -163,7 +164,7 @@ def bot_logic(app):
                 logger.info(f"💓 Bot Heartbeat | Status: {status} | Symbol: {connector.active_symbol} | TF: {connector.active_tf}")
 
             if not app.auto_trade_var.get():
-                time.sleep(2)
+                time.sleep(0.5)
                 continue
 
             symbol = connector.active_symbol
@@ -221,14 +222,14 @@ def bot_logic(app):
             current_candle_time = candles[-1]['time'] if candles else 0
             is_new_candle = current_candle_time > last_processed_candle_time
             
-            # Force scan if we haven't scanned in 15 seconds (even on same candle)
-            force_time_refresh = (now_ts - news_cooldown) > 15 
+            # Force scan if we haven't scanned in 1 second (High Responsiveness)
+            force_time_refresh = (now_ts - news_cooldown) > 1.0 
             
             if not is_new_candle and not force_time_refresh:
-                time.sleep(2); continue
+                time.sleep(0.1); continue # Tiny sleep to prevent CPU spiking
             
             last_processed_candle_time = current_candle_time
-            news_cooldown = now_ts # Use this as last_scan_time
+            news_cooldown = now_ts 
             
             # --- ACCOUNT HEALTH & PRE-TRADE FILTERS ---
             if curr_positions >= max_pos_allowed:
@@ -271,7 +272,7 @@ def bot_logic(app):
             # Diagnostic for visibility
             curr_adx = df['adx'].iloc[-1] if 'adx' in df else 0
             curr_rsi = df['rsi'].iloc[-1] if 'rsi' in df else 50
-            if heartbeat_limiter.allow("market_diagnostics"):
+            if scan_limiter.allow("market_diagnostics"):
                 logger.info(f"📊 Market Health | Symbol: {symbol} | ADX: {curr_adx:.1f} | RSI: {curr_rsi:.1f}")
 
             asset_type = detect_asset_type(symbol)
@@ -329,7 +330,7 @@ def bot_logic(app):
             # Feedback log for active scanning
             if signals_this_cycle:
                 logger.info(f"🎯 Signals Detected: {', '.join(signals_this_cycle)}")
-            elif heartbeat_limiter.allow("scanning_feedback"):
+            elif scan_limiter.allow("scanning_feedback"):
                 summary_str = " | ".join(neutral_summaries)
                 logger.info(f"🔍 Scanning {symbol} ({execution_tf}) | Status: NEUTRAL | {summary_str}")
 
@@ -362,9 +363,9 @@ def bot_logic(app):
                         logger.info(f"🚀 {action} {symbol} Executed | Strategy: {name} | Reason: {reason} | Lot: {final_lot}")
                         risk.record_trade()
                         trade_executed = True
-                        time.sleep(5); break # Reduced from 60s to 5s for M1 responsiveness
+                        time.sleep(1); break # Short pause after trade to allow sync
 
-            time.sleep(2)
+            time.sleep(0.5) # Fast loop for real-time responsiveness
                 
         except Exception as e:
             logger.error(f"💥 Critical Loop Error: {e}")
