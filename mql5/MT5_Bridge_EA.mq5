@@ -11,7 +11,7 @@ string g_symbols_list = "";
 datetime g_last_symbols_update = 0;
 string g_candle_history = "";
 datetime g_last_candle_update = 0;
-int g_candles_to_send = 1000;
+int g_candles_to_send = 5000;
 string g_tf_string = "";
 ENUM_TIMEFRAMES g_current_period = PERIOD_CURRENT;
 double g_last_bid = 0, g_last_ask = 0;
@@ -170,7 +170,9 @@ void UpdatePositionsCache() {
             else if(type == POSITION_TYPE_SELL) sell_count++;
 
             string type_str = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-            string trade_line = IntegerToString(ticket) + "," + _Symbol + "," + type_str + "," + DoubleToString(vol, 2) + "," + DoubleToString(profit, 2);
+            double sl = PositionGetDouble(POSITION_SL);
+            double tp = PositionGetDouble(POSITION_TP);
+            string trade_line = IntegerToString(ticket) + "," + _Symbol + "," + type_str + "," + DoubleToString(vol, 2) + "," + DoubleToString(profit, 2) + "," + DoubleToString(open_price, _Digits) + "," + DoubleToString(sl, _Digits) + "," + DoubleToString(tp, _Digits);
             
             if(trades_freezer.Len() > 0) trades_freezer.Add("|");
             trades_freezer.Add(trade_line);
@@ -271,6 +273,20 @@ void OnTimer() {
     post_freezer.Add("&buy_count=" + IntegerToString(g_cached_buy_count));
     post_freezer.Add("&sell_count=" + IntegerToString(g_cached_sell_count));
     post_freezer.Add("&candles=" + g_candle_history);
+    
+    // Always send last 5 M1 candles for profit protection
+    StringFreezer m1_freezer;
+    int m1_count = MathMin(5, iBars(_Symbol, PERIOD_M1));
+    for(int i=0; i<m1_count; i++) {
+        if(i > 0) m1_freezer.Add("|");
+        m1_freezer.Add(DoubleToString(iHigh(_Symbol, PERIOD_M1, i), _Digits) + "," +
+                     DoubleToString(iLow(_Symbol, PERIOD_M1, i), _Digits) + "," +
+                     DoubleToString(iOpen(_Symbol, PERIOD_M1, i), _Digits) + "," +
+                     DoubleToString(iClose(_Symbol, PERIOD_M1, i), _Digits) + "," +
+                     IntegerToString(iTime(_Symbol, PERIOD_M1, i)));
+    }
+    post_freezer.Add("&m1_candles=" + m1_freezer.String());
+    
     post_freezer.Add("&active_trades=" + g_cached_active_trades);
 
     string post_str = post_freezer.String();
@@ -479,6 +495,12 @@ void ProcessCommand(string cmd) {
     else if(action == "SELL_LIMIT") {
         TradePending(symbol, ORDER_TYPE_SELL_LIMIT, lot, price, sl, tp);
     }
+    else if(action == "ORDER_MODIFY") {
+        long ticket = (long)StringToInteger(parts[1]);
+        double new_sl = StringToDouble(parts[2]);
+        double new_tp = StringToDouble(parts[3]);
+        ModifyOrder(ticket, new_sl, new_tp);
+    }
     else if(action == "CLOSE_ALL") {
         ClosePositions(symbol, "ALL");
     }
@@ -618,6 +640,24 @@ void CloseTicket(long ticket) {
         else Print("✅ Closed Ticket #", ticket);
     } else {
         Print("⚠️ Ticket not found: ", ticket);
+    }
+}
+void ModifyOrder(long ticket, double sl, double tp) {
+    if(PositionSelectByTicket(ticket)) {
+        MqlTradeRequest r; MqlTradeResult res;
+        ZeroMemory(r); ZeroMemory(res);
+        r.action = TRADE_ACTION_SLTP;
+        r.position = ticket;
+        r.symbol = PositionGetString(POSITION_SYMBOL);
+        
+        double tick_size = SymbolInfoDouble(r.symbol, SYMBOL_TRADE_TICK_SIZE);
+        r.sl = MathRound(sl / tick_size) * tick_size;
+        r.tp = MathRound(tp / tick_size) * tick_size;
+        
+        if(!OrderSend(r, res)) Print("❌ Modify Fail: ", res.retcode, " Ticket #", ticket);
+        else Print("✅ Modified Ticket #", ticket, " SL: ", r.sl, " TP: ", r.tp);
+    } else {
+        Print("⚠️ Modify: Ticket not found: ", ticket);
     }
 }
 

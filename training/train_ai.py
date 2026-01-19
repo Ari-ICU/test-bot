@@ -29,42 +29,46 @@ def download_and_train():
             break
         time.sleep(1)
     
-    symbol = connector.active_symbol  # Use current symbol from MT5
+    symbol = connector.active_symbol  
     asset_type = detect_asset_type(symbol)
+    original_tf_mins = connector.active_tf # Save original (e.g. M5)
     
-    tf_str = "H1" if asset_type == "forex" else "M15" # Higher TFs for Swing
+    # Map back to minutes for restoration
+    tf_to_mins = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+    orig_mins = tf_to_mins.get(original_tf_mins, 5)
+
+    tf_str = "H1" if asset_type == "forex" else "M15" 
     tf_mins = 60 if asset_type == "forex" else 15
-    count = 10000 # Increase data for better swing patterns
+    count = 10000 
+    count = 5000 # Changed from 10000 to 5000 as per instruction
     
-    # NEW: Actively tell the EA to switch to the training timeframe
-    logger.info(f"🔄 Requesting {tf_str} data from MT5 for SWING training...")
+    logger.info(f"🔄 Requesting {tf_str} data from MT5 for training... (Original was {original_tf_mins})")
     connector.change_timeframe(symbol, tf_mins)
-    
-    logger.info(f"📥 Target: {symbol} (Type: {asset_type}, TF: {tf_str}). Waiting for {count} candles...")
+    time.sleep(2) # Give it a moment to switch
+    connector.request_history(count) # Explicitly ask for 5000 (or whatever 'count' is)
     
     # Wait for candles
     candles = []
-    for i in range(120): # Wait up to 120 seconds for larger dataset
+    for i in range(120):
         candles = connector.get_tf_candles(tf_str, count=count)
-        if len(candles) >= 2000:
+        if len(candles) >= 3000: # Threshold for high-quality training
             logger.info(f"✅ Received {len(candles)} candles. Starting training...")
             break
-        
         if i % 5 == 0:
-            logger.info(f"⏳ Still waiting... ({len(candles)} candles received so far)")
+            logger.info(f"⏳ Syncing... ({len(candles)} candles received)")
             connector.force_sync()
-            
         time.sleep(1)
 
     if not candles or len(candles) < 1000:
-        logger.error(f"❌ Not enough data! Got {len(candles)} candles.")
+        logger.error(f"❌ Not enough data! Reverting to {original_tf_mins}...")
+        connector.change_timeframe(symbol, orig_mins)
         connector.stop()
         return
 
     df = pd.DataFrame(candles)
     
-    # Pre-calculate all indicators
-    logger.info("📊 Calculating indicators (including SuperTrend for Swing)...")
+    # Indicator calculation
+    logger.info("📊 Processing Features...")
     df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
     df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
     df['adx'] = Indicators.calculate_adx(df)
@@ -78,26 +82,25 @@ def download_and_train():
     stoch_k, stoch_d = Indicators.calculate_stoch(df)
     df['stoch_k'], df['stoch_d'] = stoch_k, stoch_d
     
-    # SuperTrend for trend-aware swing training
     st_res = Indicators.calculate_supertrend(df)
     df['supertrend'] = st_res[0]
 
-    # Bollinger Squeeze
     kc_upper, kc_lower = Indicators.calculate_keltner_channels(df, 20, 1.5)
     df['is_squeezing'] = ((df['upper_bb'] < kc_upper) & (df['lower_bb'] > kc_lower)).astype(int)
 
-    # Initialize predictor
     predictor = AIPredictor(model_dir="../models")
     
-    # Train both modes
     for style in ["scalp", "swing"]:
         success = predictor.train_model(df, asset_type=asset_type, style=style)
         if success:
-            logger.info(f"✅ {style.upper()} training for {asset_type} complete.")
-        else:
-            logger.error(f"❌ {style.upper()} training for {asset_type} failed.")
+            logger.info(f"✅ {style.upper()} training complete.")
         
+    # RESTORE Timeframe
+    logger.info(f"🔄 Restoration: Switching chart back to {original_tf_mins}...")
+    connector.change_timeframe(symbol, orig_mins)
+    time.sleep(1)
     connector.stop()
+    logger.info("🏁 Trainer Finished.")
 
 if __name__ == "__main__":
     download_and_train()

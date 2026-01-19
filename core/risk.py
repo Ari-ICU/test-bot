@@ -35,8 +35,11 @@ class RiskManager:
 
         time_since_last = time.time() - self.last_trade_time
         if time_since_last < self.cool_off_period:
-            remaining_mins = int((self.cool_off_period - time_since_last) / 60)
-            return False, f"Psychological cool-off: {remaining_mins} mins remaining."
+            remaining_sec = int(self.cool_off_period - time_since_last)
+            if remaining_sec < 60:
+                return False, f"Psychological cool-off: {remaining_sec}s remaining."
+            else:
+                return False, f"Psychological cool-off: {remaining_sec // 60}m remaining."
 
         return True, "Ready"
 

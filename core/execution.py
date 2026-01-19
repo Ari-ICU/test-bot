@@ -85,6 +85,22 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 with self.connector.lock:
                     self.connector.tf_data[tf_key] = parsed
 
+            # Handle M1 Specific Candles (always sent for profit protection)
+            m1_raw = data.get('m1_candles', [''])[0]
+            if m1_raw:
+                parsed_m1 = []
+                for c in m1_raw.split('|'):
+                    parts = c.split(',')
+                    if len(parts) >= 5:
+                        parsed_m1.append({
+                            'high': float(parts[0]), 'low': float(parts[1]),
+                            'open': float(parts[2]), 'close': float(parts[3]),
+                            'time': int(parts[4])
+                        })
+                with self.connector.lock:
+                    # Merge or update M1 data (simple overwrite for last few bars is fine)
+                    self.connector.tf_data["M1"] = parsed_m1
+
             if 'active_trades' in data:
                 raw_trades = data['active_trades'][0]
                 parsed_trades = []
@@ -97,7 +113,10 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                 'symbol': parts[1],
                                 'type': 0 if parts[2] == "BUY" else 1,
                                 'volume': float(parts[3]),
-                                'profit': float(parts[4])
+                                'profit': float(parts[4]),
+                                'open_price': float(parts[5]) if len(parts) >= 6 else 0.0,
+                                'sl': float(parts[6]) if len(parts) >= 7 else 0.0,
+                                'tp': float(parts[7]) if len(parts) >= 8 else 0.0
                             })
                 with self.connector.lock:
                     self.connector._open_positions = parsed_trades
@@ -215,6 +234,12 @@ class MT5Connector:
             self.command_queue.append("SYNC_REQUEST")  # EA-side: Trigger a full POST
             logger.info("🔄 Force Sync Requested – Awaiting EA Response.")
 
+    def request_history(self, count):
+        """Tell the EA to send more historical bars."""
+        with self.lock:
+            self.command_queue.append(f"GET_HISTORY|{self.active_symbol}|{count}")
+            logger.info(f"📥 Requested {count} bars of history from EA.")
+
     # Inside MT5Connector in execution.py
     def send_order(self, action, symbol, lot, sl, tp):
         with self.lock:
@@ -225,6 +250,12 @@ class MT5Connector:
                 
             self.command_queue.append(f"{action}|{symbol}|{lot}|{sl}|{tp}")
             logger.info(f"Order Queued: {action}|{symbol}|{lot}|{sl}|{tp}")
+        return True
+
+    def modify_order(self, ticket, sl, tp):
+        with self.lock:
+            self.command_queue.append(f"ORDER_MODIFY|{ticket}|{sl}|{tp}")
+            logger.debug(f"Modify Queued: Ticket {ticket} -> SL: {sl}, TP: {tp}")
         return True
 
     # ENHANCED: In start(), queue an initial sync request
