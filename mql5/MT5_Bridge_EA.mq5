@@ -90,6 +90,8 @@ string GetTFString() {
     if(_Period == PERIOD_H1) return "H1";
     if(_Period == PERIOD_H4) return "H4";
     if(_Period == PERIOD_D1) return "D1";
+    if(_Period == PERIOD_W1) return "W1";
+    if(_Period == PERIOD_MN1) return "MN";
     return "M5";
 }
 
@@ -101,6 +103,8 @@ int GetTFMinutes(string tf_str) {
     if(tf_str == "H1") return 60;
     if(tf_str == "H4") return 240;
     if(tf_str == "D1") return 1440;
+    if(tf_str == "W1") return 10080;
+    if(tf_str == "MN") return 43200;
     return 5;
 }
 
@@ -376,6 +380,7 @@ void ProcessCommand(string cmd) {
         if(tf_minutes==1) p=PERIOD_M1; else if(tf_minutes==5) p=PERIOD_M5; else if(tf_minutes==15) p=PERIOD_M15;
         else if(tf_minutes==30) p=PERIOD_M30; else if(tf_minutes==60) p=PERIOD_H1;
         else if(tf_minutes==240) p=PERIOD_H4; else if(tf_minutes==1440) p=PERIOD_D1;
+        else if(tf_minutes==10080) p=PERIOD_W1; else if(tf_minutes==43200) p=PERIOD_MN1;
         ChartSetSymbolPeriod(0, symbol, p);
         g_current_period = p;
         g_tf_string = new_tf;

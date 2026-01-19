@@ -16,6 +16,7 @@ import strategy.scalping as scalping
 import strategy.breakout as breakout
 import strategy.tbs_turtle as tbs_strat
 import strategy.reversal as reversal_strat
+import strategy.crt_tbs_master as crt_tbs
 import filters.volatility as volatility
 import filters.spread as spread
 import filters.news as news
@@ -135,6 +136,17 @@ heartbeat_limiter = RateLimiter(window=30, max_per_window=1) # Reduced from 60s
 filter_limiter = RateLimiter(window=10, max_per_window=1)
 scan_limiter = RateLimiter(window=10, max_per_window=1) # NEW: 10s feedback loop
 
+def get_htf_from_ltf(ltf):
+    mapping = {
+        "M1": "H1",
+        "M5": "H4",
+        "M15": "D1",
+        "M30": "D1",
+        "H1": "D1",
+        "H4": "D1"
+    }
+    return mapping.get(ltf, "D1")
+
 # main.py (Final Corrected Version)
 def bot_logic(app):
     connector = app.connector
@@ -228,6 +240,14 @@ def bot_logic(app):
                     logger.info(f"⏳ Waiting for adequate candle data... Currently: {len(candles) if candles else 0}/200")
                 time.sleep(5); continue
 
+            # Fetch HTF data for CRT
+            htf_tf = get_htf_from_ltf(execution_tf)
+            htf_candles = connector.get_tf_candles(htf_tf, count=200)
+            if not htf_candles:
+                # If HTF is missing, the bridge might only be sending LTF. 
+                # We can't do CRT, but we can continue with others.
+                pass
+
             # --- SMART SCAN GATEKEEPER ---
             # Only run heavy calcs if a new candle is detected or it's been > 15s
             current_candle_time = candles[-1]['time'] if candles else 0
@@ -296,6 +316,7 @@ def bot_logic(app):
                 ("Breakout", lambda: breakout.analyze_breakout_setup(candles, df=df)),
                 ("ICT_SB", lambda: ict_strat.analyze_ict_setup(candles, df=df, patterns=patterns)),
                 ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df=df, patterns=patterns)),
+                ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, symbol, execution_tf, htf_tf)),
                 ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
 

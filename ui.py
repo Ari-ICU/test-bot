@@ -140,6 +140,7 @@ class TradingApp(ttk.Window):
             ("Breakout", "Breakout Engine"), 
             ("ICT_SB", "ICT Silver Bullet"), 
             ("TBS_Turtle", "TBS Turtle"), 
+            ("CRT_TBS", "CRT MT5 Master"),
             ("Reversal", "Reversal Engine")
         ]
         for key, name in strat_list:
