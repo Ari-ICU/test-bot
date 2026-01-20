@@ -156,6 +156,7 @@ class TradingApp(ttk.Window):
             ("TBS_Turtle", "TBS Turtle"), 
             ("TBS_Retest", "TBS Retest"), # ADDED
             ("CRT_TBS", "CRT MT5 Master"),
+            ("News_Sentiment", "News Sentiment"),
             ("Reversal", "Reversal Engine")
         ]
         for key, name in strat_list:
@@ -307,6 +308,7 @@ class TradingApp(ttk.Window):
             "ICT_SB": {"name": "ICT Silver Bullet", "rec": "Rec: M15"},
             "TBS_Turtle": {"name": "TBS Turtle", "rec": "Rec: H1"},
             "CRT_TBS": {"name": "CRT Master", "rec": "Rec: H1/H4"},
+            "News_Sentiment": {"name": "News Sentiment", "rec": "Rec: All"},
             "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"}
         }
 

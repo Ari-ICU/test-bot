@@ -284,16 +284,28 @@ def bot_logic(app):
 
             df = pd.DataFrame(candles)
             
-            # --- HIGH IMPACT NEWS FILTER ---
+            # --- HIGH IMPACT NEWS FILTER & SENTIMENT OVERRIDE ---
             blocked, headline, wait_time = news.is_high_impact_news_near(symbol)
+            
+            # Check Sentiment explicitly for override
+            news_action, news_reason = news.analyze_sentiment(symbol)
+            sentiment_override = False
+
             if blocked:
-                if filter_limiter.allow("news_block"):
-                    logger.warning(f"⚠️ {headline} | Status: {wait_time} | ⛔ Trading Paused for Safety.")
+                # If we have a STRONG news signal (Buy/Sell), we ignore the pause
+                if news_action != "NEUTRAL":
+                     if filter_limiter.allow("news_override"):
+                        logger.warning(f"⚠️ {headline} | 🚀 SENTIMENT OVERRIDE: {news_action} based on {news_reason}")
+                     sentiment_override = True
                 
-                # Update UI Dashboard with Alert if possible
-                # (Optional: app.telegram_bot.send_message...)
-                time.sleep(10)
-                continue
+                # If no override, we enforce safety pause
+                if not sentiment_override:
+                    if filter_limiter.allow("news_block"):
+                        logger.warning(f"⚠️ {headline} | Status: {wait_time} | ⛔ Trading Paused for Safety.")
+                    
+                    time.sleep(10)
+                    continue
+
             # 1. Indicators
             df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
             df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
@@ -348,6 +360,7 @@ def bot_logic(app):
                 ("ICT_SB", lambda: ict_strat.analyze_ict_setup(candles, df=df, patterns=patterns)),
                 ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df=df, patterns=patterns)),
                 ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, symbol, execution_tf, htf_tf, reclaim_pct=ui_reclaim)),
+                ("News_Sentiment", lambda: news.analyze_sentiment(symbol)),
                 ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
 
