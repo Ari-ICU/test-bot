@@ -15,10 +15,51 @@ class AIPredictor:
         self.model = None
         self.current_asset_type = None
         self.current_style = None  # scalp vs swing
+        # Smart Money Concept Features
         self.feature_cols = [
+            # Traditional indicators (baseline)
             'rsi', 'adx', 'macd_hist', 'stoch_k', 'stoch_d', 
             'price_vs_ema200', 'bb_width', 'is_squeezing',
-            'supertrend_active' # Trend direction feature
+            'supertrend_active',
+            
+            # 1. Market Structure
+            'market_structure',  # HH/HL (1), LH/LL (-1), Range (0)
+            'bos_signal',        # Break of Structure detected
+            'choch_signal',      # Change of Character detected
+            
+            # 2. Liquidity
+            'buyside_liquidity',  # Distance to buy-side liquidity
+            'sellside_liquidity', # Distance to sell-side liquidity
+            'liquidity_sweep',    # Recent liquidity grab detected
+            
+            # 3. Order Blocks
+            'bullish_ob_strength',  # Strength of nearest bullish OB
+            'bearish_ob_strength',  # Strength of nearest bearish OB
+            'ob_confluence',        # OB + FVG confluence score
+            
+            # 4. Supply & Demand Zones
+            'fresh_demand_zone',    # Fresh demand zone present
+            'fresh_supply_zone',    # Fresh supply zone present
+            'zone_strength',        # Zone quality score
+            
+            # 5. Fair Value Gaps (FVG)
+            'bullish_fvg',         # Bullish imbalance present
+            'bearish_fvg',         # Bearish imbalance present
+            'fvg_size',            # Size of nearest FVG
+            
+            # 6. Premium & Discount Zones
+            'price_in_discount',   # Price in discount zone (0-50%)
+            'price_in_premium',    # Price in premium zone (50-100%)
+            'equilibrium_dist',    # Distance from 50% equilibrium
+            
+            # 7. Multi-Timeframe Analysis
+            'htf_trend',           # Higher timeframe trend direction
+            'ltf_trend',           # Lower timeframe trend direction
+            'tf_alignment',        # Timeframe alignment score
+            
+            # 8. Session Timing
+            'in_kill_zone',        # Currently in optimal trading session
+            'session_bias'         # Session directional bias
         ]
         
         # Create models directory if not exists
@@ -64,26 +105,304 @@ class AIPredictor:
             logging.getLogger("Main").warning(f"⚠️ No AI Model found for {asset_type}/{style}. Checked: {[specific_path, style_path, generic_path]}")
             self.model = None
 
+    def _detect_market_structure(self, df, lookback=20):
+        """Detect market structure: HH/HL (uptrend), LH/LL (downtrend), or range"""
+        highs = df['high'].tail(lookback)
+        lows = df['low'].tail(lookback)
+        
+        # Find swing highs and lows
+        recent_high = highs.max()
+        recent_low = lows.min()
+        prev_high = highs.iloc[:-5].max() if len(highs) > 5 else recent_high
+        prev_low = lows.iloc[:-5].min() if len(lows) > 5 else recent_low
+        
+        # HH and HL = Uptrend (1)
+        if recent_high > prev_high and recent_low > prev_low:
+            return 1
+        # LH and LL = Downtrend (-1)
+        elif recent_high < prev_high and recent_low < prev_low:
+            return -1
+        # Range (0)
+        return 0
+    
+    def _detect_bos_choch(self, df, lookback=15):
+        """Detect Break of Structure (BOS) and Change of Character (CHoCH)"""
+        bos = 0
+        choch = 0
+        
+        if len(df) < lookback:
+            return bos, choch
+        
+        recent = df.tail(lookback)
+        structure = self._detect_market_structure(df, lookback)
+        
+        # BOS: Price breaks previous structure high/low in trend direction
+        if structure == 1:  # Uptrend
+            prev_high = recent['high'].iloc[:-3].max()
+            if recent['close'].iloc[-1] > prev_high:
+                bos = 1
+        elif structure == -1:  # Downtrend
+            prev_low = recent['low'].iloc[:-3].min()
+            if recent['close'].iloc[-1] < prev_low:
+                bos = -1
+        
+        # CHoCH: Price breaks structure in OPPOSITE direction (trend reversal)
+        if structure == 1 and recent['close'].iloc[-1] < recent['low'].iloc[:-5].min():
+            choch = -1
+        elif structure == -1 and recent['close'].iloc[-1] > recent['high'].iloc[:-5].max():
+            choch = 1
+        
+        return bos, choch
+    
+    def _detect_liquidity_zones(self, df, lookback=30):
+        """Detect buy-side and sell-side liquidity (equal highs/lows)"""
+        recent = df.tail(lookback)
+        current_price = df['close'].iloc[-1]
+        
+        # Buy-side liquidity: equal highs above current price
+        highs = recent['high']
+        high_clusters = []
+        for i in range(len(highs) - 3):
+            if abs(highs.iloc[i] - highs.iloc[i+1]) / highs.iloc[i] < 0.001:  # Within 0.1%
+                high_clusters.append(highs.iloc[i])
+        
+        buyside_liq = (max(high_clusters) - current_price) / current_price if high_clusters else 0
+        
+        # Sell-side liquidity: equal lows below current price
+        lows = recent['low']
+        low_clusters = []
+        for i in range(len(lows) - 3):
+            if abs(lows.iloc[i] - lows.iloc[i+1]) / lows.iloc[i] < 0.001:
+                low_clusters.append(lows.iloc[i])
+        
+        sellside_liq = (current_price - min(low_clusters)) / current_price if low_clusters else 0
+        
+        # Liquidity sweep: recent spike through liquidity then reversal
+        sweep = 0
+        if len(df) > 5:
+            if df['high'].iloc[-2] > df['high'].iloc[-5:-2].max() and df['close'].iloc[-1] < df['close'].iloc[-2]:
+                sweep = -1  # Bearish sweep
+            elif df['low'].iloc[-2] < df['low'].iloc[-5:-2].min() and df['close'].iloc[-1] > df['close'].iloc[-2]:
+                sweep = 1   # Bullish sweep
+        
+        return buyside_liq, sellside_liq, sweep
+    
+    def _detect_order_blocks(self, df, lookback=20):
+        """Detect bullish and bearish order blocks (institutional entry zones)"""
+        bullish_ob = 0
+        bearish_ob = 0
+        confluence = 0
+        
+        if len(df) < lookback:
+            return bullish_ob, bearish_ob, confluence
+        
+        recent = df.tail(lookback)
+        current_price = df['close'].iloc[-1]
+        
+        # Bullish OB: Last down candle before strong up move
+        for i in range(len(recent) - 3, 0, -1):
+            if (recent['close'].iloc[i] < recent['open'].iloc[i] and  # Down candle
+                recent['close'].iloc[i+1] > recent['open'].iloc[i+1] and  # Next is up
+                recent['close'].iloc[i+1] > recent['high'].iloc[i]):  # Strong move up
+                ob_distance = (current_price - recent['low'].iloc[i]) / current_price
+                if -0.02 < ob_distance < 0.05:  # Within 5% above OB
+                    bullish_ob = max(bullish_ob, 1 - abs(ob_distance) * 20)
+                    break
+        
+        # Bearish OB: Last up candle before strong down move
+        for i in range(len(recent) - 3, 0, -1):
+            if (recent['close'].iloc[i] > recent['open'].iloc[i] and  # Up candle
+                recent['close'].iloc[i+1] < recent['open'].iloc[i+1] and  # Next is down
+                recent['close'].iloc[i+1] < recent['low'].iloc[i]):  # Strong move down
+                ob_distance = (recent['high'].iloc[i] - current_price) / current_price
+                if -0.02 < ob_distance < 0.05:  # Within 5% below OB
+                    bearish_ob = max(bearish_ob, 1 - abs(ob_distance) * 20)
+                    break
+        
+        # Confluence: OB + FVG alignment
+        confluence = (bullish_ob + bearish_ob) / 2
+        
+        return bullish_ob, bearish_ob, confluence
+    
+    def _detect_supply_demand_zones(self, df, lookback=40):
+        """Detect fresh vs tested supply/demand zones"""
+        fresh_demand = 0
+        fresh_supply = 0
+        zone_strength = 0
+        
+        if len(df) < lookback:
+            return fresh_demand, fresh_supply, zone_strength
+        
+        recent = df.tail(lookback)
+        current_price = df['close'].iloc[-1]
+        
+        # Demand zone: Strong departure from low, not retested
+        for i in range(len(recent) - 10, 0, -1):
+            if recent['close'].iloc[i+5] > recent['close'].iloc[i] * 1.02:  # 2% rally
+                zone_low = recent['low'].iloc[i-2:i+2].min()
+                zone_high = recent['high'].iloc[i-2:i+2].min()
+                
+                # Check if zone is fresh (not retested)
+                retested = any(recent['low'].iloc[i+5:] < zone_high)
+                if not retested and zone_low < current_price < zone_high * 1.1:
+                    fresh_demand = 1
+                    zone_strength = 0.8
+                    break
+        
+        # Supply zone: Strong departure from high, not retested
+        for i in range(len(recent) - 10, 0, -1):
+            if recent['close'].iloc[i+5] < recent['close'].iloc[i] * 0.98:  # 2% drop
+                zone_high = recent['high'].iloc[i-2:i+2].max()
+                zone_low = recent['low'].iloc[i-2:i+2].max()
+                
+                retested = any(recent['high'].iloc[i+5:] > zone_low)
+                if not retested and zone_high * 0.9 < current_price < zone_high:
+                    fresh_supply = 1
+                    zone_strength = 0.8
+                    break
+        
+        return fresh_demand, fresh_supply, zone_strength
+    
+    def _detect_fvg(self, df):
+        """Detect Fair Value Gaps (price imbalances)"""
+        bullish_fvg = 0
+        bearish_fvg = 0
+        fvg_size = 0
+        
+        if len(df) < 3:
+            return bullish_fvg, bearish_fvg, fvg_size
+        
+        # Bullish FVG: Gap between candle[i-2].high and candle[i].low
+        if df['low'].iloc[-1] > df['high'].iloc[-3]:
+            gap = df['low'].iloc[-1] - df['high'].iloc[-3]
+            fvg_size = gap / df['close'].iloc[-1]
+            bullish_fvg = 1
+        
+        # Bearish FVG: Gap between candle[i-2].low and candle[i].high
+        elif df['high'].iloc[-1] < df['low'].iloc[-3]:
+            gap = df['low'].iloc[-3] - df['high'].iloc[-1]
+            fvg_size = gap / df['close'].iloc[-1]
+            bearish_fvg = 1
+        
+        return bullish_fvg, bearish_fvg, fvg_size
+    
+    def _calculate_premium_discount(self, df, lookback=50):
+        """Calculate if price is in premium (50-100%) or discount (0-50%) zone"""
+        recent = df.tail(lookback)
+        high = recent['high'].max()
+        low = recent['low'].min()
+        current = df['close'].iloc[-1]
+        
+        # Fibonacci levels
+        range_size = high - low
+        if range_size == 0:
+            return 0, 0, 0
+        
+        fib_50 = low + (range_size * 0.5)
+        price_position = (current - low) / range_size  # 0 to 1
+        
+        discount = 1 if price_position < 0.5 else 0
+        premium = 1 if price_position > 0.5 else 0
+        equilibrium_dist = abs(current - fib_50) / fib_50
+        
+        return discount, premium, equilibrium_dist
+    
+    def _detect_session_timing(self, df):
+        """Detect if currently in kill zone (optimal trading session)"""
+        # This is a simplified version - you'd need actual timestamp data
+        # Kill zones: London (2-5 AM EST), New York (8-11 AM EST), Asian (7-10 PM EST)
+        in_kill_zone = 0.5  # Placeholder - implement with actual time logic
+        session_bias = 0    # Placeholder - would be based on session open direction
+        
+        return in_kill_zone, session_bias
+    
     def prepare_features(self, df):
         """
-        Convert indicator data into a format the AI can read.
+        Convert indicator data + Smart Money Concepts into AI features.
         """
         try:
-            # 1. Price vs EMA Ratio
+            # Traditional features
             df['price_vs_ema200'] = (df['close'] - df['ema_200']) / df['ema_200'] * 100
-            
-            # 2. Bollinger Width (Volatility)
             df['bb_width'] = (df['upper_bb'] - df['lower_bb']) / df['ema_200'] * 100
             
-            # 3. SuperTrend Direction (Binary Feature)
-            # If supertrend column exists, convert to 1/0
             if 'supertrend' in df.columns:
                 df['supertrend_active'] = df['supertrend'].astype(int)
             else:
                 df['supertrend_active'] = 0
             
-            # Select only the features the model was trained on
-            features = df[self.feature_cols].tail(1)
+            # Smart Money Concept Features
+            # 1. Market Structure
+            market_structure = self._detect_market_structure(df)
+            bos, choch = self._detect_bos_choch(df)
+            
+            # 2. Liquidity
+            buyside_liq, sellside_liq, liq_sweep = self._detect_liquidity_zones(df)
+            
+            # 3. Order Blocks
+            bull_ob, bear_ob, ob_conf = self._detect_order_blocks(df)
+            
+            # 4. Supply & Demand
+            fresh_demand, fresh_supply, zone_str = self._detect_supply_demand_zones(df)
+            
+            # 5. FVG
+            bull_fvg, bear_fvg, fvg_sz = self._detect_fvg(df)
+            
+            # 6. Premium/Discount
+            discount, premium, eq_dist = self._calculate_premium_discount(df)
+            
+            # 7. Multi-Timeframe (simplified - would need actual HTF data)
+            htf_trend = market_structure  # Placeholder
+            ltf_trend = 1 if df['close'].iloc[-1] > df['close'].iloc[-5] else -1
+            tf_alignment = 1 if htf_trend == ltf_trend else 0
+            
+            # 8. Session Timing
+            kill_zone, sess_bias = self._detect_session_timing(df)
+            
+            # Create feature row
+            features_dict = {
+                'rsi': df['rsi'].iloc[-1] if 'rsi' in df.columns else 50,
+                'adx': df['adx'].iloc[-1] if 'adx' in df.columns else 20,
+                'macd_hist': df['macd_hist'].iloc[-1] if 'macd_hist' in df.columns else 0,
+                'stoch_k': df['stoch_k'].iloc[-1] if 'stoch_k' in df.columns else 50,
+                'stoch_d': df['stoch_d'].iloc[-1] if 'stoch_d' in df.columns else 50,
+                'price_vs_ema200': df['price_vs_ema200'].iloc[-1],
+                'bb_width': df['bb_width'].iloc[-1],
+                'is_squeezing': df['is_squeezing'].iloc[-1] if 'is_squeezing' in df.columns else 0,
+                'supertrend_active': df['supertrend_active'].iloc[-1],
+                
+                'market_structure': market_structure,
+                'bos_signal': bos,
+                'choch_signal': choch,
+                
+                'buyside_liquidity': buyside_liq,
+                'sellside_liquidity': sellside_liq,
+                'liquidity_sweep': liq_sweep,
+                
+                'bullish_ob_strength': bull_ob,
+                'bearish_ob_strength': bear_ob,
+                'ob_confluence': ob_conf,
+                
+                'fresh_demand_zone': fresh_demand,
+                'fresh_supply_zone': fresh_supply,
+                'zone_strength': zone_str,
+                
+                'bullish_fvg': bull_fvg,
+                'bearish_fvg': bear_fvg,
+                'fvg_size': fvg_sz,
+                
+                'price_in_discount': discount,
+                'price_in_premium': premium,
+                'equilibrium_dist': eq_dist,
+                
+                'htf_trend': htf_trend,
+                'ltf_trend': ltf_trend,
+                'tf_alignment': tf_alignment,
+                
+                'in_kill_zone': kill_zone,
+                'session_bias': sess_bias
+            }
+            
+            features = pd.DataFrame([features_dict])
             features = features.fillna(0)
             
             return features
