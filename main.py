@@ -4,6 +4,7 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from collections import deque
+import tkinter as tk
 from bot_settings import Config
 from core.execution import MT5Connector
 from core.risk import RiskManager

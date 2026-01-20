@@ -289,18 +289,43 @@ class TradingApp(ttk.Window):
         container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
         
         # Strategy Toggles
-        strat_grp = ttk.Labelframe(container, text=" Active Strategies ")
+        strat_grp = ttk.Labelframe(container, text=" Active Strategies & Recommended TF ")
         strat_grp.pack(fill=X, pady=10)
         strat_inner = ttk.Frame(strat_grp)
         strat_inner.pack(fill=X, padx=20, pady=10)
         
-        # Grid layout for toggles
+        # Strategy Metadata: Name and Recommended Timeframe
+        strat_meta = {
+            "AI_Predict": {"name": "AI Predictor (SMC)", "rec": "Rec: M5"},
+            "Trend": {"name": "Trend Following", "rec": "Rec: H1/H4"},
+            "Scalp": {"name": "M5 Scalper", "rec": "Rec: M5"},
+            "Breakout": {"name": "Breakout Engine", "rec": "Rec: H4/D1"},
+            "TBS_Retest": {"name": "TBS Retest", "rec": "Rec: M15/M30"},
+            "ICT_SB": {"name": "ICT Silver Bullet", "rec": "Rec: M15"},
+            "TBS_Turtle": {"name": "TBS Turtle", "rec": "Rec: H1"},
+            "CRT_TBS": {"name": "CRT Master", "rec": "Rec: H1/H4"},
+            "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"}
+        }
+
+        # Grid layout for toggles with recommendation notes
         col = 0
         row = 0
-        for strat, var in self.strat_vars.items():
-            ttk.Checkbutton(strat_inner, text=strat.replace("_", " "), variable=var, bootstyle="round-toggle").grid(row=row, column=col, padx=10, pady=5, sticky=W)
+        for strat_key, var in self.strat_vars.items():
+            meta = strat_meta.get(strat_key, {"name": strat_key, "rec": ""})
+            
+            # Container for check + note
+            cell_frame = ttk.Frame(strat_inner)
+            cell_frame.grid(row=row, column=col, padx=10, pady=8, sticky=W)
+            
+            # Checkbox with Strategy Name
+            cb = ttk.Checkbutton(cell_frame, text=meta["name"], variable=var, bootstyle="round-toggle")
+            cb.pack(anchor=W)
+            
+            # Recommendation Note (Small Text)
+            ttk.Label(cell_frame, text=meta["rec"], font=("Helvetica", 8), bootstyle="secondary").pack(anchor=W, padx=(25, 0)) # Indent under text
+
             col += 1
-            if col > 3:  # 4 cols
+            if col > 2:  # 3 cols to fit extra text
                 col = 0
                 row += 1
 
