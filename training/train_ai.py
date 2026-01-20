@@ -82,7 +82,11 @@ def download_and_train():
     kc_upper, kc_lower = Indicators.calculate_keltner_channels(df, 20, 1.5)
     df['is_squeezing'] = ((df['upper_bb'] < kc_upper) & (df['lower_bb'] > kc_lower)).astype(int)
 
-    predictor = AIPredictor(model_dir="../models")
+    # Use absolute path for models directory relative to this script
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(current_dir, "..", "models")
+    
+    predictor = AIPredictor(model_dir=models_dir)
     
     for style in ["scalp", "swing"]:
         success = predictor.train_model(df, asset_type=asset_type, style=style)

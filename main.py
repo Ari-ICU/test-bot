@@ -190,9 +190,16 @@ def bot_logic(app):
             symbol = connector.active_symbol
             execution_tf = connector.active_tf
             # --- ACCOUNT HEALTH ---
-            max_pos_allowed = app.max_pos_var.get()
-            ui_lot_size = app.lot_var.get()
-            ui_cool_off = app.cool_off_var.get()
+            # --- ACCOUNT HEALTH ---
+            try:
+                max_pos_allowed = app.max_pos_var.get()
+                ui_lot_size = app.lot_var.get()
+                ui_cool_off = app.cool_off_var.get()
+            except Exception as e:
+                logger.error(f"⚠️ UI Input Error: {e}. Using defaults.")
+                max_pos_allowed = 1
+                ui_lot_size = 0.01
+                ui_cool_off = 10.0
             
             # Sync dynamic UI settings to RiskManager
             risk.cool_off_period = ui_cool_off

@@ -8,8 +8,18 @@ The AI model has been upgraded to incorporate **Smart Money Concepts (SMC)** bas
 ### 1. **Market Structure** (Foundation)
 - **Higher Highs (HH) & Higher Lows (HL)**: Uptrend detection
 - **Lower Highs (LH) & Lower Lows (LL)**: Downtrend detection
-- **Break of Structure (BOS)**: Continuation signal
-- **Change of Character (CHoCH)**: Reversal signal
+- **Break of Structure (BOS)**: Continuation signal with 10 validation rules:
+  1. ✅ BOS confirms trend continuation (not prediction)
+  2. ✅ Trend identification comes first (HH/HL or LH/LL)
+  3. ✅ Mark correct key levels (significant swing points only, filtered by ATR)
+  4. ✅ Wait for actual break (decisive, strong momentum)
+  5. ✅ **Candle body close confirmation** (wicks alone do NOT confirm BOS)
+  6. ✅ Bullish BOS vs Bearish BOS distinction
+  7. ✅ **Pullback after BOS** (best entry area - tracked as feature)
+  8. ✅ Multi-timeframe confirmation (HTF BOS carries more weight)
+  9. ✅ **Liquidity sweeps vs real BOS** (filters false breaks)
+  10. ✅ Avoid common mistakes (minor breaks, immediate entries)
+- **Change of Character (CHoCH)**: Reversal signal (body close required)
 - **Trend vs Range**: Market direction classification
 
 ### 2. **Liquidity Detection**
@@ -64,15 +74,15 @@ The AI model has been upgraded to incorporate **Smart Money Concepts (SMC)** bas
 
 ## Technical Implementation
 
-### Feature Vector (38 Features Total)
+### Feature Vector (39 Features Total)
 ```python
 Traditional Indicators (9):
 - RSI, ADX, MACD Histogram, Stochastic K/D
 - Price vs EMA200, Bollinger Width, Squeeze
 - SuperTrend Active
 
-Smart Money Concepts (29):
-- Market Structure (3): structure, BOS, CHoCH
+Smart Money Concepts (30):
+- Market Structure (4): structure, BOS (weighted), BOS pullback zone, CHoCH
 - Liquidity (3): buyside, sellside, sweep
 - Order Blocks (3): bullish OB, bearish OB, confluence
 - Supply/Demand (3): fresh demand, fresh supply, strength

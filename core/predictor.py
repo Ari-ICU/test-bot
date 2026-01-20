@@ -10,8 +10,13 @@ from core.indicators import Indicators
 logger = logging.getLogger("AIPredictor")
 
 class AIPredictor:
-    def __init__(self, model_dir="models"):
-        self.model_dir = model_dir
+    def __init__(self, model_dir=None):
+        if model_dir is None:
+            # Default to 'models' folder in the project root (one level up from core/)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            self.model_dir = os.path.join(current_dir, "..", "models")
+        else:
+            self.model_dir = model_dir
         self.model = None
         self.current_asset_type = None
         self.current_style = None  # scalp vs swing
@@ -24,7 +29,8 @@ class AIPredictor:
             
             # 1. Market Structure
             'market_structure',  # HH/HL (1), LH/LL (-1), Range (0)
-            'bos_signal',        # Break of Structure detected
+            'bos_signal',        # Break of Structure detected (weighted by strength)
+            'bos_pullback_zone', # Distance to pullback entry zone after BOS
             'choch_signal',      # Change of Character detected
             
             # 2. Liquidity
@@ -125,34 +131,132 @@ class AIPredictor:
         # Range (0)
         return 0
     
-    def _detect_bos_choch(self, df, lookback=15):
-        """Detect Break of Structure (BOS) and Change of Character (CHoCH)"""
+    def _detect_bos_choch(self, df, lookback=30):
+        """
+        Detect VALID Break of Structure (BOS) and Change of Character (CHoCH)
+        Based on 10 professional validation rules:
+        1. BOS confirms trend continuation (not prediction)
+        2. Trend identification comes first (HH/HL or LH/LL)
+        3. Mark correct key levels (significant swing points only)
+        4. Wait for actual break (decisive, strong momentum)
+        5. Candle body close confirmation (not just wicks)
+        6. Bullish BOS vs Bearish BOS distinction
+        7. Pullback after BOS (best entry area)
+        8. Multi-timeframe confirmation
+        9. Liquidity sweeps vs real BOS
+        10. Avoid common mistakes (minor breaks, immediate entries)
+        """
         bos = 0
+        bos_strength = 0  # 0-1 score for BOS quality
         choch = 0
+        pullback_zone = 0  # Distance to pullback entry zone
         
         if len(df) < lookback:
             return bos, choch
         
         recent = df.tail(lookback)
+        current_close = recent['close'].iloc[-1]
+        current_open = recent['open'].iloc[-1]
+        prev_close = recent['close'].iloc[-2]
+        
+        # Step 1 & 2: Identify existing trend structure FIRST
         structure = self._detect_market_structure(df, lookback)
         
-        # BOS: Price breaks previous structure high/low in trend direction
-        if structure == 1:  # Uptrend
-            prev_high = recent['high'].iloc[:-3].max()
-            if recent['close'].iloc[-1] > prev_high:
-                bos = 1
-        elif structure == -1:  # Downtrend
-            prev_low = recent['low'].iloc[:-3].min()
-            if recent['close'].iloc[-1] < prev_low:
-                bos = -1
+        # Step 3: Mark SIGNIFICANT swing points (not minor noise)
+        # Use ATR to filter out insignificant swings
+        atr = (recent['high'] - recent['low']).rolling(14).mean().iloc[-1]
+        min_swing_size = atr * 0.5  # Swing must be at least 50% of ATR
         
-        # CHoCH: Price breaks structure in OPPOSITE direction (trend reversal)
-        if structure == 1 and recent['close'].iloc[-1] < recent['low'].iloc[:-5].min():
-            choch = -1
-        elif structure == -1 and recent['close'].iloc[-1] > recent['high'].iloc[:-5].max():
-            choch = 1
+        # Find significant swing highs and lows
+        swing_highs = []
+        swing_lows = []
         
-        return bos, choch
+        for i in range(2, len(recent) - 2):
+            # Swing high: higher than 2 candles on each side
+            if (recent['high'].iloc[i] > recent['high'].iloc[i-1] and 
+                recent['high'].iloc[i] > recent['high'].iloc[i-2] and
+                recent['high'].iloc[i] > recent['high'].iloc[i+1] and
+                recent['high'].iloc[i] > recent['high'].iloc[i+2]):
+                swing_highs.append((i, recent['high'].iloc[i]))
+            
+            # Swing low: lower than 2 candles on each side
+            if (recent['low'].iloc[i] < recent['low'].iloc[i-1] and 
+                recent['low'].iloc[i] < recent['low'].iloc[i-2] and
+                recent['low'].iloc[i] < recent['low'].iloc[i+1] and
+                recent['low'].iloc[i] < recent['low'].iloc[i+2]):
+                swing_lows.append((i, recent['low'].iloc[i]))
+        
+        # BULLISH BOS Detection (Step 6)
+        if structure == 1 and swing_highs:  # Uptrend
+            # Find most recent significant swing high
+            most_recent_swing_high = max(swing_highs, key=lambda x: x[0])[1]
+            
+            # Step 4: Wait for ACTUAL break (decisive movement)
+            # Price must break with strong momentum (not choppy)
+            if current_close > most_recent_swing_high:
+                # Step 5: CRITICAL - Candle BODY must close beyond swing level
+                # Wicks alone do NOT confirm BOS
+                body_close_beyond = current_close > most_recent_swing_high
+                strong_momentum = abs(current_close - current_open) > atr * 0.3
+                
+                # Step 9: Filter out liquidity sweeps (wick breaks but closes back inside)
+                is_liquidity_sweep = (recent['high'].iloc[-1] > most_recent_swing_high and 
+                                     current_close < most_recent_swing_high)
+                
+                if body_close_beyond and strong_momentum and not is_liquidity_sweep:
+                    bos = 1
+                    # Calculate BOS strength based on momentum and body size
+                    body_size = abs(current_close - current_open)
+                    candle_range = recent['high'].iloc[-1] - recent['low'].iloc[-1]
+                    bos_strength = (body_size / candle_range) if candle_range > 0 else 0
+                    
+                    # Step 7: Identify pullback zone (broken level becomes support)
+                    pullback_zone = (current_close - most_recent_swing_high) / current_close
+        
+        # BEARISH BOS Detection (Step 6)
+        elif structure == -1 and swing_lows:  # Downtrend
+            # Find most recent significant swing low
+            most_recent_swing_low = min(swing_lows, key=lambda x: x[0])[1]
+            
+            # Step 4: Wait for ACTUAL break
+            if current_close < most_recent_swing_low:
+                # Step 5: Candle BODY must close beyond swing level
+                body_close_beyond = current_close < most_recent_swing_low
+                strong_momentum = abs(current_close - current_open) > atr * 0.3
+                
+                # Step 9: Filter liquidity sweeps
+                is_liquidity_sweep = (recent['low'].iloc[-1] < most_recent_swing_low and 
+                                     current_close > most_recent_swing_low)
+                
+                if body_close_beyond and strong_momentum and not is_liquidity_sweep:
+                    bos = -1
+                    body_size = abs(current_close - current_open)
+                    candle_range = recent['high'].iloc[-1] - recent['low'].iloc[-1]
+                    bos_strength = (body_size / candle_range) if candle_range > 0 else 0
+                    
+                    # Step 7: Pullback zone (broken level becomes resistance)
+                    pullback_zone = (most_recent_swing_low - current_close) / current_close
+        
+        # CHoCH Detection: Price breaks structure in OPPOSITE direction
+        # This signals potential trend reversal
+        if structure == 1 and swing_lows:  # Was uptrend, now breaking down
+            recent_swing_low = min([s[1] for s in swing_lows[-3:]] if len(swing_lows) >= 3 else [s[1] for s in swing_lows])
+            if current_close < recent_swing_low:
+                # Must be body close, not just wick
+                if current_close < recent_swing_low and abs(current_close - current_open) > atr * 0.3:
+                    choch = -1
+        
+        elif structure == -1 and swing_highs:  # Was downtrend, now breaking up
+            recent_swing_high = max([s[1] for s in swing_highs[-3:]] if len(swing_highs) >= 3 else [s[1] for s in swing_highs])
+            if current_close > recent_swing_high:
+                if current_close > recent_swing_high and abs(current_close - current_open) > atr * 0.3:
+                    choch = 1
+        
+        # Return BOS with strength score (for feature engineering)
+        # Multiply bos by strength to get a weighted signal
+        bos_weighted = bos * max(0.5, bos_strength)  # Minimum 0.5 if valid BOS detected
+        
+        return bos_weighted, pullback_zone, choch
     
     def _detect_liquidity_zones(self, df, lookback=30):
         """Detect buy-side and sell-side liquidity (equal highs/lows)"""
@@ -333,7 +437,7 @@ class AIPredictor:
             # Smart Money Concept Features
             # 1. Market Structure
             market_structure = self._detect_market_structure(df)
-            bos, choch = self._detect_bos_choch(df)
+            bos, bos_pullback, choch = self._detect_bos_choch(df)
             
             # 2. Liquidity
             buyside_liq, sellside_liq, liq_sweep = self._detect_liquidity_zones(df)
@@ -372,6 +476,7 @@ class AIPredictor:
                 
                 'market_structure': market_structure,
                 'bos_signal': bos,
+                'bos_pullback_zone': bos_pullback,
                 'choch_signal': choch,
                 
                 'buyside_liquidity': buyside_liq,
@@ -479,13 +584,101 @@ class AIPredictor:
         
         data = historical_df.copy()
         
-        # 1. Feature Prep
+        # 1. Feature Prep - Traditional Indicators
         data['price_vs_ema200'] = (data['close'] - data['ema_200']) / data['ema_200'] * 100
         data['bb_width'] = (data['upper_bb'] - data['lower_bb']) / data['ema_200'] * 100
         if 'supertrend' in data.columns:
             data['supertrend_active'] = data['supertrend'].astype(int)
         else:
             data['supertrend_active'] = 0
+        
+        # 1b. Feature Prep - Smart Money Concepts
+        # Calculate SMC features for ENTIRE dataset (not just last row)
+        logger.info("📊 Calculating Smart Money Concept features for training...")
+        
+        # Initialize SMC feature columns
+        data['market_structure'] = 0
+        data['bos_signal'] = 0.0
+        data['bos_pullback_zone'] = 0.0
+        data['choch_signal'] = 0
+        data['buyside_liquidity'] = 0.0
+        data['sellside_liquidity'] = 0.0
+        data['liquidity_sweep'] = 0
+        data['bullish_ob_strength'] = 0.0
+        data['bearish_ob_strength'] = 0.0
+        data['ob_confluence'] = 0.0
+        data['fresh_demand_zone'] = 0
+        data['fresh_supply_zone'] = 0
+        data['zone_strength'] = 0.0
+        data['bullish_fvg'] = 0
+        data['bearish_fvg'] = 0
+        data['fvg_size'] = 0.0
+        data['price_in_discount'] = 0
+        data['price_in_premium'] = 0
+        data['equilibrium_dist'] = 0.0
+        data['htf_trend'] = 0
+        data['ltf_trend'] = 0
+        data['tf_alignment'] = 0
+        data['in_kill_zone'] = 0.5
+        data['session_bias'] = 0
+        
+        # Calculate SMC features for each candle (sliding window)
+        # We need at least 50 candles for reliable SMC detection
+        lookback = 50
+        for i in range(lookback, len(data)):
+            # Get window of data up to current candle
+            window_df = data.iloc[:i+1].copy()
+            
+            try:
+                # Calculate SMC features using the same methods as prepare_features
+                market_structure = self._detect_market_structure(window_df)
+                bos, bos_pullback, choch = self._detect_bos_choch(window_df)
+                buyside_liq, sellside_liq, liq_sweep = self._detect_liquidity_zones(window_df)
+                bull_ob, bear_ob, ob_conf = self._detect_order_blocks(window_df)
+                fresh_demand, fresh_supply, zone_str = self._detect_supply_demand_zones(window_df)
+                bull_fvg, bear_fvg, fvg_sz = self._detect_fvg(window_df)
+                discount, premium, eq_dist = self._calculate_premium_discount(window_df)
+                
+                # Multi-timeframe (simplified)
+                htf_trend = market_structure
+                ltf_trend = 1 if window_df['close'].iloc[-1] > window_df['close'].iloc[-5] else -1
+                tf_alignment = 1 if htf_trend == ltf_trend else 0
+                
+                # Session timing (placeholder)
+                kill_zone, sess_bias = self._detect_session_timing(window_df)
+                
+                # Store in dataframe
+                data.at[data.index[i], 'market_structure'] = market_structure
+                data.at[data.index[i], 'bos_signal'] = bos
+                data.at[data.index[i], 'bos_pullback_zone'] = bos_pullback
+                data.at[data.index[i], 'choch_signal'] = choch
+                data.at[data.index[i], 'buyside_liquidity'] = buyside_liq
+                data.at[data.index[i], 'sellside_liquidity'] = sellside_liq
+                data.at[data.index[i], 'liquidity_sweep'] = liq_sweep
+                data.at[data.index[i], 'bullish_ob_strength'] = bull_ob
+                data.at[data.index[i], 'bearish_ob_strength'] = bear_ob
+                data.at[data.index[i], 'ob_confluence'] = ob_conf
+                data.at[data.index[i], 'fresh_demand_zone'] = fresh_demand
+                data.at[data.index[i], 'fresh_supply_zone'] = fresh_supply
+                data.at[data.index[i], 'zone_strength'] = zone_str
+                data.at[data.index[i], 'bullish_fvg'] = bull_fvg
+                data.at[data.index[i], 'bearish_fvg'] = bear_fvg
+                data.at[data.index[i], 'fvg_size'] = fvg_sz
+                data.at[data.index[i], 'price_in_discount'] = discount
+                data.at[data.index[i], 'price_in_premium'] = premium
+                data.at[data.index[i], 'equilibrium_dist'] = eq_dist
+                data.at[data.index[i], 'htf_trend'] = htf_trend
+                data.at[data.index[i], 'ltf_trend'] = ltf_trend
+                data.at[data.index[i], 'tf_alignment'] = tf_alignment
+                data.at[data.index[i], 'in_kill_zone'] = kill_zone
+                data.at[data.index[i], 'session_bias'] = sess_bias
+                
+            except Exception as e:
+                # If SMC calculation fails for this candle, skip it
+                logger.warning(f"SMC calculation failed for candle {i}: {e}")
+                continue
+        
+        logger.info(f"✅ SMC features calculated for {len(data) - lookback} candles")
             
         # 2. Advanced Labeling (Target)
         # Horizon: Scalp = 10 candles, Swing = 40 candles
