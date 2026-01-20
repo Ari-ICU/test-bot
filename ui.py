@@ -154,6 +154,7 @@ class TradingApp(ttk.Window):
             ("Breakout", "Breakout Engine"), 
             ("ICT_SB", "ICT Silver Bullet"), 
             ("TBS_Turtle", "TBS Turtle"), 
+            ("TBS_Retest", "TBS Retest"), # ADDED
             ("CRT_TBS", "CRT MT5 Master"),
             ("Reversal", "Reversal Engine")
         ]
@@ -633,6 +634,28 @@ class TradingApp(ttk.Window):
                     self.tf_var.set(ea_tf)
                     self.tf_combo.set(ea_tf)
                 self.last_active_tf = ea_tf
+
+    # --- NEW: Strategy Feedback Updater ---
+    def update_strategy_status(self, strat_key, action, reason):
+        if hasattr(self, 'strat_ui_items') and strat_key in self.strat_ui_items:
+            item = self.strat_ui_items[strat_key]
+            
+            # Color Logic
+            boot_color = "secondary"
+            if action == "BUY": boot_color = "success"
+            elif action == "SELL": boot_color = "danger"
+            elif action == "NEUTRAL": boot_color = "secondary"
+            
+            # Update Labels Safely
+            try:
+                item['status'].configure(text=action, bootstyle=boot_color)
+                
+                # Clean and Truncate Reason
+                clean_reason = str(reason).replace("TBS: ", "").replace("AI_Predict: ", "")
+                short_reason = (clean_reason[:25] + '..') if len(clean_reason) > 25 else clean_reason
+                item['reason'].configure(text=short_reason)
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     pass

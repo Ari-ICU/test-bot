@@ -21,8 +21,19 @@ def is_high_impact_news_near(symbol):
             time_info = f"{status} ({abs(mins_diff)}m)"
             return True, headline, time_info
         
+            return True, headline, time_info
+        
         return False, "", ""
         
     except Exception as e:
         logger.error(f"News Check Error: {e}")
         return False, "", ""
+
+def get_next_news_info(symbol):
+    """
+    Returns (EventName, MinutesUntil, Link) for display purposes.
+    """
+    try:
+        return _manager.get_upcoming_event(symbol)
+    except:
+        return None, None, None

@@ -327,7 +327,11 @@ def bot_logic(app):
             curr_adx = df['adx'].iloc[-1] if 'adx' in df else 0
             curr_rsi = df['rsi'].iloc[-1] if 'rsi' in df else 50
             if scan_limiter.allow("market_diagnostics"):
-                logger.info(f"📊 Market Health | Symbol: {symbol} | ADX: {curr_adx:.1f} | RSI: {curr_rsi:.1f}")
+                news_text = ""
+                nxt_ev, nxt_min, nxt_link = news.get_next_news_info(symbol)
+                if nxt_ev and nxt_min:
+                    news_text = f" | 📰 Next: {nxt_ev} ({int(nxt_min)}m) [{nxt_link}]"
+                logger.info(f"📊 Market Health | Symbol: {symbol} | ADX: {curr_adx:.1f} | RSI: {curr_rsi:.1f}{news_text}")
 
             asset_type = detect_asset_type(symbol)
             selected_style = app.style_var.get()
@@ -367,6 +371,9 @@ def bot_logic(app):
                 try:
                     action, reason = engine()
                     strategy_results.append((name, (action, reason)))
+                    
+                    # --- LIVE UI FEEDBACK ---
+                    app.update_strategy_status(name, action, reason) # Push to Dashboard
                     
                     # --- SYNC TO UI ---
                     color = "secondary"
