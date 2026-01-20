@@ -192,7 +192,6 @@ def bot_logic(app):
             symbol = connector.active_symbol
             execution_tf = connector.active_tf
             # --- ACCOUNT HEALTH ---
-            # --- ACCOUNT HEALTH ---
             try:
                 max_pos_allowed = app.max_pos_var.get()
                 ui_lot_size = app.lot_var.get()
