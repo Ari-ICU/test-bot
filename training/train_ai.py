@@ -88,7 +88,7 @@ def download_and_train():
     
     predictor = AIPredictor(model_dir=models_dir)
     
-    for style in ["scalp", "swing"]:
+    for style in ["scalp", "swing", "sniper", "intraday"]:
         success = predictor.train_model(df, asset_type=asset_type, style=style)
         if success:
             logger.info(f"✅ {style.upper()} training complete.")

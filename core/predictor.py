@@ -557,8 +557,12 @@ class AIPredictor:
             mapping = {1: "BUY", -1: "SELL", 0: "NEUTRAL"}
             action = mapping.get(prediction, "NEUTRAL")
             
-            # Higher confidence threshold for Swing
-            min_conf = 0.65 if style == "swing" else 0.60
+            # Higher confidence threshold for Swing/Intraday
+            if style in ["swing", "intraday"]:
+                min_conf = 0.65
+            else: # scalp, sniper
+                min_conf = 0.60
+            
             if confidence < min_conf:
                 return "NEUTRAL", confidence
                 
@@ -681,11 +685,18 @@ class AIPredictor:
         logger.info(f"✅ SMC features calculated for {len(data) - lookback} candles")
             
         # 2. Advanced Labeling (Target)
-        # Horizon: Scalp = 10 candles, Swing = 40 candles
-        horizon = 10 if style == "scalp" else 40
+        # Horizon: Sniper=3, Scalp=10, Intraday=20, Swing=40
+        if style == "sniper":
+            horizon = 3
+        elif style == "scalp":
+            horizon = 10
+        elif style == "intraday":
+            horizon = 20
+        else: # swing
+            horizon = 40
         
-        # Use future max/min within horizon for Swing to catch 'peaks'
-        if style == "swing":
+        # Use future max/min within horizon for Swing/Intraday to catch 'peaks'
+        if style in ["swing", "intraday"]:
             # For swing, we want to know if price hit a target high/low before the horizon ends
             future_max = data['high'].shift(-horizon).rolling(window=horizon).max()
             future_min = data['low'].shift(-horizon).rolling(window=horizon).min()
@@ -694,19 +705,27 @@ class AIPredictor:
             buy_ret = (future_max - data['close']) / data['close']
             sell_ret = (data['close'] - future_min) / data['close']
         else:
-            # Scalp labeling: simpler point-in-time check
+            # Scalp/Sniper labeling: simpler point-in-time check
             future_return = (data['close'].shift(-horizon) - data['close']) / data['close']
             buy_ret = future_return
             sell_ret = -future_return
         
         # Determine threshold based on median volatility (ATR-like)
-        mult = 2.0 if style == "scalp" else 4.0
+        if style == "sniper":
+            mult = 1.0
+        elif style == "scalp":
+            mult = 2.0
+        elif style == "intraday":
+            mult = 2.5
+        else:
+            mult = 4.0
+
         vol_ref = (data['high'] - data['low']) / data['close']
         profit_hurdle = vol_ref.median() * mult
         
         # Min hurdle (avoid noise)
         min_hurdle = 0.0008 if asset_type == "forex" else 0.005 # 8 pips or 0.5%
-        if style == "swing": min_hurdle *= 2.5
+        if style in ["swing", "intraday"]: min_hurdle *= 2.0 # Slightly lower requirements for intraday
         
         profit_hurdle = max(profit_hurdle, min_hurdle)
         stop_hurdle = profit_hurdle * 0.5  # 2:1 RR simulated stop

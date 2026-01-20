@@ -246,9 +246,10 @@ class TradingApp(ttk.Window):
         # 2. AI Style and Max Positions
         st_f = ttk.Frame(conf_frame); st_f.grid(row=2, column=0, sticky=EW, padx=5, pady=2)
         ttk.Label(st_f, text="AI Style:", font=("Helvetica", 9)).pack(anchor=W)
-        self.style_combo = ttk.Combobox(st_f, textvariable=self.style_var, values=["scalp", "swing"], width=12, bootstyle="warning")
+        self.style_combo = ttk.Combobox(st_f, textvariable=self.style_var, values=["sniper", "scalp", "intraday", "swing"], width=12, bootstyle="warning")
         self.style_combo.pack(fill=X)
-        ttk.Label(st_f, text="(M1-M15=Scalp, H1+=Swing)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
+        ttk.Label(st_f, text="Rec TF: Sniper(M1) | Scalp(M5)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
+        ttk.Label(st_f, text="Intra(M15-M30) | Swing(H1+)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
 
         mp_f = ttk.Frame(conf_frame); mp_f.grid(row=2, column=1, sticky=EW, padx=5, pady=2)
         ttk.Label(mp_f, text="Max Pos:", font=("Helvetica", 9)).pack(anchor=W)
