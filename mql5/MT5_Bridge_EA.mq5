@@ -293,14 +293,14 @@ void OnTimer() {
     }
     post_freezer.Add("&m1_candles=" + m1_freezer.String());
 
-    // NEW: Always send HTF candles (H1 and H4) for CRT strategy
+    // NEW: Always send HTF candles (H1, H4, and D1) for CRT strategy
     StringFreezer htf_freezer;
-    ENUM_TIMEFRAMES htf_list[] = {PERIOD_H1, PERIOD_H4};
-    for(int h=0; h<2; h++) {
+    ENUM_TIMEFRAMES htf_list[] = {PERIOD_H1, PERIOD_H4, PERIOD_D1};
+    for(int h=0; h<3; h++) {
         ENUM_TIMEFRAMES htf = htf_list[h];
         if(htf == g_current_period) continue; // Skip redundant HTF
         
-        string tf_label = (htf == PERIOD_H1) ? "H1" : "H4";
+        string tf_label = (htf == PERIOD_H1) ? "H1" : (htf == PERIOD_H4 ? "H4" : "D1");
         int bars = MathMin(300, iBars(_Symbol, htf)); // Increased to 300
         StringFreezer sub_freezer;
         for(int i=0; i<bars; i++) {

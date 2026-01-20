@@ -204,68 +204,56 @@ class TradingApp(ttk.Window):
         ttk.Button(close_frame, text="CLOSE ALL", bootstyle="warning",
                    command=lambda: self.manual_close("ALL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
 
-        # Configuration Controls (Right Side)
-        conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ")
+        # Configuration Controls (Right Side - Compact for 13.3" screens)
+        conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ", padding=10)
         conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
        
-        # Auto Trading Switch
+        # Use Grid for compactness
+        conf_frame.columnconfigure(0, weight=1)
+        conf_frame.columnconfigure(1, weight=1)
+
+        # 0. Auto Trading Switch (Top Row)
         auto_row = ttk.Frame(conf_frame)
-        auto_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(auto_row, text="Auto Trading:", font=("Helvetica", 11, "bold")).pack(side=LEFT)
+        auto_row.grid(row=0, column=0, columnspan=2, sticky=EW, pady=(0, 10))
+        ttk.Label(auto_row, text="Auto Trading Status:", font=("Helvetica", 10, "bold")).pack(side=LEFT)
         ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var,
                         text="ACTIVE", command=self.on_auto_trade_toggle).pack(side=RIGHT)
 
-        # Active Symbol Dropdown
-        sym_row = ttk.Frame(conf_frame)
-        sym_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(sym_row, text="Active Symbol:", font=("Helvetica", 10)).pack(anchor=W)
-        self.sym_combo = ttk.Combobox(sym_row, textvariable=self.symbol_var, width=15, bootstyle="secondary")
-        self.sym_combo.pack(fill=X, pady=2)
-        self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
-       
-        # Execution Timeframe Dropdown
-        tf_row = ttk.Frame(conf_frame)
-        tf_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(tf_row, text="Execution Timeframe:", font=("Helvetica", 10)).pack(anchor=W)
-        self.tf_combo = ttk.Combobox(tf_row, textvariable=self.tf_var,
-                                     values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
-                                     width=15, bootstyle="info")
-        self.tf_combo.pack(fill=X, pady=2)
-        self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
+        # 1. Symbol and Timeframe
+        s_f = ttk.Frame(conf_frame); s_f.grid(row=1, column=0, sticky=EW, padx=5, pady=2)
+        ttk.Label(s_f, text="Active Symbol:", font=("Helvetica", 9)).pack(anchor=W)
+        self.sym_combo = ttk.Combobox(s_f, textvariable=self.symbol_var, width=12, bootstyle="secondary")
+        self.sym_combo.pack(fill=X); self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
 
-        # NEW: AI Strategy Style Dropdown (Scalp/Swing)
-        style_row = ttk.Frame(conf_frame)
-        style_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(style_row, text="AI Strategy Style:", font=("Helvetica", 10)).pack(anchor=W)
-        self.style_combo = ttk.Combobox(style_row, textvariable=self.style_var,
-                                        values=["scalp", "swing"],
-                                        width=15, bootstyle="warning")
-        self.style_combo.pack(fill=X, pady=2)
+        t_f = ttk.Frame(conf_frame); t_f.grid(row=1, column=1, sticky=EW, padx=5, pady=2)
+        ttk.Label(t_f, text="Timeframe:", font=("Helvetica", 9)).pack(anchor=W)
+        self.tf_combo = ttk.Combobox(t_f, textvariable=self.tf_var, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"], width=12, bootstyle="info")
+        self.tf_combo.pack(fill=X); self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
 
-        # Max Positions Spinbox
-        pos_row = ttk.Frame(conf_frame)
-        pos_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(pos_row, text="Max Positions:", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Spinbox(pos_row, from_=1, to=20, textvariable=self.max_pos_var, width=10).pack(fill=X, pady=2)
+        # 2. AI Style and Max Positions
+        st_f = ttk.Frame(conf_frame); st_f.grid(row=2, column=0, sticky=EW, padx=5, pady=2)
+        ttk.Label(st_f, text="AI Style:", font=("Helvetica", 9)).pack(anchor=W)
+        self.style_combo = ttk.Combobox(st_f, textvariable=self.style_var, values=["scalp", "swing"], width=12, bootstyle="warning")
+        self.style_combo.pack(fill=X)
 
-        # Trade Volume Spinbox
-        lot_row = ttk.Frame(conf_frame)
-        lot_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(lot_row, text="Trade Volume:", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Spinbox(lot_row, from_=0.01, to=50, textvariable=self.lot_var, width=10).pack(fill=X, pady=2)
+        mp_f = ttk.Frame(conf_frame); mp_f.grid(row=2, column=1, sticky=EW, padx=5, pady=2)
+        ttk.Label(mp_f, text="Max Pos:", font=("Helvetica", 9)).pack(anchor=W)
+        ttk.Spinbox(mp_f, from_=1, to=20, textvariable=self.max_pos_var, width=10).pack(fill=X)
 
-        # NEW: Cool-off Spinbox
-        cool_row = ttk.Frame(conf_frame)
-        cool_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(cool_row, text="Cool-off (sec):", font=("Helvetica", 10)).pack(anchor=W)
-        self.cool_spin = ttk.Spinbox(cool_row, from_=0, to=300, textvariable=self.cool_off_var, width=10)
-        self.cool_spin.pack(fill=X, pady=2)
+        # 3. Trade Volume and Cool-off
+        v_f = ttk.Frame(conf_frame); v_f.grid(row=3, column=0, sticky=EW, padx=5, pady=2)
+        ttk.Label(v_f, text="Volume (Lots):", font=("Helvetica", 9)).pack(anchor=W)
+        ttk.Spinbox(v_f, from_=0.01, to=50, textvariable=self.lot_var, width=10).pack(fill=X)
 
-        # NEW: CRT Reclaim % Spinbox
-        crt_row = ttk.Frame(conf_frame)
-        crt_row.pack(fill=X, padx=20, pady=5)
-        ttk.Label(crt_row, text="CRT Reclaim %:", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Spinbox(crt_row, from_=0.05, to=0.95, increment=0.05, textvariable=self.crt_reclaim_var, width=10).pack(fill=X, pady=2)
+        co_f = ttk.Frame(conf_frame); co_f.grid(row=3, column=1, sticky=EW, padx=5, pady=2)
+        ttk.Label(co_f, text="Cool-off (s):", font=("Helvetica", 9)).pack(anchor=W)
+        self.cool_spin = ttk.Spinbox(co_f, from_=0, to=300, textvariable=self.cool_off_var, width=10)
+        self.cool_spin.pack(fill=X)
+
+        # 4. CRT Reclaim % (Full Width)
+        crt_f = ttk.Frame(conf_frame); crt_f.grid(row=4, column=0, columnspan=2, sticky=EW, padx=5, pady=5)
+        ttk.Label(crt_f, text="CRT Reclaim % (HTF Expansion Check):", font=("Helvetica", 9)).pack(anchor=W)
+        ttk.Spinbox(crt_f, from_=0.05, to=0.95, increment=0.05, textvariable=self.crt_reclaim_var, width=10).pack(fill=X)
     def _build_console_tab(self):
         # Console Setup with ScrolledText
         console_frame = ttk.Frame(self.tab_console)

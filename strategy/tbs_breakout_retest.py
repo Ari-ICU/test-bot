@@ -1,8 +1,8 @@
 import pandas as pd
-import numpy as np
 from core.indicators import Indicators
+from core.patterns import detect_patterns
 
-class TBSBreakoutRetest:
+def analyze_tbs_retest_setup(candles, df=None, patterns=None):
     """
     Implementation of the TBS Breakout & Retest Strategy.
     Logic: 
@@ -10,50 +10,47 @@ class TBSBreakoutRetest:
     2. Wait for a pullback to the breakout level (Retest).
     3. Enter on confirmation (Engulfing or Rejection candle).
     """
-    def __init__(self):
-        self.name = "TBS_Breakout_Retest"
+    if df is None:
+        if not candles or len(candles) < 50:
+            return "NEUTRAL", "Insufficient data"
+        df = pd.DataFrame(candles)
 
-    def analyze(self, df):
-        if len(df) < 50:
-            return None
-
-        # Calculate indicators for confirmation
-        df = Indicators.add_ema(df, period=20) # Trend filter
-        df = Indicators.add_rsi(df, period=14)
+    # 1. Indicators & Patterns
+    if 'ema_20' not in df:
+        df['ema_20'] = Indicators.calculate_ema(df['close'], 20)
+    
+    if patterns is None:
+        patterns = detect_patterns(candles, df=df)
         
-        last_row = df.iloc[-1]
-        prev_row = df.iloc[-2]
-        
-        # 1. Identify Local Highs/Lows (Potential Breakout Levels)
-        recent_high = df['high'].iloc[-20:-5].max()
-        recent_low = df['low'].iloc[-20:-5].min()
+    last_row = df.iloc[-1]
+    prev_row = df.iloc[-2]
+    
+    # 2. Identify Local Highs/Lows (Potential Breakout Levels)
+    # We look back at a window to find the peak/trough that was broken
+    recent_high = df['high'].iloc[-25:-5].max()
+    recent_low = df['low'].iloc[-25:-5].min()
 
-        # 2. Bullish Setup (Breakout Above Resistance)
-        # Breakout: Previous candle closed above resistance
-        is_breakout_up = prev_row['close'] > recent_high
-        # Retest: Current price is touching/near the old resistance (now support)
-        is_retest_up = last_row['low'] <= recent_high and last_row['close'] >= recent_high
-        
-        if is_breakout_up and is_retest_up and last_row['close'] > last_row['ema_20']:
-            return {
-                "action": "buy",
-                "entry": last_row['close'],
-                "sl": recent_low, # Below the breakout base
-                "tp": last_row['close'] + (last_row['close'] - recent_low) * 2, # 1:2 RR
-                "reason": "Bullish Breakout & Retest confirmed"
-            }
+    # --- BULLISH SETUP ---
+    # Breakout: Previous candles showed a break above the level
+    is_breakout_up = any(df['close'].iloc[-10:-1] > recent_high)
+    # Retest: Current price is back near the level (within 0.05% or ATR)
+    is_retesting_high = last_row['low'] <= recent_high * 1.0005 and last_row['close'] >= recent_high * 0.9995
+    
+    if is_breakout_up and is_retesting_high:
+        if last_row['close'] > last_row['ema_20']:
+            # Signal on Bullish Confirmation
+            if patterns.get('bullish_engulfing') or patterns.get('bullish_pinbar'):
+                return "BUY", "TBS: Breakout & Retest Confirmed"
+            return "NEUTRAL", "TBS: Waiting for Bullish Confirmation at Retest"
 
-        # 3. Bearish Setup (Breakout Below Support)
-        is_breakout_down = prev_row['close'] < recent_low
-        is_retest_down = last_row['high'] >= recent_low and last_row['close'] <= recent_low
-        
-        if is_breakout_down and is_retest_down and last_row['close'] < last_row['ema_20']:
-            return {
-                "action": "sell",
-                "entry": last_row['close'],
-                "sl": recent_high,
-                "tp": last_row['close'] - (recent_high - last_row['close']) * 2,
-                "reason": "Bearish Breakout & Retest confirmed"
-            }
+    # --- BEARISH SETUP ---
+    is_breakout_down = any(df['close'].iloc[-10:-1] < recent_low)
+    is_retesting_low = last_row['high'] >= recent_low * 0.9995 and last_row['close'] <= recent_low * 1.0005
+    
+    if is_breakout_down and is_retesting_low:
+        if last_row['close'] < last_row['ema_20']:
+            if patterns.get('bearish_engulfing') or patterns.get('bearish_pinbar'):
+                return "SELL", "TBS: Breakout & Retest Confirmed"
+            return "NEUTRAL", "TBS: Waiting for Bearish Confirmation at Retest"
 
-        return None
+    return "NEUTRAL", "Searching for Breakout/Retest..."

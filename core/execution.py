@@ -103,9 +103,9 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                 with self.connector.lock:
                     self.connector.tf_data["M1"] = parsed_m1
 
-            # Handle HTF Specific Candles (H1/H4)
-            for h_tf in ["H1", "H4"]:
-                if h_tf == tf_key: continue # Don't overwrite main candles if they are H1/H4
+            # Handle HTF Specific Candles (H1/H4/D1)
+            for h_tf in ["H1", "H4", "D1"]:
+                if h_tf == tf_key: continue # Don't overwrite main candles if they are on HTF
                 h_raw = data.get(f"htf_{h_tf}", [""])[0]
                 if h_raw:
                     parsed_h = []
