@@ -157,6 +157,7 @@ def bot_logic(app):
     news_cooldown = 0
     last_auto_state = app.auto_trade_var.get()
     last_processed_candle_time = 0  # NEW: Smart Scan Tracker
+    was_waiting_for_data = False    # Track data sync status
     
     # Initialize AI Predictor
     ai_predictor = AIPredictor()
@@ -247,7 +248,12 @@ def bot_logic(app):
             if not candles or len(candles) < 200:
                 if heartbeat_limiter.allow("waiting_data"):
                     logger.info(f"⏳ Waiting for adequate candle data... Currently: {len(candles) if candles else 0}/200")
+                was_waiting_for_data = True
                 time.sleep(5); continue
+            
+            if was_waiting_for_data:
+                logger.info(f"✅ Data Synced Successfully! Buffer filled: {len(candles)} candles.")
+                was_waiting_for_data = False
 
             # Fetch HTF data for CRT
             htf_tf = get_htf_from_ltf(execution_tf)
