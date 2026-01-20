@@ -319,7 +319,8 @@ def bot_logic(app):
             
             ui_reclaim = app.crt_reclaim_var.get()
             
-            base_strategies = [
+            # Define all available strategies
+            all_strategies = [
                 ("AI_Predict", lambda: ai_predictor.predict(df, asset_type=asset_type, style=selected_style)),
                 ("Trend", lambda: trend.analyze_trend_setup(candles, df=df, patterns=patterns)),
                 ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df=df)),
@@ -330,6 +331,19 @@ def bot_logic(app):
                 ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, symbol, execution_tf, htf_tf, reclaim_pct=ui_reclaim)),
                 ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
+
+            # Filter enabled strategies based on UI toggles
+            base_strategies = []
+            for name, func in all_strategies:
+                # Check if strategy is enabled in UI (default to True if not found for safety)
+                is_enabled = app.strat_vars.get(name, tk.BooleanVar(value=True)).get()
+                if is_enabled:
+                    base_strategies.append((name, func))
+                else:
+                    # Update status to DISABLED in UI if needed (skipping execution)
+                    if hasattr(app, 'strat_ui_items') and name in app.strat_ui_items:
+                        app.strat_ui_items[name]["status"].configure(text="DISABLED", bootstyle="secondary")
+                        app.strat_ui_items[name]["reason"].configure(text="User Toggled Off")
 
             signals_this_cycle = []
             neutral_summaries = []

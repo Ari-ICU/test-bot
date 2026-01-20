@@ -46,6 +46,19 @@ class TradingApp(ttk.Window):
        
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
+        
+        # Strategy Toggles
+        self.strat_vars = {
+            "AI_Predict": tk.BooleanVar(value=True),
+            "Trend": tk.BooleanVar(value=True),
+            "Scalp": tk.BooleanVar(value=True),
+            "Breakout": tk.BooleanVar(value=True),
+            "TBS_Retest": tk.BooleanVar(value=True),
+            "ICT_SB": tk.BooleanVar(value=True),
+            "TBS_Turtle": tk.BooleanVar(value=True),
+            "CRT_TBS": tk.BooleanVar(value=True),
+            "Reversal": tk.BooleanVar(value=True)
+        }
        
         # Cache for optimizations
         self.last_avail_syms = []
@@ -274,6 +287,23 @@ class TradingApp(ttk.Window):
     def _build_settings_tab(self):
         container = ttk.Frame(self.tab_settings)
         container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
+        
+        # Strategy Toggles
+        strat_grp = ttk.Labelframe(container, text=" Active Strategies ")
+        strat_grp.pack(fill=X, pady=10)
+        strat_inner = ttk.Frame(strat_grp)
+        strat_inner.pack(fill=X, padx=20, pady=10)
+        
+        # Grid layout for toggles
+        col = 0
+        row = 0
+        for strat, var in self.strat_vars.items():
+            ttk.Checkbutton(strat_inner, text=strat.replace("_", " "), variable=var, bootstyle="round-toggle").grid(row=row, column=col, padx=10, pady=5, sticky=W)
+            col += 1
+            if col > 3:  # 4 cols
+                col = 0
+                row += 1
+
         tg_grp = ttk.Labelframe(container, text=" Telegram Bot Integration ")
         tg_grp.pack(fill=X, pady=10)
         tg_inner = ttk.Frame(tg_grp)
