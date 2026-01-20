@@ -179,7 +179,7 @@ class TradingApp(ttk.Window):
         mid_frame = ttk.Frame(content)
         mid_frame.pack(fill=X, pady=(0, 5))
         self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY ACTIVITY", "lbl_daily_trades", "dark", "0 Trades")
-        create_stat_card(mid_frame, "DAILY PROFIT", "lbl_prof_today", "success")
+        create_stat_card(mid_frame, "DAILY NET P/L", "lbl_prof_today", "success")
         create_stat_card(mid_frame, "WEEKLY PROFIT", "lbl_prof_week", "success")
         create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
         create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
@@ -561,8 +561,11 @@ class TradingApp(ttk.Window):
             self.lbl_profit.configure(text=f"${prof:,.2f}", bootstyle=f"{p_color}-inverse")
             
             prof_today = info.get('prof_today', 0.0)
-            t_color = "success" if prof_today >= 0 else "danger"
-            self.lbl_prof_today.configure(text=f"${prof_today:,.2f}", bootstyle=f"{t_color}-inverse")
+            # Display: Realized (Floating)
+            # e.g. "$100.00 (Open: $-50.00)"
+            net_str = f"${prof_today:,.2f} (Open: ${prof:,.2f})"
+            t_color = "success" if (prof_today + prof) >= 0 else "danger"
+            self.lbl_prof_today.configure(text=net_str, bootstyle=f"{t_color}-inverse", font=("Helvetica", 10, "bold"))
             
             prof_week = info.get('prof_week', 0.0)
             w_color = "success" if prof_week >= 0 else "danger"
