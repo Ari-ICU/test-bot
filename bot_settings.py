@@ -7,7 +7,9 @@ load_dotenv()
 
 class Config:
     def __init__(self, path="config.json"):
-        self.path = path
+        # Resolve config.json relative to this file's directory
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.path = os.path.join(base_dir, path)
         self.data = self._load()
 
     def _load(self):
