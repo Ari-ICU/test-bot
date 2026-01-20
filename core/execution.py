@@ -273,10 +273,24 @@ class MT5Connector:
             logger.info(f"Order Queued: {action}|{symbol}|{lot}|{sl}|{tp}")
         return True
 
-    def modify_order(self, ticket, sl, tp):
+    # FIXED: Update modify_order to include Symbol for EA parser stability
+    def modify_order(self, ticket, sl, tp, symbol=None):
         with self.lock:
-            self.command_queue.append(f"ORDER_MODIFY|{ticket}|{sl}|{tp}")
-            logger.debug(f"Modify Queued: Ticket {ticket} -> SL: {sl}, TP: {tp}")
+            # 1. If symbol not provided, look it up in active positions
+            if not symbol:
+                for pos in self._open_positions:
+                    if str(pos['ticket']) == str(ticket):
+                        symbol = pos['symbol']
+                        break
+            
+            # 2. Validation
+            if not symbol:
+                logger.error(f"❌ Modify Fail: Symbol lookup failed for Ticket {ticket}")
+                return False
+
+            # 3. Queue with correct structure: CMD|SYMBOL|TICKET|SL|TP
+            self.command_queue.append(f"ORDER_MODIFY|{symbol}|{ticket}|{sl}|{tp}")
+            logger.debug(f"Modify Queued: {symbol} #{ticket} -> SL: {sl}, TP: {tp}")
         return True
 
     # ENHANCED: In start(), queue an initial sync request

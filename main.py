@@ -72,16 +72,16 @@ def manage_m1_secure_profit(connector, risk, logger):
                 
                 # Only modify if new_sl is higher than current_sl + small threshold
                 if target_sl > curr_sl + buffer:
-                    connector.modify_order(ticket, target_sl, curr_tp)
-                    logger.info(f"🛡️ Profit Secured (M1): Moved XAUUSDm BUY SL to {target_sl:.2f}")
+                    connector.modify_order(ticket, target_sl, curr_tp, symbol=symbol)
+                    logger.info(f"🛡️ Profit Secured (M1): Moved {symbol} BUY SL to {target_sl:.2f}")
         else: # SELL
             if curr_price < entry - min_be_dist:
                 target_sl = min(entry - buffer, m1_prev['high'] + buffer)
                 
                 # Only modify if new_sl is lower than current_sl - buffer (or current_sl is 0)
                 if curr_sl == 0 or target_sl < curr_sl - buffer:
-                    connector.modify_order(ticket, target_sl, curr_tp)
-                    logger.info(f"🛡️ Profit Secured (M1): Moved XAUUSDm SELL SL to {target_sl:.2f}")
+                    connector.modify_order(ticket, target_sl, curr_tp, symbol=symbol)
+                    logger.info(f"🛡️ Profit Secured (M1): Moved {symbol} SELL SL to {target_sl:.2f}")
 
 # --- Enhanced Logger Setup ---
 def setup_logger():
