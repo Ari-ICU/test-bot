@@ -279,7 +279,16 @@ def bot_logic(app):
 
             df = pd.DataFrame(candles)
             
-            # --- CONSOLIDATED COMPUTATION (SINGLE-COMPUTE) ---
+            # --- HIGH IMPACT NEWS FILTER ---
+            blocked, headline, wait_time = news.is_high_impact_news_near(symbol)
+            if blocked:
+                if filter_limiter.allow("news_block"):
+                    logger.warning(f"⚠️ {headline} | Status: {wait_time} | ⛔ Trading Paused for Safety.")
+                
+                # Update UI Dashboard with Alert if possible
+                # (Optional: app.telegram_bot.send_message...)
+                time.sleep(10)
+                continue
             # 1. Indicators
             df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
             df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
