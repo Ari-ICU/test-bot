@@ -26,62 +26,60 @@ from core.indicators import Indicators
 from core.asset_detector import detect_asset_type
 from core.predictor import AIPredictor
 
-# --- M1 PROFIT PROTECTION LOGIC ---
-def manage_m1_secure_profit(connector, risk, logger):
+# --- Multiple TF PROFIT PROTECTION LOGIC ---
+def manage_all_tf_secure_profit(connector, risk, logger):
     """
-    Monitors all open positions and uses M1 data to:
+    Monitors all open positions and uses their native TF data to:
     1. Move to Break-Even after a certain profit.
-    2. Trail SL behind M1 candle Low/High for aggressive profit securing.
+    2. Trail SL behind the previous candle Low/High ONLY if it moves favorably.
     """
     positions = connector.get_open_positions()
     if not positions:
         return
 
-    m1_candles = connector.get_tf_candles("M1", count=5)
-    if not m1_candles:
-        return
-
-    m1_prev = m1_candles[1] if len(m1_candles) >= 2 else m1_candles[0]
-    
     for pos in positions:
         ticket = pos['ticket']
         symbol = pos['symbol']
         p_type = "BUY" if pos['type'] == 0 else "SELL"
-        profit = pos['profit']
         entry = pos.get('open_price', 0)
         curr_sl = pos.get('sl', 0)
         curr_tp = pos.get('tp', 0)
-        if entry == 0: continue
         
+        # Use the bot's current Active TF for granular trailing
+        pos_tf = connector.active_tf 
+        
+        tf_candles = connector.get_tf_candles(pos_tf, count=5)
+        if not tf_candles:
+            continue
+
+        # Use the most recently COMPLETED candle
+        prev_candle = tf_candles[1] if len(tf_candles) >= 2 else tf_candles[0]
         asset_val = detect_asset_type(symbol)
         
-        # Current Price
         curr_price = connector.account_info['bid'] if p_type == "BUY" else connector.account_info['ask']
-        dist = abs(curr_price - entry)
         
-        # Requirement for BE: Price moved significantly (e.g. 0.05% for forex, 0.5% for crypto)
+        # BE and Trailing settings
         min_be_dist = entry * 0.0005 if asset_val == "forex" else entry * 0.005
-        
-        # 2. Trailing Stop on M1
         buffer = entry * 0.0001 if asset_val == "forex" else entry * 0.001
         
         if p_type == "BUY":
+            # For BUY: profit when price rises above entry + min_be_dist
             if curr_price > entry + min_be_dist:
-                # Target SL: Previous M1 Low or Entry+Buffer
-                target_sl = max(entry + buffer, m1_prev['low'] - buffer)
-                
-                # Only modify if new_sl is higher than current_sl + small threshold
-                if target_sl > curr_sl + buffer:
-                    connector.modify_order(ticket, target_sl, curr_tp, symbol=symbol)
-                    logger.info(f"🛡️ Profit Secured (M1): Moved {symbol} BUY SL to {target_sl:.2f}")
+                # Trail SL below the previous candle's LOW for protection
+                target_sl = prev_candle['low'] - buffer
+                # Only move SL UP if it improves protection (higher SL = better break-even)
+                if target_sl > curr_sl:
+                    if connector.modify_order(ticket, target_sl, curr_tp, symbol=symbol):
+                        logger.info(f"🛡️ Profit Secured ({pos_tf}): Moved {symbol} BUY SL to {target_sl:.2f}")
         else: # SELL
+            # For SELL: profit when price drops below entry - min_be_dist
             if curr_price < entry - min_be_dist:
-                target_sl = min(entry - buffer, m1_prev['high'] + buffer)
-                
-                # Only modify if new_sl is lower than current_sl - buffer (or current_sl is 0)
-                if curr_sl == 0 or target_sl < curr_sl - buffer:
-                    connector.modify_order(ticket, target_sl, curr_tp, symbol=symbol)
-                    logger.info(f"🛡️ Profit Secured (M1): Moved {symbol} SELL SL to {target_sl:.2f}")
+                # Trail SL above the previous candle's HIGH for protection
+                target_sl = prev_candle['high'] + buffer
+                # Only move SL DOWN if it improves protection (lower SL = better break-even)
+                if curr_sl == 0 or target_sl < curr_sl:
+                    if connector.modify_order(ticket, target_sl, curr_tp, symbol=symbol):
+                        logger.info(f"🛡️ Profit Secured ({pos_tf}): Moved {symbol} SELL SL to {target_sl:.2f}")
 
 # --- Enhanced Logger Setup ---
 def setup_logger():
@@ -178,7 +176,7 @@ def bot_logic(app):
                 last_auto_state = curr_auto_state
             
             # --- PROFIT PROTECTION (M1 SECURE) ---
-            manage_m1_secure_profit(connector, risk, logger)
+            manage_all_tf_secure_profit(connector, risk, logger)
 
             # --- BOT HEARTBEAT ---
             if heartbeat_limiter.allow("bot_heartbeat"):
