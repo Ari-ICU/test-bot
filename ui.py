@@ -57,6 +57,7 @@ class TradingApp(ttk.Window):
             "ICT_SB": tk.BooleanVar(value=True),
             "TBS_Turtle": tk.BooleanVar(value=True),
             "CRT_TBS": tk.BooleanVar(value=True),
+            "PD_Parameter": tk.BooleanVar(value=True),
             "Reversal": tk.BooleanVar(value=True)
         }
        
@@ -154,8 +155,9 @@ class TradingApp(ttk.Window):
             ("Breakout", "Breakout Engine"), 
             ("ICT_SB", "ICT Silver Bullet"), 
             ("TBS_Turtle", "TBS Turtle"), 
-            ("TBS_Retest", "TBS Retest"), # ADDED
+            ("TBS_Retest", "TBS Retest"), 
             ("CRT_TBS", "CRT MT5 Master"),
+            ("PD_Parameter", "PD Array Logic"),
             ("News_Sentiment", "News Sentiment"),
             ("Reversal", "Reversal Engine")
         ]
@@ -308,6 +310,7 @@ class TradingApp(ttk.Window):
             "ICT_SB": {"name": "ICT Silver Bullet", "rec": "Rec: M15"},
             "TBS_Turtle": {"name": "TBS Turtle", "rec": "Rec: H1"},
             "CRT_TBS": {"name": "CRT Master", "rec": "Rec: H1/H4"},
+            "PD_Parameter": {"name": "PD Array Logic", "rec": "Rec: Daily/H4"},
             "News_Sentiment": {"name": "News Sentiment", "rec": "Rec: All"},
             "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"}
         }

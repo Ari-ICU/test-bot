@@ -19,6 +19,7 @@ import strategy.tbs_turtle as tbs_strat
 import strategy.tbs_breakout_retest as tbs_retest
 import strategy.reversal as reversal_strat
 import strategy.crt_tbs_master as crt_tbs
+import strategy.pd_array_parameter as pd_strat
 import filters.volatility as volatility
 import filters.spread as spread
 import filters.news as news
@@ -359,6 +360,7 @@ def bot_logic(app):
                 ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df=df, patterns=patterns)),
                 ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, symbol, execution_tf, htf_tf, reclaim_pct=ui_reclaim)),
                 ("News_Sentiment", lambda: news.analyze_sentiment(symbol)),
+                ("PD_Parameter", lambda: pd_strat.analyze_pd_parameter_setup(candles, df=df)),
                 ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
 
