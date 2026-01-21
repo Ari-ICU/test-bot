@@ -288,8 +288,9 @@ class MT5Connector:
                 logger.error(f"❌ Modify Fail: Symbol lookup failed for Ticket {ticket}")
                 return False
 
-            # 3. Queue with correct structure: CMD|SYMBOL|TICKET|SL|TP
-            self.command_queue.append(f"ORDER_MODIFY|{symbol}|{ticket}|{sl}|{tp}")
+            # 3. Queue with EA-expected structure: ORDER_MODIFY|TICKET|SL|TP
+            # The EA parses parts[1] as the ticket id, so include ticket first to avoid a ticket=0 bug.
+            self.command_queue.append(f"ORDER_MODIFY|{ticket}|{sl}|{tp}")
             logger.debug(f"Modify Queued: {symbol} #{ticket} -> SL: {sl}, TP: {tp}")
         return True
 
