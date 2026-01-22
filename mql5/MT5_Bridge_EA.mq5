@@ -376,13 +376,48 @@ ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol) {
     return ORDER_FILLING_RETURN;
 }
 
+// Helper function to convert string timeframe to ENUM_TIMEFRAMES
+ENUM_TIMEFRAMES StringToTF(string tf_str) {
+    if(tf_str == "M1")  return PERIOD_M1;
+    if(tf_str == "M5")  return PERIOD_M5;
+    if(tf_str == "M15") return PERIOD_M15;
+    if(tf_str == "M30") return PERIOD_M30;
+    if(tf_str == "H1")  return PERIOD_H1;
+    if(tf_str == "H4")  return PERIOD_H4;
+    if(tf_str == "D1")  return PERIOD_D1;
+    return PERIOD_CURRENT;
+}
+
 void ProcessCommand(string cmd) {
     string parts[];
     if(StringSplit(cmd, '|', parts) < 2) return;
    
     string action = parts[0];
     string symbol = parts[1];
-   
+
+
+    // Handle opening multiple timeframe tabs
+    if(action == "OPEN_CHART") {
+      string sym = parts[1];
+      ENUM_TIMEFRAMES tf = StringToTF(parts[2]);
+      
+      // Prevent opening duplicate tabs
+      long chartID = ChartFirst();
+      bool exists = false;
+      while(chartID >= 0) {
+         if(ChartSymbol(chartID) == sym && ChartPeriod(chartID) == tf) {
+            exists = true;
+            break;
+         }
+         chartID = ChartNext(chartID);
+      }
+      
+      if(!exists) {
+         ChartOpen(sym, tf);
+      }
+      return;
+    }
+    
     if(!SymbolSelect(symbol, true)) {
         Print("⚠️ Symbol '", symbol, "' not found! Defaulting to chart symbol: ", _Symbol);
         symbol = _Symbol;

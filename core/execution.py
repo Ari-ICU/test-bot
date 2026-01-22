@@ -317,3 +317,14 @@ class MT5Connector:
         if self.server:
             self.server.shutdown()
         logger.info("Execution Engine Stopped")
+
+    # Add this method inside the MT5Connector class in core/execution.py
+    def open_multi_tf_charts(self, symbol):
+        """Commands MT5 to open individual tabs for all standard timeframes."""
+        tfs = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+        with self.lock:
+            for tf in tfs:
+                # Command format: OPEN_CHART|SYMBOL|TIMEFRAME
+                cmd = f"OPEN_CHART|{symbol}|{tf}"
+                self.command_queue.append(cmd)
+        logger.info(f"📂 Queued MT5 Tab: {symbol} @ {tf}")

@@ -190,6 +190,10 @@ def bot_logic(app):
 
             symbol = connector.active_symbol
             execution_tf = connector.active_tf
+
+            logger.info(f"🚀 Initializing MT5 Workspace: Opening M1-D1 tabs for {symbol}...")
+            connector.open_multi_tf_charts(symbol)
+
             # --- ACCOUNT HEALTH ---
             try:
                 max_pos_allowed = app.max_pos_var.get()
