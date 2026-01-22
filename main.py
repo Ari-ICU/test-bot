@@ -88,34 +88,38 @@ def bot_logic(app):
     ai_predictor = AIPredictor()
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
 
+    last_heartbeat = 0
+
     logger.info(f"{Fore.MAGENTA}==========================================")
     logger.info(f"{Fore.MAGENTA}  🚀 REAL-TIME ENGINE ACTIVE")
     logger.info(f"{Fore.MAGENTA}==========================================")
 
     while app.bot_running:
         try:
-            # Check UI state instantly
+            if time.time() - last_heartbeat > 60:
+                logger.info(f"💓 Multi-TF Heartbeat | Scanning Active for: {', '.join(AUTO_TABS)}")
+                last_heartbeat = time.time()
+
             if not app.auto_trade_var.get():
-                time.sleep(0.1) # Reduced sleep for faster response when re-enabling
-                continue
+                time.sleep(0.1); continue
 
             # Multi-TF Scan Loop
             for scan_tf in AUTO_TABS:
-                # 1. Faster Data Fetching (Limit count to what indicators actually need)
-                candles = connector.get_tf_candles(scan_tf, count=250) 
+                # High-speed data fetch (250 bars is sufficient for indicators)
+                candles = connector.get_tf_candles(scan_tf, count=250)
                 if not candles or len(candles) < 100: continue
 
                 current_bar_time = candles[-1]['time']
                 
-                # Instant transition to next TF if no new data, otherwise process
-                if current_bar_time <= last_processed_bar[scan_tf]: 
+                # Detect New Bar in Real-Time
+                if current_bar_time <= last_processed_bar[scan_tf]:
                     continue
                 
-                # MARK START OF REAL-TIME PROCESSING
+                # Logic: Start processing as soon as a new bar timestamp is detected
                 start_time = time.perf_counter()
-                
                 last_processed_bar[scan_tf] = current_bar_time
-                logger.info(f"⚡ [REAL-TIME] New Bar {scan_tf} detected. Starting Scan...")
+                
+                logger.info(f"⚡ {Fore.YELLOW}[REAL-TIME]{Style.RESET_ALL} New Bar {scan_tf} detected. Starting Scan...")
 
                 df = pd.DataFrame(candles)
                 
@@ -187,14 +191,18 @@ def main():
     conf = Config()
     connector = MT5Connector(host='127.0.0.1', port=8001)
     
-    # Setup Telegram first for notification of starts
     tg_conf = conf.get('telegram', {})
-    telegram_bot = TelegramBot(token=tg_conf.get('bot_token', ''), authorized_chat_id=tg_conf.get('chat_id', ''), connector=connector)
+    telegram_bot = TelegramBot(
+        token=tg_conf.get('bot_token', ''), 
+        authorized_chat_id=tg_conf.get('chat_id', ''), 
+        connector=connector
+    )
     connector.set_telegram(telegram_bot)
     telegram_bot.start_polling()
     
     tg_handler = TelegramLogHandler(telegram_bot)
-    tg_handler.setLevel(logging.WARNING)
+    # FIX: Change level to INFO to see real-time updates on Telegram
+    tg_handler.setLevel(logging.INFO) 
     logger.addHandler(tg_handler)
 
     if not connector.start():
