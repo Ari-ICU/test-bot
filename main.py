@@ -2,6 +2,7 @@ import time
 import logging
 import sys
 import pandas as pd
+import socket  # Added for connection stability
 from datetime import datetime
 from collections import deque
 import tkinter as tk
@@ -51,12 +52,10 @@ def setup_enhanced_logger():
         }
         def format(self, record):
             color = self.COLORS.get(record.levelno, Fore.WHITE)
-            # Added milliseconds to timestamp for real-time tracking
             timestamp = f"{Fore.GREEN}{datetime.now().strftime('%H:%M:%S.%f')[:-3]}{Style.RESET_ALL}"
             prefix = f"{color}[{record.levelname:<8}]{Style.RESET_ALL}"
             return f"{timestamp} | {prefix} | {record.name} | {record.getMessage()}"
 
-    # StreamHandler with forced flush for real-time terminal output
     class FlushStreamHandler(logging.StreamHandler):
         def emit(self, record):
             super().emit(record)
@@ -87,7 +86,6 @@ def bot_logic(app):
     risk = app.risk
     ai_predictor = AIPredictor()
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
-
     last_heartbeat = 0
 
     logger.info(f"{Fore.MAGENTA}==========================================")
@@ -96,6 +94,7 @@ def bot_logic(app):
 
     while app.bot_running:
         try:
+            # 1. Heartbeat Monitor
             if time.time() - last_heartbeat > 60:
                 logger.info(f"💓 Multi-TF Heartbeat | Scanning Active for: {', '.join(AUTO_TABS)}")
                 last_heartbeat = time.time()
@@ -103,27 +102,24 @@ def bot_logic(app):
             if not app.auto_trade_var.get():
                 time.sleep(0.1); continue
 
-            # Multi-TF Scan Loop
+            # 2. Multi-TF Scan Loop
             for scan_tf in AUTO_TABS:
-                # High-speed data fetch (250 bars is sufficient for indicators)
                 candles = connector.get_tf_candles(scan_tf, count=250)
                 if not candles or len(candles) < 100: continue
 
                 current_bar_time = candles[-1]['time']
                 
-                # Detect New Bar in Real-Time
+                # Check for new bar
                 if current_bar_time <= last_processed_bar[scan_tf]:
                     continue
                 
-                # Logic: Start processing as soon as a new bar timestamp is detected
                 start_time = time.perf_counter()
                 last_processed_bar[scan_tf] = current_bar_time
                 
                 logger.info(f"⚡ {Fore.YELLOW}[REAL-TIME]{Style.RESET_ALL} New Bar {scan_tf} detected. Starting Scan...")
 
+                # 3. Data Prep & Indicators
                 df = pd.DataFrame(candles)
-                
-                # 2. Optimized Indicator Calculation
                 df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
                 df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
                 df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
@@ -137,7 +133,7 @@ def bot_logic(app):
                 htf_tf = get_higher_tf(scan_tf)
                 htf_candles = connector.get_tf_candles(htf_tf, count=100)
 
-                # 3. Strategy Execution Priority
+                # 4. Strategy Routing
                 all_strategies = [
                     ("AI_Predict", lambda: ai_predictor.predict(df, asset_type, app.style_var.get())),
                     ("Trend", lambda: trend.analyze_trend_setup(candles, df, patterns)),
@@ -158,37 +154,43 @@ def bot_logic(app):
                     try:
                         action, reason = engine()
                         
-                        # Sanitize and Update UI Status instantly
-                        safe_reason = str(reason).replace("{", "[").replace("}", "]")
+                        # --- THE "PRECISION FIX" SANITIZATION LAYER ---
+                        # Convert any reason to a plain string and strip problematic characters
+                        safe_reason = str(reason).replace("{", "[").replace("}", "]").strip()
                         app.update_strategy_status(name, action, safe_reason)
 
-                        if action != "NEUTRAL":
+                        if action == "NEUTRAL":
+                            # Use plain string logging to bypass any f-string precision issues
+                            logger.info(f"⚪ {Fore.LIGHTBLACK_EX}ANALYSIS{Style.RESET_ALL} | {name} | {scan_tf} | Status: {safe_reason}")
+                        else:
+                            # Log valid signal
+                            logger.info(f"🎯 {Fore.GREEN}SIGNAL TRIGGERED{Style.RESET_ALL} | {name} | {action} on {scan_tf} | Reason: {safe_reason}")
+
+                            # Position Check
                             if connector.account_info.get('total_count', 0) >= app.max_pos_var.get():
-                                logger.warning(f"⏸️ Max Positions reached. Skipping {name} signal.")
+                                logger.warning(f"⏸️ Max Positions reached. Skipping {action} signal.")
                                 break
 
+                            # Execute Trade
                             price = connector.account_info['ask'] if action == "BUY" else connector.account_info['bid']
                             sl, tp = risk.calculate_sl_tp(price, action, current_atr, connector.active_symbol, scan_tf)
                             
-                            # REAL-TIME SIGNAL LOGGING
-                            logger.info(f"🎯 {Fore.GREEN}SIGNAL TRIGGERED{Style.RESET_ALL} | {name} | {action} on {scan_tf}")
-                            
                             if connector.send_order(action, connector.active_symbol, app.lot_var.get(), sl, tp):
-                                end_time = time.perf_counter()
-                                logger.info(f"✅ {Fore.GREEN}EXECUTED{Style.RESET_ALL} | {name} | Latency: {(end_time - start_time)*1000:.2f}ms | Reason: {safe_reason}")
+                                latency = (time.perf_counter() - start_time) * 1000
+                                logger.info(f"✅ {Fore.GREEN}EXECUTED{Style.RESET_ALL} | {name} | Latency: {latency:.2f}ms")
                                 risk.record_trade()
                                 break 
                     except Exception as strat_err:
-                        logger.error(f"Error in Strategy {name}: {strat_err}", exc_info=True)
+                        logger.error(f"Error in {name}: {strat_err}")
 
-            # High-frequency loop polling
-            time.sleep(0.01) # Reduced from 0.1 to 0.01 for ultra-low latency
+            time.sleep(0.01)
         except Exception as e:
             logger.error(f"💥 Bot Loop Crash: {e}", exc_info=True)
             time.sleep(1)
 
 def main():
     conf = Config()
+    # Ensure Port 8001 is clean
     connector = MT5Connector(host='127.0.0.1', port=8001)
     
     tg_conf = conf.get('telegram', {})
@@ -201,10 +203,10 @@ def main():
     telegram_bot.start_polling()
     
     tg_handler = TelegramLogHandler(telegram_bot)
-    # FIX: Change level to INFO to see real-time updates on Telegram
     tg_handler.setLevel(logging.INFO) 
     logger.addHandler(tg_handler)
 
+    # Initialize connection
     if not connector.start():
         logger.critical("❌ FAILED TO CONNECT TO MT5 GATEWAY.")
         return
