@@ -10,6 +10,22 @@ from core.asset_detector import detect_asset_type  # For logging
 logger = logging.getLogger("Execution")
 
 class MT5RequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """Handle GET requests - serve queued commands to MT5"""
+        try:
+            with self.connector.lock:
+                resp = ";".join(self.connector.command_queue) if self.connector.command_queue else "OK"
+                self.connector.command_queue = []
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(resp.encode())
+        except Exception as e:
+            logger.error(f"GET request error: {e}")
+            self.send_response(500)
+            self.end_headers()
+
     def do_POST(self):
         try:
             content_length = int(self.headers['Content-Length'])
@@ -49,7 +65,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
 
             if 'tf' in data:
                 with self.connector.lock:
-                    self.connector.active_tf = data['tf'][0].upper()
+                    self.connector.active_tf = data['tf'][0].upper().strip()
                     self.connector.pending_changes['tf'] = None
 
             # Handle Bid/Ask/Account
@@ -236,8 +252,8 @@ class MT5Connector:
             
             # Optimistically update
             old_tf = self.active_tf
-            self.active_tf = new_tf
-            self.pending_changes['tf'] = new_tf
+            self.active_tf = new_tf.strip()
+            self.pending_changes['tf'] = new_tf.strip()
             
             self.command_queue.append(f"TF_CHANGE|{new_tf}|{symbol}")
             logger.info(f"🔄 UI Request: Change TF to {new_tf} (from {old_tf}). Queued & Optimistically Updated.")

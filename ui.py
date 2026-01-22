@@ -123,8 +123,7 @@ class TradingApp(ttk.Window):
         self._build_settings_tab()
 
         # FIXED: Ensure initial selection matches connector
-        self.sym_combo.set(self.connector.active_symbol)
-        self.tf_combo.set(self.connector.active_tf)    
+        self.sym_combo.set(self.connector.active_symbol)    
 
     def _build_dashboard_tab(self):
         content = ttk.Frame(self.tab_dashboard)
@@ -241,11 +240,6 @@ class TradingApp(ttk.Window):
         ttk.Label(s_f, text="Active Symbol:", font=("Helvetica", 9)).pack(anchor=W)
         self.sym_combo = ttk.Combobox(s_f, textvariable=self.symbol_var, width=12, bootstyle="secondary")
         self.sym_combo.pack(fill=X); self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
-
-        t_f = ttk.Frame(conf_frame); t_f.grid(row=1, column=1, sticky=EW, padx=5, pady=2)
-        ttk.Label(t_f, text="Timeframe:", font=("Helvetica", 9)).pack(anchor=W)
-        self.tf_combo = ttk.Combobox(t_f, textvariable=self.tf_var, values=["M1", "M5", "M15", "M30", "H1", "H4", "D1"], width=12, bootstyle="info")
-        self.tf_combo.pack(fill=X); self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
 
         # 2. AI Style and Max Positions
         st_f = ttk.Frame(conf_frame); st_f.grid(row=2, column=0, sticky=EW, padx=5, pady=2)
@@ -373,7 +367,6 @@ class TradingApp(ttk.Window):
         minutes = tf_map.get(self.tf_var.get(), 5)
         if hasattr(self.connector, 'change_timeframe'):
             self.connector.change_timeframe(self.symbol_var.get(), minutes)
-        logging.info(f"🔄 UI TF Changed to {self.tf_var.get()} ({minutes}min) – Queued for MT5, Refreshing...")
 
     # ENHANCED: Add force_refresh() method with symbols-specific logic
     def force_refresh(self):
@@ -629,15 +622,17 @@ class TradingApp(ttk.Window):
                     self.sym_combo.set(ea_active)
                 self.last_active_symbol = ea_active
 
-        # 3. SMART SYNC: Active Timeframe (cached)
+        # 3. SMART SYNC: Primary Timeframe for Risk Management (cached)
         if hasattr(self.connector, 'active_tf'):
             ea_tf = self.connector.active_tf
             if ea_tf != self.last_active_tf:
                 ui_tf = self.tf_var.get()
                 if ui_tf != ea_tf:
-                    logging.info(f"🤝 Sync: UI updated to MT5 active TF: {ea_tf}")
+                    logging.info(f"🤝 Sync: Primary TF set to {ea_tf} (Multi-TF AUTO scanning all timeframes)")
                     self.tf_var.set(ea_tf)
-                    self.tf_combo.set(ea_tf)
+                    # Only update tf_combo if it exists (optional UI element)
+                    if hasattr(self, 'tf_combo'):
+                        self.tf_combo.set(ea_tf)
                 self.last_active_tf = ea_tf
 
     # --- NEW: Strategy Feedback Updater ---
