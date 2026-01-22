@@ -1,6 +1,7 @@
 #property strict
 #property version "3.6" // Bumped for performance optimizations
 #property description "HTTP Bridge - Optimized: Caching, Reduced String Ops, Efficient Polling"
+#include <WinUser32.mqh> // Required for keyboard simulation
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
@@ -27,16 +28,43 @@ double g_prof_today = 0, g_prof_week = 0, g_prof_month = 0;
 datetime g_last_profit_update = 0;
 bool g_force_candle_reload = false;
 
+ENUM_TIMEFRAMES g_auto_tfs[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1};
+
 int OnInit() {
    EventSetMillisecondTimer(TimerInterval);
    g_current_period = _Period;
    g_tf_string = GetTFString();
-   UpdateSymbolsCache(); // Initial cache
-   UpdateAccountCache(); // Initial
-   UpdatePositionsCache(); // Initial
-   UpdateProfitCache(); // Initial
-   // Enable WebRequest for the URL automatically if possible (Manual step usually required)
+   
+   // --- NEW: Auto-open timeframe tabs if they don't exist ---
+   for(int i=0; i<ArraySize(g_auto_tfs); i++) {
+      OpenUniqueChart(_Symbol, g_auto_tfs[i]);
+   }
+   // ---------------------------------------------------------
+
+   UpdateSymbolsCache(); 
+   UpdateAccountCache();
+   UpdatePositionsCache(); 
+   UpdateProfitCache();
+   
    return INIT_SUCCEEDED;
+}
+
+// Helper function to prevent opening the same tab twice
+void OpenUniqueChart(string symbol, ENUM_TIMEFRAMES tf) {
+   long chartID = ChartFirst();
+   bool exists = false;
+   
+   while(chartID >= 0) {
+      if(ChartSymbol(chartID) == symbol && ChartPeriod(chartID) == tf) {
+         exists = true;
+         break;
+      }
+      chartID = ChartNext(chartID);
+   }
+   
+   if(!exists) {
+      ChartOpen(symbol, tf);
+   }
 }
 
 void OnDeinit(const int reason) {
@@ -387,6 +415,7 @@ ENUM_TIMEFRAMES StringToTF(string tf_str) {
     if(tf_str == "D1")  return PERIOD_D1;
     return PERIOD_CURRENT;
 }
+
 
 void ProcessCommand(string cmd) {
     string parts[];
