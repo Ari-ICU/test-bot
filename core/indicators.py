@@ -62,28 +62,42 @@ class Indicators:
 
     @staticmethod
     def calculate_supertrend(df, period=10, multiplier=3):
-        """SuperTrend Indicator"""
+        """Optimized SuperTrend to prevent formatting and performance issues"""
         atr = Indicators.calculate_atr(df, period)
         hl2 = (df['high'] + df['low']) / 2
         
-        final_upperband = hl2 + (multiplier * atr)
-        final_lowerband = hl2 - (multiplier * atr)
+        # Use .values for faster, safer iteration
+        upper_vals = (hl2 + (multiplier * atr)).values
+        lower_vals = (hl2 - (multiplier * atr)).values
+        close_vals = df['close'].values
         
+        # Initialize bands properly
+        final_upperband = upper_vals.copy()
+        final_lowerband = lower_vals.copy()
         supertrend = [True] * len(df)
         
         for i in range(1, len(df)):
-            if df['close'].iloc[i] > final_upperband.iloc[i-1]:
+            # Final Upper Band adjustment
+            if upper_vals[i] < final_upperband[i-1] or close_vals[i-1] > final_upperband[i-1]:
+                final_upperband[i] = upper_vals[i]
+            else:
+                final_upperband[i] = final_upperband[i-1]
+
+            # Final Lower Band adjustment
+            if lower_vals[i] > final_lowerband[i-1] or close_vals[i-1] < final_lowerband[i-1]:
+                final_lowerband[i] = lower_vals[i]
+            else:
+                final_lowerband[i] = final_lowerband[i-1]
+            
+            # Trend Direction logic
+            if close_vals[i] > final_upperband[i]:
                 supertrend[i] = True
-            elif df['close'].iloc[i] < final_lowerband.iloc[i-1]:
+            elif close_vals[i] < final_lowerband[i]:
                 supertrend[i] = False
             else:
                 supertrend[i] = supertrend[i-1]
-                if supertrend[i] and final_lowerband.iloc[i] < final_lowerband.iloc[i-1]:
-                    final_lowerband.iloc[i] = final_lowerband.iloc[i-1]
-                if not supertrend[i] and final_upperband.iloc[i] > final_upperband.iloc[i-1]:
-                    final_upperband.iloc[i] = final_upperband.iloc[i-1]
-                    
-        return pd.Series(supertrend, index=df.index), final_upperband, final_lowerband
+
+        return pd.Series(supertrend, index=df.index), pd.Series(final_upperband, index=df.index), pd.Series(final_lowerband, index=df.index)
 
     @staticmethod
     def calculate_macd(series, fast=12, slow=26, signal=9):

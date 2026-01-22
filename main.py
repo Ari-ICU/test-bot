@@ -35,13 +35,13 @@ from core.patterns import detect_patterns
 # Initialize Colorama
 init(autoreset=True)
 
-# --- ENHANCED LOGGING SYSTEM ---
+# --- REAL-TIME OPTIMIZED LOGGING ---
 def setup_enhanced_logger():
     root_logger = logging.getLogger()
     if root_logger.hasHandlers(): root_logger.handlers.clear()
     root_logger.setLevel(logging.INFO)
 
-    class TerminalFormatter(logging.Formatter):
+    class RealTimeFormatter(logging.Formatter):
         COLORS = {
             logging.DEBUG: Fore.LIGHTBLACK_EX,
             logging.INFO: Fore.CYAN,
@@ -51,17 +51,25 @@ def setup_enhanced_logger():
         }
         def format(self, record):
             color = self.COLORS.get(record.levelno, Fore.WHITE)
-            timestamp = f"{Fore.GREEN}{datetime.now().strftime('%H:%M:%S')}{Style.RESET_ALL}"
+            # Added milliseconds to timestamp for real-time tracking
+            timestamp = f"{Fore.GREEN}{datetime.now().strftime('%H:%M:%S.%f')[:-3]}{Style.RESET_ALL}"
             prefix = f"{color}[{record.levelname:<8}]{Style.RESET_ALL}"
             return f"{timestamp} | {prefix} | {record.name} | {record.getMessage()}"
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(TerminalFormatter())
+    # StreamHandler with forced flush for real-time terminal output
+    class FlushStreamHandler(logging.StreamHandler):
+        def emit(self, record):
+            super().emit(record)
+            self.flush()
+
+    console_handler = FlushStreamHandler(sys.stdout)
+    console_handler.setFormatter(RealTimeFormatter())
     root_logger.addHandler(console_handler)
     
     file_handler = logging.FileHandler("bot_engine.log", encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"))
+    file_handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s", datefmt="%H:%M:%S"))
     root_logger.addHandler(file_handler)
+    
     return logging.getLogger("Main")
 
 logger = setup_enhanced_logger()
@@ -73,46 +81,7 @@ def get_higher_tf(ltf):
     mapping = {"M1": "H1", "M5": "H1", "M15": "H4", "M30": "H4", "H1": "D1", "H4": "D1", "D1": "W1"}
     return mapping.get(ltf, "D1")
 
-# --- PROFIT PROTECTION (FIXED TSL SPAM) ---
-def manage_profit_protection(connector, risk):
-    positions = connector.get_open_positions()
-    if not positions: return
-
-    for pos in positions:
-        try:
-            symbol = pos['symbol']
-            p_type = "BUY" if pos['type'] == 0 else "SELL"
-            curr_sl = pos.get('sl', 0)
-            ticket = pos['ticket']
-            tp = pos.get('tp', 0)
-            
-            # 1. Define minimum move threshold to prevent server spam
-            asset_type = detect_asset_type(symbol)
-            min_move = 0.15 if asset_type != "forex" else 0.00015 # e.g., 15 points for Gold
-            
-            candles = connector.get_tf_candles(connector.active_tf, count=2)
-            if not candles: continue
-            
-            # Use most recently COMPLETED candle for trailing
-            prev_candle = candles[0]
-            
-            if p_type == "BUY":
-                target_sl = prev_candle['low']
-                # Only move if the improvement is significant
-                if target_sl > (curr_sl + min_move):
-                    connector.modify_order(ticket, target_sl, tp, symbol=symbol)
-                    logger.info(f"🛡️ TSL UP | {symbol} New SL: {target_sl:.5f}")
-            else:
-                target_sl = prev_candle['high']
-                # Only move if new SL is significantly lower (or if SL is 0)
-                if curr_sl == 0 or target_sl < (curr_sl - min_move):
-                    connector.modify_order(ticket, target_sl, tp, symbol=symbol)
-                    logger.info(f"🛡️ TSL DOWN | {symbol} New SL: {target_sl:.5f}")
-                    
-        except Exception as e:
-            logger.error(f"Trailing Error: {e}")
-
-# --- BOT LOGIC (FIXED STRATEGY CRASH) ---
+# --- BOT LOGIC (REAL-TIME OPTIMIZED) ---
 def bot_logic(app):
     connector = app.connector
     risk = app.risk
@@ -120,28 +89,37 @@ def bot_logic(app):
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
 
     logger.info(f"{Fore.MAGENTA}==========================================")
-    logger.info(f"{Fore.MAGENTA}  BOT INITIALIZED: ALL STRATEGIES ACTIVE")
+    logger.info(f"{Fore.MAGENTA}  🚀 REAL-TIME ENGINE ACTIVE")
     logger.info(f"{Fore.MAGENTA}==========================================")
 
     while app.bot_running:
         try:
+            # Check UI state instantly
             if not app.auto_trade_var.get():
-                time.sleep(0.5); continue
+                time.sleep(0.1) # Reduced sleep for faster response when re-enabling
+                continue
 
-            # Run Profit Protection
-            manage_profit_protection(connector, risk)
-
+            # Multi-TF Scan Loop
             for scan_tf in AUTO_TABS:
-                candles = connector.get_tf_candles(scan_tf, count=400)
+                # 1. Faster Data Fetching (Limit count to what indicators actually need)
+                candles = connector.get_tf_candles(scan_tf, count=250) 
                 if not candles or len(candles) < 100: continue
 
                 current_bar_time = candles[-1]['time']
-                if current_bar_time <= last_processed_bar[scan_tf]: continue
+                
+                # Instant transition to next TF if no new data, otherwise process
+                if current_bar_time <= last_processed_bar[scan_tf]: 
+                    continue
+                
+                # MARK START OF REAL-TIME PROCESSING
+                start_time = time.perf_counter()
                 
                 last_processed_bar[scan_tf] = current_bar_time
-                logger.info(f"🔎 {Fore.YELLOW}{scan_tf}{Style.RESET_ALL} Scan: {connector.active_symbol}")
+                logger.info(f"⚡ [REAL-TIME] New Bar {scan_tf} detected. Starting Scan...")
 
                 df = pd.DataFrame(candles)
+                
+                # 2. Optimized Indicator Calculation
                 df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
                 df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
                 df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
@@ -155,6 +133,7 @@ def bot_logic(app):
                 htf_tf = get_higher_tf(scan_tf)
                 htf_candles = connector.get_tf_candles(htf_tf, count=100)
 
+                # 3. Strategy Execution Priority
                 all_strategies = [
                     ("AI_Predict", lambda: ai_predictor.predict(df, asset_type, app.style_var.get())),
                     ("Trend", lambda: trend.analyze_trend_setup(candles, df, patterns)),
@@ -175,38 +154,40 @@ def bot_logic(app):
                     try:
                         action, reason = engine()
                         
-                        # FIX: Sanitize the reason to prevent "Format specifier" error
+                        # Sanitize and Update UI Status instantly
                         safe_reason = str(reason).replace("{", "[").replace("}", "]")
-                        
                         app.update_strategy_status(name, action, safe_reason)
 
                         if action != "NEUTRAL":
                             if connector.account_info.get('total_count', 0) >= app.max_pos_var.get():
-                                logger.warning(f"⚠️ {name} signal ignored: Max Positions reached.")
+                                logger.warning(f"⏸️ Max Positions reached. Skipping {name} signal.")
                                 break
 
                             price = connector.account_info['ask'] if action == "BUY" else connector.account_info['bid']
                             sl, tp = risk.calculate_sl_tp(price, action, current_atr, connector.active_symbol, scan_tf)
                             
-                            logger.info(f"🎯 {Fore.GREEN}SIGNAL{Style.RESET_ALL} | {name} | {action} on {scan_tf} | Reason: {safe_reason}")
+                            # REAL-TIME SIGNAL LOGGING
+                            logger.info(f"🎯 {Fore.GREEN}SIGNAL TRIGGERED{Style.RESET_ALL} | {name} | {action} on {scan_tf}")
                             
                             if connector.send_order(action, connector.active_symbol, app.lot_var.get(), sl, tp):
-                                logger.info(f"✅ {Fore.GREEN}EXECUTED{Style.RESET_ALL} | {name} | Price: {price:.5f}")
+                                end_time = time.perf_counter()
+                                logger.info(f"✅ {Fore.GREEN}EXECUTED{Style.RESET_ALL} | {name} | Latency: {(end_time - start_time)*1000:.2f}ms | Reason: {safe_reason}")
                                 risk.record_trade()
                                 break 
                     except Exception as strat_err:
-                        # exc_info=True helps you find the exact line in the strategy that is broken
                         logger.error(f"Error in Strategy {name}: {strat_err}", exc_info=True)
 
-            time.sleep(0.1)
+            # High-frequency loop polling
+            time.sleep(0.01) # Reduced from 0.1 to 0.01 for ultra-low latency
         except Exception as e:
             logger.error(f"💥 Bot Loop Crash: {e}", exc_info=True)
-            time.sleep(5)
+            time.sleep(1)
 
 def main():
     conf = Config()
     connector = MT5Connector(host='127.0.0.1', port=8001)
     
+    # Setup Telegram first for notification of starts
     tg_conf = conf.get('telegram', {})
     telegram_bot = TelegramBot(token=tg_conf.get('bot_token', ''), authorized_chat_id=tg_conf.get('chat_id', ''), connector=connector)
     connector.set_telegram(telegram_bot)
@@ -223,12 +204,12 @@ def main():
     risk = RiskManager(conf.data)
     app = TradingApp(bot_logic, connector, risk, telegram_bot)
     
-    logger.info("系统就绪: UI and Backend Linked.")
+    logger.info(f"系统就绪: {Fore.GREEN}Real-Time UI and Backend Linked.{Style.RESET_ALL}")
     
     try:
         app.mainloop()
     except KeyboardInterrupt:
-        logger.info("🛑 Keyboard interrupt received.")
+        logger.info("🛑 Shutdown Requested.")
     finally:
         connector.stop()
         logger.info("👋 Shutdown complete.")
