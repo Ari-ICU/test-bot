@@ -363,7 +363,7 @@ def bot_logic(app):
                 ("PD_Parameter", lambda: pd_strat.analyze_pd_parameter_setup(candles, df=df)),
                 ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df=df, patterns=patterns))
             ]
-
+            
             # Filter enabled strategies based on UI toggles
             base_strategies = []
             for name, func in all_strategies:

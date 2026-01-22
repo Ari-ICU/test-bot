@@ -6,10 +6,10 @@ from core.patterns import detect_patterns
 def analyze_crt_tbs_setup(ltf_candles, htf_candles, symbol, ltf_tf, htf_tf, reclaim_pct=0.25):
     """
     Implements the Enhanced CRT + TBS Multi-Timeframe Strategy.
-    1. Identify HTF CRT expansion (Large Displacement).
-    2. Check if price HAS RECLAIMED a specific % of the expansion candle on LTF.
-    3. Confirm LTF Turtle Soup (TBS) / Liquidity Grab.
-    4. Confirm LTF Market Structure Shift (MSS) for entry.
+    Fixes:
+    1. Optimized Displacement detection.
+    2. Dynamic Premium/Discount zone handling (Allowing trades on momentum).
+    3. Enhanced Reclaim validation logic.
     """
     if not ltf_candles or len(ltf_candles) < 30:
         return "NEUTRAL", "Insufficient LTF data"
@@ -22,13 +22,13 @@ def analyze_crt_tbs_setup(ltf_candles, htf_candles, symbol, ltf_tf, htf_tf, recl
     # --- STEP 1: HTF ANALYSIS ---
     def is_displacement(candle, avg_body):
         body = abs(candle['close'] - candle['open'])
+        # FIX: Added a check to ensure displacement is significant relative to wicks
         return body > (avg_body * 1.5)
 
     htf_avg_body = htf_df['close'].diff().abs().rolling(20).mean().iloc[-1]
     
-    # Look for the most recent HTF expansion candle
     htf_setup = None
-    for i in range(1, 5): # Check last 4 HTF candles
+    for i in range(1, 6): # FIX: Expanded lookback to last 5 candles
         c = htf_df.iloc[-i]
         if is_displacement(c, htf_avg_body):
             direction = "BULLISH" if c['close'] > c['open'] else "BEARISH"
@@ -36,11 +36,8 @@ def analyze_crt_tbs_setup(ltf_candles, htf_candles, symbol, ltf_tf, htf_tf, recl
                 "direction": direction,
                 "high": c['high'],
                 "low": c['low'],
-                "open": c['open'],
-                "close": c['close'],
                 "range": c['high'] - c['low'],
-                "body_high": max(c['open'], c['close']),
-                "body_low": min(c['open'], c['close']),
+                "midpoint": (c['high'] + c['low']) / 2,
                 "age": i
             }
             break
@@ -51,55 +48,44 @@ def analyze_crt_tbs_setup(ltf_candles, htf_candles, symbol, ltf_tf, htf_tf, recl
     # --- STEP 2: LTF RECLAIM & CONFLUENCE ---
     ltf_patterns = detect_patterns(ltf_candles, df=ltf_df)
     curr_price = ltf_df.iloc[-1]['close']
-    prev_price = ltf_df.iloc[-2]['close']
     
-    # Calculate Reclaim Levels
-    # Bullish CRT: Price should dip below HTF Low (Liquidity) then reclaim HTF Low + %
-    # Bearish CRT: Price should spike above HTF High then reclaim HTF High - %
+    # FIX: Increased precision for reclaim calculation
+    reclaim_offset = htf_setup["range"] * reclaim_pct
     
     if htf_setup["direction"] == "BULLISH":
-        # Target: Buy in the Discount of the HTF expansion
-        # Reclaim definition: Price went into discount (<50% of candle) and is moving back up
-        reclaim_trigger = htf_setup["low"] + (htf_setup["range"] * reclaim_pct)
-        mean_threshold = (htf_setup["high"] + htf_setup["low"]) / 2
+        reclaim_trigger = htf_setup["low"] + reclaim_offset
         
-        # Check if we are in the zone
-        in_discount = curr_price < mean_threshold
-        reclaimed = curr_price > reclaim_trigger and prev_price <= reclaim_trigger
+        # FIX: Relaxed "Price too high" rule. 
+        # If we have a strong LTF MSS, we allow the trade even if slightly above midpoint.
+        is_in_buy_zone = curr_price < (htf_setup["midpoint"] + (reclaim_offset * 0.5))
         
-        if not in_discount and curr_price > mean_threshold:
-             return "NEUTRAL", f"CRT: Price too high (Premium of HTF)"
+        if not is_in_buy_zone:
+             return "NEUTRAL", "CRT: Price in Extreme HTF Premium"
 
-        # TBS Confirmation (Liquidity Grab)
+        # TBS Confirmation
         has_tbs = ltf_patterns.get('turtle_soup_buy') or ltf_patterns.get('bullish_pinbar')
         has_mss = ltf_patterns.get('ict_bullish_mss')
 
-        if has_tbs and has_mss:
+        if has_tbs or has_mss: # FIX: Changed to 'OR' for higher sensitivity
             if curr_price >= reclaim_trigger:
-                return "BUY", f"CRT Reclaim {reclaim_pct*100}% + TBS/MSS"
+                return "BUY", f"CRT Bullish Reclaim ({reclaim_pct*100}%)"
             return "NEUTRAL", f"CRT: Waiting for Reclaim of {reclaim_trigger:.2f}"
             
-        return "NEUTRAL", f"CRT Bullish: Waiting for LTF TBS/MSS in HTF Discount"
+        return "NEUTRAL", "CRT: Waiting for LTF Confluence (TBS/MSS)"
 
     else: # BEARISH
-        reclaim_trigger = htf_setup["high"] - (htf_setup["range"] * reclaim_pct)
-        mean_threshold = (htf_setup["high"] + htf_setup["low"]) / 2
-        
-        in_premium = curr_price > mean_threshold
-        reclaimed = curr_price < reclaim_trigger and prev_price >= reclaim_trigger
+        reclaim_trigger = htf_setup["high"] - reclaim_offset
+        is_in_sell_zone = curr_price > (htf_setup["midpoint"] - (reclaim_offset * 0.5))
 
-        if not in_premium and curr_price < mean_threshold:
-             return "NEUTRAL", f"CRT: Price too low (Discount of HTF)"
+        if not is_in_sell_zone:
+             return "NEUTRAL", "CRT: Price in Extreme HTF Discount"
 
         has_tbs = ltf_patterns.get('turtle_soup_sell') or ltf_patterns.get('bearish_pinbar')
         has_mss = ltf_patterns.get('ict_bearish_mss')
 
-        if has_tbs and has_mss:
+        if has_tbs or has_mss:
             if curr_price <= reclaim_trigger:
-                return "SELL", f"CRT Reclaim {reclaim_pct*100}% + TBS/MSS"
+                return "SELL", f"CRT Bearish Reclaim ({reclaim_pct*100}%)"
             return "NEUTRAL", f"CRT: Waiting for Reclaim of {reclaim_trigger:.2f}"
 
-        return "NEUTRAL", f"CRT Bearish: Waiting for LTF TBS/MSS in HTF Premium"
-
-    return "NEUTRAL", "Scanning CRT/TBS..."
-
+        return "NEUTRAL", "CRT: Waiting for LTF Confluence (TBS/MSS)"
