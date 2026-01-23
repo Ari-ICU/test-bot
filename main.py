@@ -80,6 +80,28 @@ def get_higher_tf(ltf):
     mapping = {"M1": "H1", "M5": "H1", "M15": "H4", "M30": "H4", "H1": "D1", "H4": "D1", "D1": "W1"}
     return mapping.get(ltf, "D1")
 
+def safe_reason_formatter(reason):
+    """
+    Convert strategy reason into a string safely for logging.
+    Handles dict, None, NaN, or string values without crashing.
+    """
+    import math
+    if isinstance(reason, dict):
+        parts = []
+        for k, v in reason.items():
+            if v is None:
+                parts.append(f"{k}=None")
+            elif isinstance(v, (int, float)):
+                if isinstance(v, float) and math.isnan(v):
+                    parts.append(f"{k}=NaN")
+                else:
+                    parts.append(f"{k}={v:.5f}")
+            else:
+                parts.append(f"{k}={v}")
+        return ", ".join(parts)
+    else:
+        return str(reason)
+
 # --- BOT LOGIC (REAL-TIME OPTIMIZED) ---
 def bot_logic(app):
     connector = app.connector
@@ -105,7 +127,13 @@ def bot_logic(app):
             # 2. Multi-TF Scan Loop
             for scan_tf in AUTO_TABS:
                 candles = connector.get_tf_candles(scan_tf, count=250)
-                if not candles or len(candles) < 100: continue
+                
+                # FIX: Detailed logging for missing data
+                if not candles or len(candles) < 100:
+                    # Only log to console (not logger/Telegram) to avoid thread errors
+                    if time.time() - last_heartbeat > 59: 
+                        print(f"DEBUG: {scan_tf} insufficient data ({len(candles) if candles else 0}/100)")
+                    continue
 
                 current_bar_time = candles[-1]['time']
                 
@@ -153,35 +181,58 @@ def bot_logic(app):
 
                     try:
                         action, reason = engine()
-                        
-                        # --- THE "PRECISION FIX" SANITIZATION LAYER ---
-                        # Convert any reason to a plain string and strip problematic characters
-                        safe_reason = str(reason).replace("{", "[").replace("}", "]").strip()
+                        safe_reason = safe_reason_formatter(reason)
                         app.update_strategy_status(name, action, safe_reason)
 
                         if action == "NEUTRAL":
-                            # Use plain string logging to bypass any f-string precision issues
                             logger.info(f"⚪ {Fore.LIGHTBLACK_EX}ANALYSIS{Style.RESET_ALL} | {name} | {scan_tf} | Status: {safe_reason}")
                         else:
-                            # Log valid signal
                             logger.info(f"🎯 {Fore.GREEN}SIGNAL TRIGGERED{Style.RESET_ALL} | {name} | {action} on {scan_tf} | Reason: {safe_reason}")
+
 
                             # Position Check
                             if connector.account_info.get('total_count', 0) >= app.max_pos_var.get():
                                 logger.warning(f"⏸️ Max Positions reached. Skipping {action} signal.")
                                 break
 
-                            # Execute Trade
-                            price = connector.account_info['ask'] if action == "BUY" else connector.account_info['bid']
-                            sl, tp = risk.calculate_sl_tp(price, action, current_atr, connector.active_symbol, scan_tf)
-                            
-                            if connector.send_order(action, connector.active_symbol, app.lot_var.get(), sl, tp):
-                                latency = (time.perf_counter() - start_time) * 1000
-                                logger.info(f"✅ {Fore.GREEN}EXECUTED{Style.RESET_ALL} | {name} | Latency: {latency:.2f}ms")
-                                risk.record_trade()
-                                break 
-                    except Exception as strat_err:
-                        logger.error(f"Error in {name}: {strat_err}")
+                            try:
+                                tick = None
+                                for _ in range(5):  # Retry up to 5 times
+                                    tick = connector.get_tick()
+                                    if tick: break
+                                    time.sleep(0.05)
+
+                                if not tick:
+                                    logger.warning(f"⚠️ No tick data for TBS_Retest on M15. Trade skipped.")
+                                    continue
+
+                                price = tick['ask'] if action == "BUY" else tick['bid']
+
+                                if current_atr is None or pd.isna(current_atr) or current_atr <= 0:
+                                    logger.warning(f"⚠️ Invalid ATR for TBS_Retest on M15. Trade skipped.")
+                                    continue
+
+                                sl, tp = risk.calculate_sl_tp(
+                                    float(price),
+                                    action,
+                                    float(current_atr),
+                                    connector.active_symbol,
+                                    scan_tf
+                                )
+
+                                if connector.send_order(action, connector.active_symbol, app.lot_var.get(), sl, tp):
+                                    latency = (time.perf_counter() - start_time) * 1000
+                                    logger.info(f"✅ EXECUTED | TBS_Retest | Latency: {latency:.2f}ms")
+                                    risk.record_trade()
+
+                            except Exception as e:
+                                logger.exception(f"🔥 Strategy crash [TBS_Retest] | Action safely skipped: {e}")
+
+
+                    except Exception as e:
+                        logger.exception(f"🔥 Strategy crash [{name}] | Action aborted")
+                        app.update_strategy_status(name, "ERROR", str(e))
+
 
             time.sleep(0.01)
         except Exception as e:

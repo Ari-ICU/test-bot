@@ -1,7 +1,7 @@
 #property strict
 #property version "3.6" // Bumped for performance optimizations
 #property description "HTTP Bridge - Optimized: Caching, Reduced String Ops, Efficient Polling"
-#include <WinUser32.mqh> // Required for keyboard simulation
+
 
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
@@ -321,15 +321,26 @@ void OnTimer() {
     }
     post_freezer.Add("&m1_candles=" + m1_freezer.String());
 
-    // NEW: Always send HTF candles (H1, H4, and D1) for CRT strategy
+    // --- FULLY FIXED: Always send all required timeframes for strategy sync ---
     StringFreezer htf_freezer;
-    ENUM_TIMEFRAMES htf_list[] = {PERIOD_H1, PERIOD_H4, PERIOD_D1};
-    for(int h=0; h<3; h++) {
+    ENUM_TIMEFRAMES htf_list[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1};
+    
+    // Updated loop count to 7 to match the htf_list size
+    for(int h=0; h<7; h++) {
         ENUM_TIMEFRAMES htf = htf_list[h];
-        if(htf == g_current_period) continue; // Skip redundant HTF
-        
-        string tf_label = (htf == PERIOD_H1) ? "H1" : (htf == PERIOD_H4 ? "H4" : "D1");
-        int bars = MathMin(300, iBars(_Symbol, htf)); // Increased to 300
+        if(htf == g_current_period) continue; // Skip if it's the main chart timeframe
+
+        // Map every timeframe to a string label that Python expects
+        string tf_label = "";
+        if(htf == PERIOD_M1) tf_label = "M1";
+        else if(htf == PERIOD_M5) tf_label = "M5";
+        else if(htf == PERIOD_M15) tf_label = "M15";
+        else if(htf == PERIOD_M30) tf_label = "M30";
+        else if(htf == PERIOD_H1) tf_label = "H1";
+        else if(htf == PERIOD_H4) tf_label = "H4";
+        else if(htf == PERIOD_D1) tf_label = "D1";
+
+        int bars = MathMin(300, iBars(_Symbol, htf)); 
         StringFreezer sub_freezer;
         for(int i=0; i<bars; i++) {
             if(i > 0) sub_freezer.Add("|");
@@ -339,6 +350,8 @@ void OnTimer() {
                          DoubleToString(iClose(_Symbol, htf, i), _Digits) + "," +
                          IntegerToString(iTime(_Symbol, htf, i)));
         }
+        
+        // This sends the data as &htf_M1, &htf_M5, &htf_M15, etc.
         post_freezer.Add("&htf_" + tf_label + "=" + sub_freezer.String());
     }
     

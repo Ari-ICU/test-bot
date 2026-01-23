@@ -344,3 +344,12 @@ class MT5Connector:
                 cmd = f"OPEN_CHART|{symbol}|{tf}"
                 self.command_queue.append(cmd)
         logger.info(f"📂 Queued MT5 Tab: {symbol} @ {tf}")
+    
+    def get_tick(self):
+        """Return the current tick data as a dict (ask/bid)."""
+        with self.lock:
+            bid = self._account_data.get('bid', 0.0)
+            ask = self._account_data.get('ask', 0.0)
+            if bid <= 0 or ask <= 0:
+                return None
+        return {'bid': bid, 'ask': ask}
