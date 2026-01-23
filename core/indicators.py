@@ -142,18 +142,23 @@ class Indicators:
     @staticmethod
     def calculate_stoch(df, period=14, smooth_k=3, smooth_d=3):
         """
-        Stochastic Oscillator
+        Stochastic Oscillator (Hardened for Low-Vol/Flat Bars)
         %K = (Current Close - Lowest Low) / (Highest High - Lowest Low) * 100
         %D = Moving Average of %K
         """
         low_min = df['low'].rolling(window=period).min()
         high_max = df['high'].rolling(window=period).max()
         
-        # Calculate raw %K
-        stoch_k = 100 * (df['close'] - low_min) / (high_max - low_min)
+        # Avoid div-by-zero: Add epsilon for flat ranges
+        range_val = high_max - low_min
+        range_val = range_val.where(range_val > 0, 1e-10)  # Tiny positive fallback
+        
+        # Calculate raw %K, clamp to 0-100
+        stoch_k = 100 * (df['close'] - low_min) / range_val
+        stoch_k = stoch_k.clip(0, 100).fillna(50)  # Neutral fill for NaNs
         
         # Apply smoothing to get %K and %D
-        k_line = stoch_k.rolling(window=smooth_k).mean()
-        d_line = k_line.rolling(window=smooth_d).mean()
+        k_line = stoch_k.rolling(window=smooth_k).mean().fillna(50)
+        d_line = k_line.rolling(window=smooth_d).mean().fillna(50)
         
         return k_line, d_line

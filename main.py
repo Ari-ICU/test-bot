@@ -2,9 +2,7 @@ import time
 import logging
 import sys
 import pandas as pd
-import socket  # Added for connection stability
 from datetime import datetime
-from collections import deque
 import tkinter as tk
 from colorama import init, Fore, Style
 
@@ -16,7 +14,7 @@ from core.session import get_detailed_session_status
 from core.telegram_bot import TelegramBot, TelegramLogHandler
 from ui import TradingApp
 
-# --- ALL STRATEGY IMPORTS ---
+# --- STRATEGY IMPORTS ---
 import strategy.trend_following as trend
 import strategy.ict_silver_bullet as ict_strat
 import strategy.scalping as scalping
@@ -33,247 +31,194 @@ from core.asset_detector import detect_asset_type
 from core.predictor import AIPredictor
 from core.patterns import detect_patterns
 
-# Initialize Colorama
 init(autoreset=True)
 
-# --- REAL-TIME OPTIMIZED LOGGING ---
+# --- UTILITIES ---
+def get_higher_tf(ltf):
+    """Maps lower timeframes to higher timeframes for multi-TF strategies."""
+    mapping = {
+        "M1": "M15", "M5": "M30", "M15": "H1", 
+        "M30": "H4", "H1": "H4", "H4": "D1", "D1": "W1"
+    }
+    return mapping.get(ltf, "D1")
+
+def safe_reason_formatter(reason):
+    """Safely converts dict or string reasons to string."""
+    if isinstance(reason, dict):
+        return ", ".join([f"{k}: {v}" for k, v in reason.items()])
+    return str(reason)
+
 def setup_enhanced_logger():
     root_logger = logging.getLogger()
     if root_logger.hasHandlers(): root_logger.handlers.clear()
     root_logger.setLevel(logging.INFO)
-
-    class RealTimeFormatter(logging.Formatter):
-        COLORS = {
-            logging.DEBUG: Fore.LIGHTBLACK_EX,
-            logging.INFO: Fore.CYAN,
-            logging.WARNING: Fore.YELLOW,
-            logging.ERROR: Fore.RED,
-            logging.CRITICAL: Fore.RED + Style.BRIGHT
-        }
-        def format(self, record):
-            color = self.COLORS.get(record.levelno, Fore.WHITE)
-            timestamp = f"{Fore.GREEN}{datetime.now().strftime('%H:%M:%S.%f')[:-3]}{Style.RESET_ALL}"
-            prefix = f"{color}[{record.levelname:<8}]{Style.RESET_ALL}"
-            return f"{timestamp} | {prefix} | {record.name} | {record.getMessage()}"
-
-    class FlushStreamHandler(logging.StreamHandler):
-        def emit(self, record):
-            super().emit(record)
-            self.flush()
-
-    console_handler = FlushStreamHandler(sys.stdout)
-    console_handler.setFormatter(RealTimeFormatter())
+    console_handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter(f"{Fore.GREEN}%(asctime)s{Style.RESET_ALL} | [%(levelname)-8s] | %(name)s | %(message)s", datefmt="%H:%M:%S")
+    console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
-    
-    file_handler = logging.FileHandler("bot_engine.log", encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s", datefmt="%H:%M:%S"))
-    root_logger.addHandler(file_handler)
-    
     return logging.getLogger("Main")
 
 logger = setup_enhanced_logger()
-
-# --- CONSTANTS ---
 AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
 
-def get_higher_tf(ltf):
-    mapping = {"M1": "H1", "M5": "H1", "M15": "H4", "M30": "H4", "H1": "D1", "H4": "D1", "D1": "W1"}
-    return mapping.get(ltf, "D1")
-
-def safe_reason_formatter(reason):
-    """
-    Convert strategy reason into a string safely for logging.
-    Handles dict, None, NaN, or string values without crashing.
-    """
-    import math
-    if isinstance(reason, dict):
-        parts = []
-        for k, v in reason.items():
-            if v is None:
-                parts.append(f"{k}=None")
-            elif isinstance(v, (int, float)):
-                if isinstance(v, float) and math.isnan(v):
-                    parts.append(f"{k}=NaN")
-                else:
-                    parts.append(f"{k}={v:.5f}")
-            else:
-                parts.append(f"{k}={v}")
-        return ", ".join(parts)
-    else:
-        return str(reason)
-
-# --- BOT LOGIC (REAL-TIME OPTIMIZED) ---
 def bot_logic(app):
     connector = app.connector
     risk = app.risk
     ai_predictor = AIPredictor()
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
-    last_heartbeat = 0
 
-    logger.info(f"{Fore.MAGENTA}==========================================")
-    logger.info(f"{Fore.MAGENTA}  🚀 REAL-TIME ENGINE ACTIVE")
-    logger.info(f"{Fore.MAGENTA}==========================================")
+    # NEW: Track analysis for Telegram /analysis command
+    def update_tg_analysis(prediction, patterns, sentiment):
+        if app.telegram_bot:
+            app.telegram_bot.track_analysis(prediction, patterns, sentiment)
 
     while app.bot_running:
         try:
-            # 1. Heartbeat Monitor
-            if time.time() - last_heartbeat > 60:
-                logger.info(f"💓 Multi-TF Heartbeat | Scanning Active for: {', '.join(AUTO_TABS)}")
-                last_heartbeat = time.time()
-
             if not app.auto_trade_var.get():
                 time.sleep(0.1); continue
 
-            # 2. Multi-TF Scan Loop
             for scan_tf in AUTO_TABS:
-                candles = connector.get_tf_candles(scan_tf, count=250)
-                
-                # FIX: Detailed logging for missing data
-                if not candles or len(candles) < 100:
-                    # Only log to console (not logger/Telegram) to avoid thread errors
-                    if time.time() - last_heartbeat > 59: 
-                        print(f"DEBUG: {scan_tf} insufficient data ({len(candles) if candles else 0}/100)")
+                # Need at least 200 bars for EMA 200 + Bollinger Bands
+                candles = connector.get_tf_candles(scan_tf, count=350)
+                if not candles or len(candles) < 210: 
                     continue
 
                 current_bar_time = candles[-1]['time']
-                
-                # Check for new bar
-                if current_bar_time <= last_processed_bar[scan_tf]:
+                if current_bar_time <= last_processed_bar[scan_tf]: 
                     continue
                 
-                start_time = time.perf_counter()
                 last_processed_bar[scan_tf] = current_bar_time
-                
-                logger.info(f"⚡ {Fore.YELLOW}[REAL-TIME]{Style.RESET_ALL} New Bar {scan_tf} detected. Starting Scan...")
-
-                # 3. Data Prep & Indicators
                 df = pd.DataFrame(candles)
-                df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
-                df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
-                df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
-                df['atr'] = Indicators.calculate_atr(df)
-                bb_u, bb_l = Indicators.calculate_bollinger_bands(df['close'])
-                df['upper_bb'], df['lower_bb'] = bb_u, bb_l
+
+                # --- 1. FULL FEATURE PREPARATION (Required for AI & Scalp) ---
+                try:
+                    df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
+                    df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
+                    df['ema_20'] = Indicators.calculate_ema(df['close'], 20)
+                    df['rsi'] = Indicators.calculate_rsi(df['close'], 14)
+                    df['atr'] = Indicators.calculate_atr(df)
+                    
+                    # Fix: Add Bollinger Bands for AI Predictor
+                    bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'])
+                    df['upper_bb'] = bb_upper
+                    df['lower_bb'] = bb_lower
+                except Exception as e:
+                    logger.error(f"Indicator calculation error on {scan_tf}: {e}")
+                    continue
                 
-                patterns = detect_patterns(candles, df=df)
-                current_atr = df['atr'].iloc[-1]
-                asset_type = detect_asset_type(connector.active_symbol)
+                # --- 2. MULTI-TF PREPARATION ---
                 htf_tf = get_higher_tf(scan_tf)
                 htf_candles = connector.get_tf_candles(htf_tf, count=100)
 
-                # 4. Strategy Routing
+                patterns = detect_patterns(candles, df=df)
+                current_atr = df['atr'].iloc[-1]
+                asset_type = detect_asset_type(connector.active_symbol)
+
+                # --- 3. ALL STRATEGIES ---
                 all_strategies = [
                     ("AI_Predict", lambda: ai_predictor.predict(df, asset_type, app.style_var.get())),
+                    ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df, scan_tf)),  # FIXED: Pass scan_tf for guardrail
                     ("Trend", lambda: trend.analyze_trend_setup(candles, df, patterns)),
-                    ("Scalp", lambda: scalping.analyze_scalping_setup(candles, df)),
                     ("Breakout", lambda: breakout.analyze_breakout_setup(candles, df)),
-                    ("TBS_Retest", lambda: tbs_retest.analyze_tbs_retest_setup(candles, df, patterns)),
                     ("ICT_SB", lambda: ict_strat.analyze_ict_setup(candles, df, patterns)),
-                    ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df, patterns)),
                     ("CRT_TBS", lambda: crt_tbs.analyze_crt_tbs_setup(candles, htf_candles, connector.active_symbol, scan_tf, htf_tf, app.crt_reclaim_var.get())),
-                    ("PD_Parameter", lambda: pd_strat.analyze_pd_parameter_setup(candles, df)),
+                    ("TBS_Turtle", lambda: tbs_strat.analyze_tbs_turtle_setup(candles, df, patterns)),
+                    ("TBS_Retest", lambda: tbs_retest.analyze_tbs_retest_setup(candles, df, patterns)),
+                    ("PD_Array", lambda: pd_strat.analyze_pd_parameter_setup(candles, df)),
                     ("Reversal", lambda: reversal_strat.analyze_reversal_setup(candles, df, patterns))
                 ]
 
-                for name, engine in all_strategies:
-                    if not app.strat_vars.get(name, tk.BooleanVar(value=True)).get():
-                        continue
+                # NEW: Aggregate for Telegram analysis cache
+                ai_pred = "NEUTRAL"
+                detected_patterns = []
+                sentiment = "NEUTRAL"
 
+                for name, engine in all_strategies:
                     try:
                         action, reason = engine()
-                        safe_reason = safe_reason_formatter(reason)
-                        app.update_strategy_status(name, action, safe_reason)
+                        app.update_strategy_status(name, action, safe_reason_formatter(reason))
 
-                        if action == "NEUTRAL":
-                            logger.info(f"⚪ {Fore.LIGHTBLACK_EX}ANALYSIS{Style.RESET_ALL} | {name} | {scan_tf} | Status: {safe_reason}")
-                        else:
-                            logger.info(f"🎯 {Fore.GREEN}SIGNAL TRIGGERED{Style.RESET_ALL} | {name} | {action} on {scan_tf} | Reason: {safe_reason}")
+                        # Aggregate for TG
+                        if name == "AI_Predict" and action != "NEUTRAL":
+                            ai_pred = action
+                        if patterns:  # Simplified – track any patterns
+                            detected_patterns = list(patterns.keys())[:3]  # Top 3
+                        if action == "BUY":
+                            sentiment = "BULLISH"
+                        elif action == "SELL":
+                            sentiment = "BEARISH"
 
+                        if action != "NEUTRAL":
+                            if pd.isna(current_atr) or current_atr <= 0: continue
+                            tick = connector.get_tick()
+                            if not tick: continue
 
-                            # Position Check
-                            if connector.account_info.get('total_count', 0) >= app.max_pos_var.get():
-                                logger.warning(f"⏸️ Max Positions reached. Skipping {action} signal.")
-                                break
+                            price = float(tick['ask'] if action == "BUY" else tick['bid'])
+                            sl, tp = risk.calculate_sl_tp(price, action, float(current_atr), connector.active_symbol, digits=5, timeframe=scan_tf)  # FIXED: Explicit digits=5
 
-                            try:
-                                tick = None
-                                for _ in range(5):  # Retry up to 5 times
-                                    tick = connector.get_tick()
-                                    if tick: break
-                                    time.sleep(0.05)
-
-                                if not tick:
-                                    logger.warning(f"⚠️ No tick data for TBS_Retest on M15. Trade skipped.")
-                                    continue
-
-                                price = tick['ask'] if action == "BUY" else tick['bid']
-
-                                if current_atr is None or pd.isna(current_atr) or current_atr <= 0:
-                                    logger.warning(f"⚠️ Invalid ATR for TBS_Retest on M15. Trade skipped.")
-                                    continue
-
-                                sl, tp = risk.calculate_sl_tp(
-                                    float(price),
-                                    action,
-                                    float(current_atr),
-                                    connector.active_symbol,
-                                    scan_tf
-                                )
-
+                            if sl is not None and tp is not None and not pd.isna(sl) and not pd.isna(tp):
                                 if connector.send_order(action, connector.active_symbol, app.lot_var.get(), sl, tp):
-                                    latency = (time.perf_counter() - start_time) * 1000
-                                    logger.info(f"✅ EXECUTED | TBS_Retest | Latency: {latency:.2f}ms")
+                                    # Use round() to prevent "Precision" crash on string formatting
+                                    logger.info(f"✅ EXECUTED {name} | Price: {price:.5f} | SL: {sl:.5f} | TP: {tp:.5f}")
                                     risk.record_trade()
-
-                            except Exception as e:
-                                logger.exception(f"🔥 Strategy crash [TBS_Retest] | Action safely skipped: {e}")
-
+                            else:
+                                logger.warning(f"⚠️ Trade skipped for {name} on {scan_tf}: Invalid SL/TP calculation.")
 
                     except Exception as e:
-                        logger.exception(f"🔥 Strategy crash [{name}] | Action aborted")
-                        app.update_strategy_status(name, "ERROR", str(e))
+                        logger.error(f"🔥 Strategy Error [{name}] on {scan_tf}: {e}")
 
+                # Update TG cache after loop
+                update_tg_analysis(ai_pred, detected_patterns, sentiment)
 
             time.sleep(0.01)
         except Exception as e:
-            logger.error(f"💥 Bot Loop Crash: {e}", exc_info=True)
+            logger.error(f"💥 Critical Loop Crash: {e}")
             time.sleep(1)
 
 def main():
     conf = Config()
-    # Ensure Port 8001 is clean
     connector = MT5Connector(host='127.0.0.1', port=8001)
-    
-    tg_conf = conf.get('telegram', {})
-    telegram_bot = TelegramBot(
-        token=tg_conf.get('bot_token', ''), 
-        authorized_chat_id=tg_conf.get('chat_id', ''), 
-        connector=connector
-    )
-    connector.set_telegram(telegram_bot)
-    telegram_bot.start_polling()
-    
-    tg_handler = TelegramLogHandler(telegram_bot)
-    tg_handler.setLevel(logging.INFO) 
-    logger.addHandler(tg_handler)
-
-    # Initialize connection
     if not connector.start():
-        logger.critical("❌ FAILED TO CONNECT TO MT5 GATEWAY.")
+        logger.critical("❌ FAILED TO CONNECT TO MT5 GATEWAY")
         return
 
-    risk = RiskManager(conf.data)
-    app = TradingApp(bot_logic, connector, risk, telegram_bot)
+    # Force warmup for all timeframes
+    logger.info("📡 Warming up Multi-TF Data Sync...")
+    for tf in AUTO_TABS: 
+        connector.request_history(count=350)
     
-    logger.info(f"系统就绪: {Fore.GREEN}Real-Time UI and Backend Linked.{Style.RESET_ALL}")
+    connector.open_multi_tf_charts(connector.active_symbol)
+
+    # --- FIXED: Initialize Telegram Bot ---
+    tg_token = conf.get('telegram.bot_token')  # Handles nest/env
+    tg_chat_id = conf.get('telegram.chat_id')  # Auto-int
+    risk_per_trade = conf.get('risk.risk_per_trade')  # 1.0 from your JSON
+    mt5_port = conf.get('mt5.port', 8001)  # 8001 default
+    telegram_bot = None
+    if tg_token and tg_chat_id:
+        telegram_bot = TelegramBot(tg_token, tg_chat_id, connector)
+        telegram_bot.set_risk_manager(RiskManager(conf.data))  # Pass risk for /settings
+        telegram_bot.start_polling()  # Starts background command listener
+        logger.info(f"📱 Telegram Bot Active: Chat ID {tg_chat_id}")
+        
+        # Add Log Handler for Trade Alerts/Errors
+        tg_handler = TelegramLogHandler(telegram_bot)
+        tg_handler.setLevel(logging.WARNING)  # Tune: WARNING for less noise
+        logging.getLogger().addHandler(tg_handler)
+        logger.info("📤 Telegram Log Forwarding Enabled")
+    else:
+        logger.warning("⚠️ Telegram skipped: Add 'telegram_token' and 'telegram_chat_id' to bot_settings.py")
+
+    risk = RiskManager(conf.data)  # FIXED: Instantiate risk here for Telegram
+
+    app = TradingApp(bot_logic, connector, risk, telegram_bot)  # Now passes the instance
     
-    try:
+    try: 
         app.mainloop()
-    except KeyboardInterrupt:
-        logger.info("🛑 Shutdown Requested.")
-    finally:
+    finally: 
+        if telegram_bot:
+            telegram_bot.stop_polling()  # Graceful shutdown
         connector.stop()
-        logger.info("👋 Shutdown complete.")
 
 if __name__ == "__main__":
     main()
