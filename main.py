@@ -21,6 +21,7 @@ from core.risk import RiskManager
 from core.session import get_detailed_session_status
 from core.telegram_bot import TelegramBot, TelegramLogHandler
 from ui import TradingApp
+from core.news_manager import NewsManager
 
 # --- STRATEGY IMPORTS ---
 import strategy.trend_following as trend
@@ -73,6 +74,7 @@ def bot_logic(app):
     connector = app.connector
     risk = app.risk
     ai_predictor = AIPredictor()
+    news_manager = NewsManager()
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
     signals_summary = {tf: "NEUTRAL" for tf in AUTO_TABS}
 
@@ -191,11 +193,12 @@ def bot_logic(app):
                         real_price = tick['ask'] if signal == "BUY" else tick['bid']
                         signal_price = candles[-1]['close'] # The price the signal was based on
                         
-                        # Slippage Check (Max 0.05% allowed)
+                        # Slippage Check (Max 0.15% for Gold, 0.05% for others)
+                        threshold = 0.15 if "XAU" in connector.active_symbol.upper() else 0.05
                         slippage_pct = abs(real_price - signal_price) / signal_price * 100
-                        if slippage_pct > 0.05: # Threshold of 0.05%
+                        if slippage_pct > threshold: 
                             log_queue.put(f"{Fore.RED}❌ {tf} ABORT: High Slippage ({slippage_pct:.2f}%) | Sig: {signal_price:.2f} vs Real: {real_price:.2f}{Style.RESET_ALL}")
-                            continue # Skip this strategy's trade attempt, but continue with others
+                            continue 
 
                         # Proceed with safe execution
                         current_price = real_price
@@ -266,6 +269,19 @@ def bot_logic(app):
             
             for t in threads:
                 t.join(timeout=0.5)
+
+            # 3. GLOBAL NEWS UPDATE (Direct UI Update - Fixes 'WAITING' bug)
+            try:
+                is_active, ev_name, _ = news_manager.get_active_impact(connector.active_symbol)
+                if is_active:
+                    status, reason = "HIGH IMPACT", ev_name
+                else:
+                    ev_title, _, _, _ = news_manager.get_upcoming_event(connector.active_symbol)
+                    status, reason = "NEUTRAL", (ev_title or "Stable")
+                
+                app.after(0, lambda s=status, r=reason: app.update_strategy_status("News_Sentiment", s, r))
+            except Exception as e:
+                logger.debug(f"News UI Update error: {e}")
 
             while not log_queue.empty():
                 try:
