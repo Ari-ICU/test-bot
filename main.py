@@ -181,30 +181,56 @@ def bot_logic(app):
                         min_atr = 0.5 if "XAU" in connector.active_symbol.upper() else 0.01  # FIXED: Symbol-aware min (ties to SL/TP fix)
                         current_atr = max(atr_series.iloc[-1], min_atr) if not pd.isna(atr_series.iloc[-1]) else min_atr
                         sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
+                        # NEW: PRICING & SLIPPAGE PROTECTION
+                        # Fetch REAL-TIME TICK from MT5 directly (bypass history lag)
+                        tick = connector.get_tick()
+                        if not tick:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: No bid/ask tick available{Style.RESET_ALL}")
+                            continue # Skip this strategy's trade attempt, but continue with others
+
+                        real_price = tick['ask'] if signal == "BUY" else tick['bid']
+                        signal_price = candles[-1]['close'] # The price the signal was based on
                         
-                        # FIXED: Debug Log (Remove after testing)
-                        debug_msg = f"{Fore.YELLOW}Debug {tf} Trade: Price={current_price:.5f}, ATR={current_atr:.5f}, SL={sl}, TP={tp}{Style.RESET_ALL}"
-                        log_queue.put(debug_msg)
+                        # Slippage Check (Max 0.05% allowed)
+                        slippage_pct = abs(real_price - signal_price) / signal_price * 100
+                        if slippage_pct > 0.05: # Threshold of 0.05%
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: High Slippage ({slippage_pct:.2f}%) | Sig: {signal_price:.2f} vs Real: {real_price:.2f}{Style.RESET_ALL}")
+                            continue # Skip this strategy's trade attempt, but continue with others
+
+                        # Proceed with safe execution
+                        current_price = real_price
+                        # Recalculate SL/TP based on real-time price
+                        sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
                         
-                        balance = connector.get_account_balance()
-                        lots = risk.calculate_lot_size(balance, current_price, sl, connector.active_symbol)
-                        lots = max(lots, 0.01) if lots > 0 else 0.01  # FIXED: Min lots fallback (0.01 for XAUUSDm)
-                        
-                        risk_pct = getattr(risk, 'risk_per_trade', 1.0)
-                        target_risk_val = balance * (risk_pct / 100.0)
-                        actual_risk_val = lots * abs(current_price - sl) * 100.0 # Standard lot multiplier for XAU-ish
-                        
-                        print(f"DEBUG: {tf} Trade Planning | Balance: ${balance:,.2f} | Lots: {lots:.2f} | Risk: ${actual_risk_val:.2f} (Target: < ${target_risk_val:.2f})")
-                        
-                        if sl is not None and tp is not None and lots > 0:
-                            success = connector.execute_trade(signal, lots, sl, tp)
-                            if success:
-                                log_queue.put(f"{Fore.GREEN}🚀 {tf} AUTO-TRADE: {signal} {lots:.2f} lots | SL: {sl:.5f} | TP: {tp:.5f}{Style.RESET_ALL}")
-                                risk.record_trade()
-                            else:
-                                log_queue.put(f"{Fore.RED}⚠️ {tf} Trade failed: Execution error{Style.RESET_ALL}")
+                        can_trade, msg = risk.can_trade(0) # 0 for new trade, not modifying existing
+                        if can_trade:
+                            with connector.lock: # Ensure only one trade request at a time
+                                balance = connector.get_account_balance()
+                                equity = connector.account_info.get('equity', balance)
+                                lots = risk.calculate_lot_size(balance, current_price, sl, connector.active_symbol, equity=equity)
+                                lots = max(lots, 0.01) if lots > 0 else 0.01 # Ensure minimum lot size
+                                
+                                # FIXED: Debug Log (Remove after testing)
+                                debug_msg = f"{Fore.YELLOW}Debug {tf} Trade: Price={current_price:.5f}, ATR={current_atr:.5f}, SL={sl}, TP={tp}{Style.RESET_ALL}"
+                                log_queue.put(debug_msg)
+                                
+                                risk_pct = getattr(risk, 'risk_per_trade', 1.0)
+                                target_risk_val = balance * (risk_pct / 100.0)
+                                actual_risk_val = lots * abs(current_price - sl) * 100.0 # Standard lot multiplier for XAU-ish
+                                
+                                print(f"DEBUG: {tf} Trade Planning | Balance: ${balance:,.2f} | Lots: {lots:.2f} | Risk: ${actual_risk_val:.2f} (Target: < ${target_risk_val:.2f})")
+                                
+                                if sl is not None and tp is not None and lots > 0:
+                                    success = connector.execute_trade(signal, lots, sl, tp)
+                                    if success:
+                                        log_queue.put(f"{Fore.GREEN}🚀 {tf} AUTO-TRADE: {signal} {lots:.2f} lots | SL: {sl:.5f} | TP: {tp:.5f}{Style.RESET_ALL}")
+                                        risk.record_trade()
+                                    else:
+                                        log_queue.put(f"{Fore.RED}⚠️ {tf} Trade failed: Execution error{Style.RESET_ALL}")
+                                else:
+                                    log_queue.put(f"{Fore.RED}⚠️ {tf} Trade skipped: Invalid SL/TP/Lots (SL={sl}, TP={tp}, Lots={lots}){Style.RESET_ALL}")
                         else:
-                            log_queue.put(f"{Fore.RED}⚠️ {tf} Trade skipped: Invalid SL/TP/Lots (SL={sl}, TP={tp}, Lots={lots}){Style.RESET_ALL}")
+                            log_queue.put(f"{Fore.YELLOW}🛡️ {tf} SKIPPED: {msg}{Style.RESET_ALL}")
 
                     # FIXED: Update strongest signal (prefer first BUY/SELL over NEUTRAL)
                     if signal in ["BUY", "SELL"] and tf_signal == "NEUTRAL":
