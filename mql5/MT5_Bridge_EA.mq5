@@ -66,7 +66,8 @@ void OnDeinit(const int reason) {
 }
 double CalculateHistoryProfit(datetime from_date) {
     double profit = 0;
-    if(HistorySelect(from_date, TimeCurrent())) {
+    // Use a future end time to ensure we catch every deal closed up to the current moment
+    if(HistorySelect(from_date, TimeCurrent() + 86400)) {
         int total = HistoryDealsTotal();
         for(int i=0; i<total; i++) {
             ulong ticket = HistoryDealGetTicket(i);
@@ -79,8 +80,15 @@ double CalculateHistoryProfit(datetime from_date) {
     }
     return profit;
 }
-// Cache-aware profit update (call only when needed, e.g., daily/weekly boundaries crossed)
+int g_last_deals_count = 0;
+
+// Cache-aware profit update (NOW REAL-TIME)
 void UpdateProfitCache() {
+    datetime now_local = TimeLocal();
+    // Force update if deals count changed OR every 5 seconds
+    bool deals_changed = (HistoryDealsTotal() != g_last_deals_count);
+    bool time_to_refresh = (now_local - g_last_profit_update > 5);
+
     MqlDateTime dt; TimeCurrent(dt);
     dt.hour = 0; dt.min = 0; dt.sec = 0;
     datetime day_start = StructToTime(dt);
@@ -88,7 +96,9 @@ void UpdateProfitCache() {
     datetime week_start = day_start - (days_to_monday * 86400);
     dt.day = 1;
     datetime month_start = StructToTime(dt);
-    bool needs_update = (day_start != g_day_start) || (week_start != g_week_start) || (month_start != g_month_start) || (g_last_profit_update == 0);
+    
+    bool needs_update = deals_changed || time_to_refresh || (day_start != g_day_start) || (g_last_profit_update == 0);
+    
     if(needs_update) {
         g_prof_today = CalculateHistoryProfit(day_start);
         g_prof_week = CalculateHistoryProfit(week_start);
@@ -96,7 +106,8 @@ void UpdateProfitCache() {
         g_day_start = day_start;
         g_week_start = week_start;
         g_month_start = month_start;
-        g_last_profit_update = TimeCurrent();
+        g_last_profit_update = now_local;
+        g_last_deals_count = HistoryDealsTotal();
     }
 }
 string GetTFString() {
