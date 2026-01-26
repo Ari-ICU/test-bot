@@ -67,7 +67,7 @@ def setup_enhanced_logger():
     return logging.getLogger("Main")
 
 logger = setup_enhanced_logger()
-AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"]
 
 def bot_logic(app):
     connector = app.connector
@@ -247,7 +247,7 @@ def bot_logic(app):
                     msg_lower = str(record).lower()
                     skip_phrases = [
                         "fetched", "parsed", "from ea", "from cache", 
-                        "timeout", "insufficient data", "w1"
+                        "timeout", "insufficient data"
                     ]
                     if any(phrase in msg_lower for phrase in skip_phrases):
                         continue

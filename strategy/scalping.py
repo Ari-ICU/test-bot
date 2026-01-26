@@ -11,9 +11,8 @@ def analyze_scalping_setup(candles, df=None, timeframe=None):
     - Granular try-excepts for indicators to isolate bugs.
     - Enhanced error handling for "Format specifier" crashes.
     """
-    # TF Guardrail: Skip on non-scalping timeframes (fixes H1 crash)
-    if timeframe and timeframe not in ["M1", "M5"]:
-        return "NEUTRAL", {"reason": f"Scalp disabled on {timeframe} (M1/M5 only)"}
+    # Removed TF Guardrail to allow all timeframes as requested
+    pass
 
     if df is None:
         if not candles or len(candles) < 50:

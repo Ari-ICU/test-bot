@@ -43,66 +43,102 @@ class RiskManager:
         self.daily_trades_count = 0
 
     def calculate_lot_size(self, balance, entry_price, sl_price, symbol, equity=None):
-        asset_type = detect_asset_type(symbol)
-        risk_amount = balance * (self.risk_per_trade / 100)
-        dist_points = abs(entry_price - sl_price)
-        
-        if asset_type == "forex":
-            tick_value = 1.0 if "XAU" in symbol.upper() else 10.0
-            raw_lot = risk_amount / (dist_points * tick_value * 100)
-        else:  # crypto
-            tick_value = 0.01
-            raw_lot = risk_amount / (dist_points * tick_value)
+        """
+        Calculates lot size based on equity risk.
+        Safety: If balance <= 0 or distance is tiny, returns min_lot.
+        """
+        try:
+            asset_type = detect_asset_type(symbol)
+            sym_upper = symbol.upper()
+            
+            # 1. Use the more conservative value (Equity or Balance)
+            effective_balance = min(balance, equity) if equity is not None else balance
+            if effective_balance <= 0:
+                logger.warning(f"🛑 Risk Error: Insufficient balance/equity (${effective_balance})")
+                return 0.0
+            
+            # 2. Maximum dollar risk for this trade
+            risk_amount = effective_balance * (self.risk_per_trade / 100.0)
+            
+            # 3. Distance in price units (e.g. 1.50 for Gold)
+            dist_price = abs(entry_price - sl_price)
+            
+            # Minimum allowed distance to prevent lot size explosion
+            min_safety_gap = 1.0 if "XAU" in sym_upper else (entry_price * 0.0001)
+            dist_price = max(dist_price, min_safety_gap)
 
-        final_lot = max(self.min_lot, round(raw_lot, 2))
-        logger.info(f"Calculated lot: {final_lot} for {symbol} (type: {asset_type}, risk: ${risk_amount:.2f})")
-        return min(final_lot, self.max_lot) 
+            if asset_type == "forex":
+                if "XAU" in sym_upper or "GOLD" in sym_upper:
+                    # Gold: 1.0 move = $100 profit/loss per 1.0 lot
+                    per_lot_risk = dist_price * 100.0
+                elif "JPY" in sym_upper:
+                    # JPY: 0.01 move = ~$7-10 profit/loss
+                    per_lot_risk = (dist_price / 0.01) * 7.0
+                else:
+                    # Standard Forex: 0.0001 move (1 pip) = $10 profit/loss per 1.0 lot
+                    per_lot_risk = (dist_price / 0.0001) * 10.0
+            else:
+                # Crypto: $1 move = $1 profit/loss per 1.0 coin (assuming 1.0 lot = 1 coin)
+                per_lot_risk = dist_price
 
-    def calculate_sl_tp(self, price, action, atr, symbol, digits=5, risk_reward_ratio=1.5, timeframe="M5"):
+            if per_lot_risk <= 0: return self.min_lot
+            
+            raw_lot = risk_amount / per_lot_risk
+            
+            # ROUNDING & CLAMPING
+            # Gold/Forex typically 2 decimal lots
+            final_lot = round(raw_lot, 2)
+            
+            # Absolute hard cap for safety (0.20 lots max for small accounts)
+            if effective_balance < 2000:
+                final_lot = min(final_lot, 0.20)
+            
+            final_lot = max(self.min_lot, final_lot)
+            final_lot = min(final_lot, self.max_lot)
+            
+            logger.info(f"📊 Risk Calculation: Bal=${effective_balance:,.2f} | RiskVal=${risk_amount:.2f} | P_Dist={dist_price:.4f} | PerLotRisk=${per_lot_risk:.2f} | Result={final_lot}")
+            return final_lot
+            
+        except Exception as e:
+            logger.error(f"💥 Lot Size calculation failed: {e}")
+            return self.min_lot
+
+    def calculate_sl_tp(self, price, action, atr, symbol, digits=None, risk_reward_ratio=1.5, timeframe="M5"):
+        """
+        Robust SL/TP calculation with symbol-aware minimum distances.
+        """
         asset_type = detect_asset_type(symbol)
-        atr_mult = self.config.get('scalping', {}).get(f"{asset_type}_atr_multiplier", 1.0)
-        volatility = atr * atr_mult if (atr and atr > 0) else price * 0.001
+        sym_upper = symbol.upper()
         
-        if timeframe == "M1":
-            min_dist = price * 0.0002 if asset_type == "forex" else price * 0.002
+        # 1. Determine precision
+        if digits is None:
+            digits = 2 if "XAU" in sym_upper else 3 if "JPY" in sym_upper else 5
+            if asset_type == "crypto": digits = 2
+        
+        # 2. Minimum safe distance (Floor)
+        if "XAU" in sym_upper:
+            min_sl_dist = 2.0  # Force at least $2.00 gap for XAU
+        elif asset_type == "crypto":
+            min_sl_dist = price * 0.005 # 0.5%
         else:
-            min_dist = price * 0.0005 if asset_type == "forex" else price * 0.005 
-        
-        sl_dist = max(volatility * 1.5, min_dist)
-        sl_dist = max(sl_dist, min_dist)  
+            min_sl_dist = price * 0.0005 # ~5 pips
+
+        # 3. Use ATR or Floor
+        atr_mult = self.config.get('scalping', {}).get(f"{asset_type}_atr_multiplier", 1.5)
+        sl_dist = max((atr * atr_mult) if atr else 0, min_sl_dist)
         tp_dist = sl_dist * risk_reward_ratio
-        tp_dist = max(tp_dist, min_dist * risk_reward_ratio)  
-        
-        if sl_dist < min_dist * 1.1:  
-            logger.warning(f"⚠️ Small SL dist {sl_dist:.5f} for {symbol} on {timeframe} – using min {min_dist:.5f}")
-            sl_dist = min_dist
-        
+
+        # 4. Apply to Price
         if action == "BUY":
             sl = price - sl_dist
             tp = price + tp_dist
-        else:  # SELL
+        else: # SELL
             sl = price + sl_dist
             tp = price - tp_dist
-        
-        if action == "SELL":
-            if sl <= price: 
-                sl = price + max(min_dist, sl_dist)  
-            if tp >= price: 
-                tp = price - max(min_dist * risk_reward_ratio, tp_dist)
-            if (price - tp) < (min_dist * risk_reward_ratio):
-                tp = price - (min_dist * risk_reward_ratio)
-                logger.warning(f"⚠️ Adjusted tiny TP for SELL {symbol}: was {tp:.5f}, now {tp:.5f}")
-        else:  # BUY
-            if sl >= price: 
-                sl = price - max(min_dist, sl_dist)
-            if tp <= price: 
-                tp = price + max(min_dist * risk_reward_ratio, tp_dist)
-            if (tp - price) < (min_dist * risk_reward_ratio):
-                tp = price + (min_dist * risk_reward_ratio)
-                logger.warning(f"⚠️ Adjusted tiny TP for BUY {symbol}: was {tp:.5f}, now {tp:.5f}")
 
+        # 5. Final Rounding
         sl = round(float(sl), digits)
         tp = round(float(tp), digits)
 
-        logger.info(f"SL/TP for {symbol} ({asset_type}) on {timeframe}: SL={sl}, TP={tp} (min_dist={min_dist:.5f})")
+        logger.info(f"🎯 SL/TP [{symbol}]: Entry={price:.{digits}f} | SL={sl} | TP={tp} | Gap={sl_dist:.2f}")
         return sl, tp

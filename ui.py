@@ -15,7 +15,7 @@ from ttkbootstrap.scrolled import ScrolledText
 from collections import deque  # For simple dedup queue
 
 # FIXED: Define AUTO_TABS locally (used in UI, no import needed)
-AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
 
 class QueueHandler(logging.Handler):
     """Class to send logging records to a queue"""
@@ -320,7 +320,7 @@ class TradingApp(ttk.Window):
         strat_meta = {
             "AI_Predict": {"name": "AI Predictor (SMC)", "rec": "Rec: M5"},
             "Trend": {"name": "Trend Following", "rec": "Rec: H1/H4"},
-            "Scalp": {"name": "M5 Scalper", "rec": "Rec: M5"},
+            "Scalp": {"name": "Multi-TF Scalper", "rec": "Rec: All"},
             "Breakout": {"name": "Breakout Engine", "rec": "Rec: H4/D1"},
             "TBS_Retest": {"name": "TBS Retest", "rec": "Rec: M15/M30"},
             "ICT_SB": {"name": "ICT Silver Bullet", "rec": "Rec: M15"},
@@ -385,7 +385,7 @@ class TradingApp(ttk.Window):
 
     # FIXED: Enhanced update_timeframe – Similar (no immediate refresh call)
     def update_timeframe(self, event=None):
-        tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440}
+        tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440, "W1": 10080, "MN": 43200}
         minutes = tf_map.get(self.tf_var.get(), 5)
         if hasattr(self.connector, 'change_timeframe'):
             self.connector.change_timeframe(self.symbol_var.get(), minutes)
