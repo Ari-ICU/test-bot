@@ -1,12 +1,10 @@
 #property strict
-#property version "3.6" // Bumped for performance optimizations
-#property description "HTTP Bridge - Optimized: Caching, Reduced String Ops, Efficient Polling"
-
-
+#property version "3.9" // Fixed: GET_HISTORY parsing for |symbol|tf|count + per-TF cooldown to stop spam
+#property description "HTTP Bridge - Optimized: Caching, Reduced String Ops, Efficient Polling + JSON History"
+#include <Trade\Trade.mqh> // For MqlTradeRequest/Result (if not already included)
 input string ServerURL = "http://127.0.0.1:8001";
 input double DefaultLot = 0.01;
 input int TimerInterval = 100; // Configurable timer interval (ms) for tuning responsiveness vs performance
-
 // Cache variables for performance
 string g_symbols_list = "";
 datetime g_last_symbols_update = 0;
@@ -27,33 +25,29 @@ datetime g_day_start = 0, g_week_start = 0, g_month_start = 0;
 double g_prof_today = 0, g_prof_week = 0, g_prof_month = 0;
 datetime g_last_profit_update = 0;
 bool g_force_candle_reload = false;
-
-ENUM_TIMEFRAMES g_auto_tfs[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1};
-
+ENUM_TIMEFRAMES g_auto_tfs[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1, PERIOD_W1};  // Added W1
+datetime g_tf_cooldown[8] = {0,0,0,0,0,0,0,0};  // Index 7=W1
+string g_tf_names[8] = {"M1","M5","M15","M30","H1","H4","D1","W1"};  // Added W1
 int OnInit() {
    EventSetMillisecondTimer(TimerInterval);
    g_current_period = _Period;
    g_tf_string = GetTFString();
-   
-   // --- NEW: Auto-open timeframe tabs if they don't exist ---
-   for(int i=0; i<ArraySize(g_auto_tfs); i++) {
-      OpenUniqueChart(_Symbol, g_auto_tfs[i]);
-   }
-   // ---------------------------------------------------------
-
-   UpdateSymbolsCache(); 
+ 
+   for(int i=0; i<ArraySize(g_auto_tfs); i++) {  
+        OpenUniqueChart(_Symbol, g_auto_tfs[i]);
+    }
+   UpdateSymbolsCache();
    UpdateAccountCache();
-   UpdatePositionsCache(); 
+   UpdatePositionsCache();
    UpdateProfitCache();
-   
+ 
    return INIT_SUCCEEDED;
 }
-
 // Helper function to prevent opening the same tab twice
 void OpenUniqueChart(string symbol, ENUM_TIMEFRAMES tf) {
    long chartID = ChartFirst();
    bool exists = false;
-   
+ 
    while(chartID >= 0) {
       if(ChartSymbol(chartID) == symbol && ChartPeriod(chartID) == tf) {
          exists = true;
@@ -61,17 +55,15 @@ void OpenUniqueChart(string symbol, ENUM_TIMEFRAMES tf) {
       }
       chartID = ChartNext(chartID);
    }
-   
+ 
    if(!exists) {
       ChartOpen(symbol, tf);
    }
 }
-
 void OnDeinit(const int reason) {
    EventKillTimer();
    ObjectsDeleteAll(0, "Py_");
 }
-
 double CalculateHistoryProfit(datetime from_date) {
     double profit = 0;
     if(HistorySelect(from_date, TimeCurrent())) {
@@ -87,7 +79,6 @@ double CalculateHistoryProfit(datetime from_date) {
     }
     return profit;
 }
-
 // Cache-aware profit update (call only when needed, e.g., daily/weekly boundaries crossed)
 void UpdateProfitCache() {
     MqlDateTime dt; TimeCurrent(dt);
@@ -97,7 +88,6 @@ void UpdateProfitCache() {
     datetime week_start = day_start - (days_to_monday * 86400);
     dt.day = 1;
     datetime month_start = StructToTime(dt);
-
     bool needs_update = (day_start != g_day_start) || (week_start != g_week_start) || (month_start != g_month_start) || (g_last_profit_update == 0);
     if(needs_update) {
         g_prof_today = CalculateHistoryProfit(day_start);
@@ -109,7 +99,6 @@ void UpdateProfitCache() {
         g_last_profit_update = TimeCurrent();
     }
 }
-
 string GetTFString() {
     if(_Period == PERIOD_M1) return "M1";
     if(_Period == PERIOD_M5) return "M5";
@@ -122,7 +111,6 @@ string GetTFString() {
     if(_Period == PERIOD_MN1) return "MN";
     return "M5";
 }
-
 int GetTFMinutes(string tf_str) {
     if(tf_str == "M1") return 1;
     if(tf_str == "M5") return 5;
@@ -135,12 +123,10 @@ int GetTFMinutes(string tf_str) {
     if(tf_str == "MN") return 43200;
     return 5;
 }
-
 // Efficient symbols cache update (only if Market Watch changed or every 5min)
 void UpdateSymbolsCache() {
-    datetime now = TimeCurrent();
+    datetime now = TimeLocal();
     if(now - g_last_symbols_update < 300 || SymbolsTotal(true) == 0) return; // Skip if recent or empty
-
     StringFreezer freezer; // Use StringFreezer for efficient concatenation
     int total_symbols = SymbolsTotal(true);
     for(int i=0; i<total_symbols; i++) {
@@ -151,16 +137,13 @@ void UpdateSymbolsCache() {
     g_symbols_list = freezer.String();
     g_last_symbols_update = now;
 }
-
 // Efficient candle history builder using StringFreezer
 void UpdateCandleHistory() {
     datetime now = TimeCurrent();
     if(!g_force_candle_reload && now - g_last_candle_update < TimerInterval * 0.001) return; // Skip if recent
-
     StringFreezer freezer;
     int available = iBars(_Symbol, g_current_period);
     int count = MathMin(g_candles_to_send, available);
-
     for(int i=0; i<count; i++) {
         if(i > 0) freezer.Add("|");
         freezer.Add(DoubleToString(iHigh(_Symbol, g_current_period, i), _Digits) + "," +
@@ -173,39 +156,35 @@ void UpdateCandleHistory() {
     g_last_candle_update = now;
     g_force_candle_reload = false;
 }
-
 // Efficient positions cache (update only if positions changed or every 1s)
 void UpdatePositionsCache() {
-    datetime now = TimeCurrent();
+    datetime now = TimeLocal();
     if(now - g_last_positions_update < 1) return; // 1s throttle
-
     int total_pos = PositionsTotal();
     int buy_count = 0, sell_count = 0;
     double sum_price_vol = 0.0, sum_vol = 0.0;
     StringFreezer trades_freezer;
-
     for(int i=0; i<total_pos; i++) {
         // IMPORTANT: Must select position by ticket/index before accessing properties
-        ulong ticket = PositionGetTicket(i); 
+        ulong ticket = PositionGetTicket(i);
         if(ticket <= 0) continue;
-        
+      
         if(PositionGetString(POSITION_SYMBOL) == _Symbol) {
             double vol = PositionGetDouble(POSITION_VOLUME);
             double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
             long type = PositionGetInteger(POSITION_TYPE);
             double profit = PositionGetDouble(POSITION_PROFIT);
-            
+          
             sum_price_vol += (open_price * vol);
             sum_vol += vol;
-            
+          
             if(type == POSITION_TYPE_BUY) buy_count++;
             else if(type == POSITION_TYPE_SELL) sell_count++;
-
             string type_str = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
             double sl = PositionGetDouble(POSITION_SL);
             double tp = PositionGetDouble(POSITION_TP);
             string trade_line = IntegerToString(ticket) + "," + _Symbol + "," + type_str + "," + DoubleToString(vol, 2) + "," + DoubleToString(profit, 2) + "," + DoubleToString(open_price, _Digits) + "," + DoubleToString(sl, _Digits) + "," + DoubleToString(tp, _Digits);
-            
+          
             if(trades_freezer.Len() > 0) trades_freezer.Add("|");
             trades_freezer.Add(trade_line);
         }
@@ -216,30 +195,28 @@ void UpdatePositionsCache() {
     g_cached_active_trades = trades_freezer.String();
     g_last_positions_update = now;
 }
-
 // Efficient account cache (update every 2s or on change)
 void UpdateAccountCache() {
-    datetime now = TimeCurrent();
-    if(now - g_last_account_update < 2) return;
-
+    datetime now = TimeLocal();
+    if(now - g_last_account_update < 1) return; // 1s throttle
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
     double profit = AccountInfoDouble(ACCOUNT_PROFIT);
     double equity = AccountInfoDouble(ACCOUNT_EQUITY);
     string acct_name = AccountInfoString(ACCOUNT_NAME);
     string acct_server = AccountInfoString(ACCOUNT_SERVER);
-
     // Update trade_mode only if changed
     int new_trade_mode = (StringFind(acct_server, "Demo") >= 0 || StringFind(acct_name, "Demo") >= 0) ? 1 : 0;
     if(new_trade_mode != g_trade_mode) {
         g_trade_mode = new_trade_mode;
     }
-
     g_cached_balance = balance;
     g_cached_profit = profit;
     g_cached_equity = equity;
     g_last_account_update = now;
 }
-
+//+------------------------------------------------------------------+
+//| Timer function (FULLY FIXED: Integrated JSON Multi-TF History) |
+//+------------------------------------------------------------------+
 void OnTimer() {
     if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED)) {
         static datetime last_warn = 0;
@@ -249,14 +226,12 @@ void OnTimer() {
         }
         return; // Early exit if trading disabled
     }
-
     // Update caches as needed
     UpdateAccountCache();
     UpdatePositionsCache();
     UpdateProfitCache();
     UpdateSymbolsCache();
     UpdateCandleHistory();
-
     // Check for TF change
     if(g_current_period != _Period) {
         g_current_period = _Period;
@@ -264,7 +239,6 @@ void OnTimer() {
         g_force_candle_reload = true; // Force reload on TF change
         Print("🔄 TF Changed - Forcing Candle Reload");
     }
-
     // Check for symbol change (less frequent)
     static string last_symbol = "";
     if(last_symbol != _Symbol) {
@@ -272,16 +246,14 @@ void OnTimer() {
         g_force_candle_reload = true;
         Print("🔄 Symbol Changed - Forcing Candle Reload");
     }
-
     // Get fresh bid/ask (volatile, update every tick-like)
     double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
     bool prices_changed = (bid != g_last_bid || ask != g_last_ask);
     g_last_bid = bid;
     g_last_ask = ask;
-
     // Build dashboard (lightweight)
-    string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE (v3.6 - Optimized) ===\n";
+    string dashboard = "=== ⚡ PYTHON BRIDGE ACTIVE (v3.9 - Multi-TF JSON + Fixed History Parsing) ===\n";
     dashboard += "💰 Balance: " + DoubleToString(g_cached_balance, 2) + "\n";
     dashboard += "📆 Today: " + DoubleToString(g_prof_today, 2) + "\n";
     dashboard += "📅 Week: " + DoubleToString(g_prof_week, 2) + "\n";
@@ -289,7 +261,6 @@ void OnTimer() {
     dashboard += "🔄 Symbols Synced: " + IntegerToString(SymbolsTotal(true)) + "\n";
     dashboard += "-----------------------------";
     Comment(dashboard);
-
     // Build POST data efficiently with StringFreezer
     StringFreezer post_freezer;
     post_freezer.Add("command=POLL");
@@ -307,7 +278,7 @@ void OnTimer() {
     post_freezer.Add("&buy_count=" + IntegerToString(g_cached_buy_count));
     post_freezer.Add("&sell_count=" + IntegerToString(g_cached_sell_count));
     post_freezer.Add("&candles=" + g_candle_history);
-    
+  
     // Always send last 5 M1 candles for profit protection
     StringFreezer m1_freezer;
     int m1_count = MathMin(5, iBars(_Symbol, PERIOD_M1));
@@ -320,47 +291,24 @@ void OnTimer() {
                      IntegerToString(iTime(_Symbol, PERIOD_M1, i)));
     }
     post_freezer.Add("&m1_candles=" + m1_freezer.String());
-
-    // --- FULLY FIXED: Always send all required timeframes for strategy sync ---
-    StringFreezer htf_freezer;
-    ENUM_TIMEFRAMES htf_list[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1};
-    
-    // Updated loop count to 7 to match the htf_list size
-    for(int h=0; h<7; h++) {
+   
+    string tf_names[] = {"M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"};  // Added W1
+    ENUM_TIMEFRAMES htf_list[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1, PERIOD_W1};  // Added W1
+    for(int h=0; h<ArraySize(tf_names); h++) {  // Dynamic, now 8
         ENUM_TIMEFRAMES htf = htf_list[h];
-        if(htf == g_current_period) continue; // Skip if it's the main chart timeframe
-
-        // Map every timeframe to a string label that Python expects
-        string tf_label = "";
-        if(htf == PERIOD_M1) tf_label = "M1";
-        else if(htf == PERIOD_M5) tf_label = "M5";
-        else if(htf == PERIOD_M15) tf_label = "M15";
-        else if(htf == PERIOD_M30) tf_label = "M30";
-        else if(htf == PERIOD_H1) tf_label = "H1";
-        else if(htf == PERIOD_H4) tf_label = "H4";
-        else if(htf == PERIOD_D1) tf_label = "D1";
-
-        int bars = MathMin(300, iBars(_Symbol, htf)); 
-        StringFreezer sub_freezer;
-        for(int i=0; i<bars; i++) {
-            if(i > 0) sub_freezer.Add("|");
-            sub_freezer.Add(DoubleToString(iHigh(_Symbol, htf, i), _Digits) + "," +
-                         DoubleToString(iLow(_Symbol, htf, i), _Digits) + "," +
-                         DoubleToString(iOpen(_Symbol, htf, i), _Digits) + "," +
-                         DoubleToString(iClose(_Symbol, htf, i), _Digits) + "," +
-                         IntegerToString(iTime(_Symbol, htf, i)));
+        string tf_label = tf_names[h];
+        string hist_json = GetHistoryJson(_Symbol, htf, 350);
+        if(hist_json != "" && StringLen(hist_json) > 2) {
+            post_freezer.Add("&history|" + tf_label + "=" + hist_json);
+        } else {
+            Print("⚠️ No history data for " + tf_label + " (Bars: " + IntegerToString(iBars(_Symbol, htf)) + ")");
         }
-        
-        // This sends the data as &htf_M1, &htf_M5, &htf_M15, etc.
-        post_freezer.Add("&htf_" + tf_label + "=" + sub_freezer.String());
     }
-    
+  
     post_freezer.Add("&active_trades=" + g_cached_active_trades);
-
     string post_str = post_freezer.String();
     SendRequest(post_str);
 }
-
 // Custom StringFreezer class for efficient string building (avoids repeated allocations)
 class StringFreezer {
 private:
@@ -370,15 +318,14 @@ public:
     int Len() { return StringLen(m_buffer); }
     string String() { return m_buffer; }
 };
-
 void SendRequest(string data_str) {
     char post_char[]; StringToCharArray(data_str, post_char);
     uchar post_uchar[]; ArrayResize(post_uchar, ArraySize(post_char));
     for(int i=0; i<ArraySize(post_char); i++) post_uchar[i] = (uchar)post_char[i];
-   
+ 
     uchar result_uchar[]; string response_headers;
     int http_res = WebRequest("POST", ServerURL, "Content-Type: application/x-www-form-urlencoded\r\n", 2000, post_uchar, result_uchar, response_headers);
-   
+ 
     if(http_res == -1 && GetLastError() == 4060) {
         static datetime last_error = 0;
         if(TimeCurrent() - last_error > 300) { // Throttle error print
@@ -386,7 +333,7 @@ void SendRequest(string data_str) {
             last_error = TimeCurrent();
         }
     }
-   
+ 
     if(ArraySize(result_uchar) > 0) {
         string result_str = CharArrayToString(result_uchar);
         if(result_str != "OK" && result_str != "") {
@@ -398,7 +345,6 @@ void SendRequest(string data_str) {
         }
     }
 }
-
 color StringToColorRGB(string rgb_str) {
     string parts[];
     if(StringSplit(rgb_str, ',', parts) == 3) {
@@ -409,40 +355,49 @@ color StringToColorRGB(string rgb_str) {
     }
     return (color)StringToInteger(rgb_str);
 }
-
 ENUM_ORDER_TYPE_FILLING GetFillingMode(string symbol) {
     long mode = SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
     if((mode & SYMBOL_FILLING_FOK) != 0) return ORDER_FILLING_FOK;
     if((mode & SYMBOL_FILLING_IOC) != 0) return ORDER_FILLING_IOC;
     return ORDER_FILLING_RETURN;
 }
-
 // Helper function to convert string timeframe to ENUM_TIMEFRAMES
 ENUM_TIMEFRAMES StringToTF(string tf_str) {
-    if(tf_str == "M1")  return PERIOD_M1;
-    if(tf_str == "M5")  return PERIOD_M5;
+    if(tf_str == "M1") return PERIOD_M1;
+    if(tf_str == "M5") return PERIOD_M5;
     if(tf_str == "M15") return PERIOD_M15;
     if(tf_str == "M30") return PERIOD_M30;
-    if(tf_str == "H1")  return PERIOD_H1;
-    if(tf_str == "H4")  return PERIOD_H4;
-    if(tf_str == "D1")  return PERIOD_D1;
+    if(tf_str == "H1") return PERIOD_H1;
+    if(tf_str == "H4") return PERIOD_H4;
+    if(tf_str == "D1") return PERIOD_D1;
     return PERIOD_CURRENT;
 }
-
+// NEW: Get TF index for cooldown (0-6 for M1 to D1)
+int GetTFIndex(string tf_str) {
+    for(int i=0; i<8; i++) {  // Now 8
+        if(g_tf_names[i] == tf_str) return i;
+    }
+    return -1;
+}
 
 void ProcessCommand(string cmd) {
+    // NEW: Enhanced logging for debugging (throttled)
+    static datetime last_log = 0;
+    if(TimeCurrent() - last_log > 5) { // Log full cmd every 5s max
+        Print("🔍 Processing Command: '" + cmd + "'");
+        last_log = TimeCurrent();
+    }
+    
     string parts[];
     if(StringSplit(cmd, '|', parts) < 2) return;
-   
+ 
     string action = parts[0];
     string symbol = parts[1];
-
-
     // Handle opening multiple timeframe tabs
     if(action == "OPEN_CHART") {
       string sym = parts[1];
       ENUM_TIMEFRAMES tf = StringToTF(parts[2]);
-      
+    
       // Prevent opening duplicate tabs
       long chartID = ChartFirst();
       bool exists = false;
@@ -453,23 +408,23 @@ void ProcessCommand(string cmd) {
          }
          chartID = ChartNext(chartID);
       }
-      
+    
       if(!exists) {
          ChartOpen(sym, tf);
       }
       return;
     }
-    
+  
     if(!SymbolSelect(symbol, true)) {
         Print("⚠️ Symbol '", symbol, "' not found! Defaulting to chart symbol: ", _Symbol);
         symbol = _Symbol;
     }
-   
+ 
     if(action == "GET_SYMBOLS") {
         Print("📋 GET_SYMBOLS Received – Symbols already sent in next poll (", SymbolsTotal(true), " total)");
         return;
     }
-   
+ 
     if(action == "TF_CHANGE") {
         if(ArraySize(parts) < 3) return;
         string new_tf = parts[1];
@@ -487,7 +442,7 @@ void ProcessCommand(string cmd) {
         Print("🔄 TF Changed to ", new_tf, " (", tf_minutes, "min) for ", symbol);
         return;
     }
-   
+ 
     if(action == "SYMBOL_CHANGE") {
         if(ArraySize(parts) < 2) return;
         string new_symbol = parts[1];
@@ -501,27 +456,61 @@ void ProcessCommand(string cmd) {
         GlobalVariableDel("Py_Req_History");
         return;
     }
-   
+ 
     if(action == "RELOAD_CANDLES") {
         g_candles_to_send = 300;
         g_force_candle_reload = true;
         Print("🔄 RELOAD_CANDLES Requested – Will send fresh ", g_candles_to_send, " bars next poll");
         return;
     }
-   
+ 
     if(action == "GET_HISTORY") {
-        if(ArraySize(parts) < 3) return;
-        g_candles_to_send = (int)StringToInteger(parts[2]);
+        if(ArraySize(parts) < 3) {
+            Print("⚠️ GET_HISTORY: Missing parts (need |symbol|count or |symbol|tf|count)");
+            return;
+        }
+        // FIXED: Enhanced parsing for |symbol|tf|count format
+        string tf_param = ""; // Optional TF
+        string count_str = "";
+        if(ArraySize(parts) >= 4) {
+            tf_param = parts[2]; // e.g., "M1"
+            count_str = parts[3]; // e.g., "350"
+        } else {
+            count_str = parts[2]; // Legacy: |symbol|count
+        }
+        // Cooldown check (NEW: per-TF, 1s min to prevent spam)
+        int tf_idx = GetTFIndex(tf_param);
+        if(tf_idx >= 0 && TimeCurrent() - g_tf_cooldown[tf_idx] < 1) {
+            return; // Skip if recent for this TF
+        }
+        if(tf_idx >= 0) g_tf_cooldown[tf_idx] = TimeCurrent();
+        
+        int requested = (int)StringToInteger(count_str);
+        if(StringLen(count_str) == 0 || requested <= 0) {
+            requested = 500; // Default if invalid/0
+            // Throttled warning (NEW: once per 10s per TF to reduce spam)
+            static datetime last_warn_time[7] = {0};
+            if(tf_idx >= 0 && TimeCurrent() - last_warn_time[tf_idx] > 10) {
+                Print("⚠️ GET_HISTORY: Invalid count '" + count_str + "' for TF '" + tf_param + "' – Defaulting to 500");
+                last_warn_time[tf_idx] = TimeCurrent();
+            } else if(tf_idx < 0) {
+                Print("⚠️ GET_HISTORY: Invalid count '" + count_str + "' – Defaulting to 500");
+            }
+        }
+        g_candles_to_send = requested;
         g_force_candle_reload = true;
-        
-        // POKE: Force MT5 to fetch history if available
-        MqlRates dummy[]; 
-        CopyRates(_Symbol, g_current_period, 0, g_candles_to_send, dummy);
-        
-        Print("📥 GET_HISTORY Requested: ", g_candles_to_send, " bars. Poked MT5 memory.");
+      
+        // FIXED: Improved poke – Use effective count & check result
+        MqlRates dummy[];
+        int copied = CopyRates(_Symbol, g_current_period, 0, g_candles_to_send, dummy);
+        int effective_bars = (copied > 0) ? copied : iBars(_Symbol, g_current_period);
+        // Log only if no cooldown skip (reduce spam)
+        if(tf_idx < 0 || TimeCurrent() - g_tf_cooldown[tf_idx] >= 1) {
+            Print("📥 GET_HISTORY Requested: ", requested, " bars (TF: ", tf_param, ", effective: ", effective_bars, "). Poked MT5 memory.");
+        }
         return;
     }
-   
+ 
     // Visual Commands (batch redraw at end if multiple, but for smoothness, redraw only if needed)
     static bool needs_redraw = false;
     if(action == "DRAW_RECT") {
@@ -559,12 +548,11 @@ void ProcessCommand(string cmd) {
         needs_redraw = true;
         return;
     }
-    if(action == "CLEAN_CHART") { 
-        ObjectsDeleteAll(0, "Py_"); 
+    if(action == "CLEAN_CHART") {
+        ObjectsDeleteAll(0, "Py_");
         needs_redraw = true;
-        return; 
+        return;
     }
-
     // Legacy TF change (deprecated but kept)
     if(action == "CHANGE_TF") {
         if(ArraySize(parts) < 3) return;
@@ -580,7 +568,7 @@ void ProcessCommand(string cmd) {
         GlobalVariableDel("Py_Req_History");
         return;
     }
-   
+ 
     if(symbol != _Symbol && symbol != "" && action == "CHANGE_SYMBOL") {
         SymbolSelect(symbol, true);
         ChartSetSymbolPeriod(0, symbol, g_current_period);
@@ -588,12 +576,11 @@ void ProcessCommand(string cmd) {
         GlobalVariableDel("Py_Req_History");
         return;
     }
-   
+ 
     double lot = (ArraySize(parts) >= 3) ? StringToDouble(parts[2]) : DefaultLot;
     double sl = (ArraySize(parts) >= 4) ? StringToDouble(parts[3]) : 0;
     double tp = (ArraySize(parts) >= 5) ? StringToDouble(parts[4]) : 0;
     double price = (ArraySize(parts) >= 6) ? StringToDouble(parts[5]) : 0;
-
     if(action == "BUY") {
         PrintFormat("📥 BUY Request Received: Sym=%s, Lot=%.2f, SL=%.5f, TP=%.5f", symbol, lot, sl, tp);
         TradeMarket(symbol, ORDER_TYPE_BUY, lot, sl, tp);
@@ -626,20 +613,18 @@ void ProcessCommand(string cmd) {
     else if(action == "CLOSE_TICKET") {
         CloseTicket((long)StringToInteger(parts[1]));
     }
-
     // Batch redraw at end of processing
     if(needs_redraw) {
         ChartRedraw();
         needs_redraw = false;
     }
 }
-
 void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     MqlTradeRequest r;
     MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
-   
-    string tradeAction = (t == ORDER_TYPE_BUY) ? "BUY" : "SELL"; 
+ 
+    string tradeAction = (t == ORDER_TYPE_BUY) ? "BUY" : "SELL";
     double tick_size = SymbolInfoDouble(s, SYMBOL_TRADE_TICK_SIZE);
     double stops_level_pts = (double)SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL);
     double point = SymbolInfoDouble(s, SYMBOL_POINT);
@@ -647,20 +632,18 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     // Add a small 2-point buffer to stops_level to avoid boundary errors
     double safety_buffer = 2.0 * point;
     double min_dist = (stops_level + safety_buffer);
-   
+ 
     double ask = SymbolInfoDouble(s, SYMBOL_ASK);
     double bid = SymbolInfoDouble(s, SYMBOL_BID);
     double entry_price = (t == ORDER_TYPE_BUY) ? ask : bid;
-
     r.action = TRADE_ACTION_DEAL;
     r.symbol = s;
     r.volume = v;
     r.type = t;
-    
+  
     // Normalize to TICK SIZE (more robust than NormalizeDouble)
     r.price = MathRound(entry_price / tick_size) * tick_size;
     r.deviation = 20; // Increased for crypto volatility
-
     // Validate SL/TP
     if(sl > 0) {
         if(t == ORDER_TYPE_BUY && sl > (bid - min_dist)) sl = bid - min_dist;
@@ -669,7 +652,7 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     } else {
         r.sl = 0;
     }
-    
+  
     if(tp > 0) {
         if(t == ORDER_TYPE_BUY && tp < (ask + min_dist)) tp = ask + min_dist;
         if(t == ORDER_TYPE_SELL && tp > (bid - min_dist)) tp = bid - min_dist;
@@ -677,14 +660,13 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
     } else {
         r.tp = 0;
     }
-
     r.type_filling = GetFillingMode(s);
-    if(r.type_filling == ORDER_FILLING_RETURN) r.type_filling = ORDER_FILLING_IOC; 
-    
+    if(r.type_filling == ORDER_FILLING_RETURN) r.type_filling = ORDER_FILLING_IOC;
+  
     if(!OrderSend(r, res)) {
-        PrintFormat("❌ Trade Fail: %d | %s %s | Price: %f, SL: %f, TP: %f | StopsDist: %f, Mode: %d", 
+        PrintFormat("❌ Trade Fail: %d | %s %s | Price: %f, SL: %f, TP: %f | StopsDist: %f, Mode: %d",
                     res.retcode, tradeAction, s, r.price, r.sl, r.tp, min_dist, (int)r.type_filling);
-        
+      
         // AUTO-RECOVERY: If 10017, try without stops as fallback
         if(res.retcode == 10017) {
             Print("⚠️ 10017 Detected - Retrying without SL/TP for safety...");
@@ -696,11 +678,10 @@ void TradeMarket(string s, ENUM_ORDER_TYPE t, double v, double sl, double tp) {
         PrintFormat("🚀 Trade Executed: %s %s Ticket: %d (SL: %f, TP: %f)", tradeAction, s, res.order, r.sl, r.tp);
     }
 }
-
 void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, double tp) {
     MqlTradeRequest r; MqlTradeResult res;
     ZeroMemory(r); ZeroMemory(res);
-   
+ 
     int digits = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
     r.action = TRADE_ACTION_PENDING;
     r.symbol = s;
@@ -713,13 +694,12 @@ void TradePending(string s, ENUM_ORDER_TYPE t, double v, double p, double sl, do
     r.type_filling = GetFillingMode(s);
     if(!OrderSend(r, res)) Print("❌ Pending Fail: ", res.retcode);
 }
-
 void ClosePositions(string s, string m) {
     for(int i=PositionsTotal()-1; i>=0; i--) {
         if(PositionGetSymbol(i) == s) {
             double p = PositionGetDouble(POSITION_PROFIT);
             if((m=="WIN" && p<=0) || (m=="LOSS" && p>=0)) continue;
-           
+         
             MqlTradeRequest r; MqlTradeResult res; ZeroMemory(r); ZeroMemory(res);
             r.action=TRADE_ACTION_DEAL;
             r.position=PositionGetTicket(i);
@@ -729,13 +709,12 @@ void ClosePositions(string s, string m) {
             r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(s,SYMBOL_ASK):SymbolInfoDouble(s,SYMBOL_BID);
             r.deviation = 20;
             r.type_filling = GetFillingMode(s);
-           
+         
             if(!OrderSend(r, res)) Print("❌ Close Fail: ", res.retcode);
             else Print("✅ Closed Position: ", r.position);
         }
     }
 }
-
 void CloseTicket(long ticket) {
     if(PositionSelectByTicket(ticket)) {
         MqlTradeRequest r; MqlTradeResult res;
@@ -748,7 +727,7 @@ void CloseTicket(long ticket) {
         r.price=(r.type==ORDER_TYPE_BUY)?SymbolInfoDouble(r.symbol,SYMBOL_ASK):SymbolInfoDouble(r.symbol,SYMBOL_BID);
         r.deviation = 20;
         r.type_filling = GetFillingMode(r.symbol);
-       
+     
         if(!OrderSend(r, res)) Print("❌ Close Ticket Fail: ", res.retcode);
         else Print("✅ Closed Ticket #", ticket);
     } else {
@@ -762,18 +741,17 @@ void ModifyOrder(long ticket, double sl, double tp) {
         r.action = TRADE_ACTION_SLTP;
         r.position = ticket;
         r.symbol = PositionGetString(POSITION_SYMBOL);
-        
+      
         double tick_size = SymbolInfoDouble(r.symbol, SYMBOL_TRADE_TICK_SIZE);
         r.sl = MathRound(sl / tick_size) * tick_size;
         r.tp = MathRound(tp / tick_size) * tick_size;
-        
+      
         if(!OrderSend(r, res)) Print("❌ Modify Fail: ", res.retcode, " Ticket #", ticket);
         else Print("✅ Modified Ticket #", ticket, " SL: ", r.sl, " TP: ", r.tp);
     } else {
         Print("⚠️ Modify: Ticket not found: ", ticket);
     }
 }
-
 // Drawing Functions (optimized: no redundant redraws)
 void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     string n = "Py_" + name;
@@ -791,7 +769,6 @@ void DrawRect(string name, double p1, double p2, int b1, int b2, color c) {
     ObjectSetInteger(0, n, OBJPROP_BACK, true);
     // Redraw deferred
 }
-
 void DrawHLine(string name, double price, color c, int style) {
     string n = "Py_H_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_HLINE, 0, 0, price);
@@ -802,7 +779,6 @@ void DrawHLine(string name, double price, color c, int style) {
     ObjectSetInteger(0, n, OBJPROP_BACK, false);
     // Redraw deferred
 }
-
 void DrawLabel(string name, string text, color c, int y) {
     string n = "Py_Lbl_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_LABEL, 0, 0, 0);
@@ -815,7 +791,6 @@ void DrawLabel(string name, string text, color c, int y) {
     ObjectSetInteger(0, n, OBJPROP_BACK, false);
     // Redraw deferred
 }
-
 void DrawText(string name, int b, double p, color c, string t) {
     string n = "Py_Txt_" + name;
     if(ObjectFind(0, n) >= 0) ObjectDelete(0, n);
@@ -826,7 +801,6 @@ void DrawText(string name, int b, double p, color c, string t) {
     ObjectSetInteger(0, n, OBJPROP_ANCHOR, ANCHOR_LEFT_LOWER);
     // Redraw deferred
 }
-
 void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w) {
     string n = "Py_Tr_" + name;
     if(ObjectFind(0, n) < 0) ObjectCreate(0, n, OBJ_TREND, 0, 0, 0, 0, 0);
@@ -838,4 +812,45 @@ void DrawTrend(string name, int b1, double p1, int b2, double p2, color c, int w
     ObjectSetInteger(0, n, OBJPROP_WIDTH, w);
     ObjectSetInteger(0, n, OBJPROP_RAY_RIGHT, true);
     // Redraw deferred
+}
+//+------------------------------------------------------------------+
+//| NEW: Helper to format history as JSON (OHLC array for Python) |
+//+------------------------------------------------------------------+
+string GetHistoryJson(string symbol, ENUM_TIMEFRAMES tf, int count) {
+    int total_bars = iBars(symbol, tf);
+    if(total_bars == 0) return ""; // No data available (e.g., new symbol)
+   
+    count = MathMin(count, total_bars); // Cap at available bars
+    string json = "[";
+   
+    for(int i = 0; i < count; i++) {
+        datetime t = iTime(symbol, tf, i);
+        double o = iOpen(symbol, tf, i);
+        double h = iHigh(symbol, tf, i);
+        double l = iLow(symbol, tf, i);
+        double c = iClose(symbol, tf, i);
+       
+        if(i > 0) json += ","; // Comma separator (skip first)
+       
+        // FIXED: Use StringFormat with safe precision; cast time to int
+        json += StringFormat(
+            "{\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f}",
+            (int)t, o, h, l, c
+        );
+    }
+    json += "]";
+    return json;
+}
+//+------------------------------------------------------------------+
+//| FIXED: StringToTimeframe helper (renamed to avoid conflict) |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES StringToTimeframe(string tf_str) {
+    if(tf_str == "M1") return PERIOD_M1;
+    if(tf_str == "M5") return PERIOD_M5;
+    if(tf_str == "M15") return PERIOD_M15;
+    if(tf_str == "M30") return PERIOD_M30;
+    if(tf_str == "H1") return PERIOD_H1;
+    if(tf_str == "H4") return PERIOD_H4;
+    if(tf_str == "D1") return PERIOD_D1;
+    return 0; // Invalid TF
 }

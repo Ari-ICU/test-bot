@@ -58,7 +58,8 @@ class Config:
     def get(self, key: str, default: Any = None) -> Any:
         """Get value: Env (with aliases) > Nested JSON > default. Auto-convert types."""
         # Env check with aliases (handles your TELEGRAM_BOT_TOKEN)
-        env_keys = [key.upper(), f"BOT_{key.upper()}"]  # e.g., TELEGRAM_TOKEN or TELEGRAM_BOT_TOKEN
+        env_key_standard = key.upper().replace('.', '_')
+        env_keys = [env_key_standard, f"BOT_{env_key_standard}"] 
         env_val = None
         for ek in env_keys:
             env_val = os.getenv(ek)

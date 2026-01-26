@@ -48,17 +48,22 @@ class NewsSentimentAnalyzer:
     def __init__(self):
         self.rss_urls = [
             "https://www.forexlive.com/feed/news", 
-            "https://feeds.feedburner.com/dailyfx/news" 
+            "https://feeds.feedburner.com/dailyfx/news",
+            "https://www.whitehouse.gov/briefing-room/statements-releases/feed/", # Official WH releases
+            "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=401&keywords=Trump", # CNBC Trump News
+            "https://www.investing.com/rss/news_285.rss" # Investing.com Central Banks
         ]
         self.keywords = {
-            "BUY": ["surge", "rally", "soar", "jump", "bull", "climb", "gain", "breakout", "high"],
-            "SELL": ["plunge", "crash", "drop", "sink", "bear", "slide", "loss", "breakdown", "low"]
+            "BUY": ["surge", "rally", "soar", "jump", "bull", "climb", "gain", "breakout", "high", "positive", "hawkish", "expansion"],
+            "SELL": ["plunge", "crash", "drop", "sink", "bear", "slide", "loss", "breakdown", "low", "negative", "dovish", "contraction"],
+            "TRUMP": ["Trump", "Tariff", "Trade War", "Policy", "MAGA", "Deportation", "Deregulation"],
+            "WHITEHOUSE": ["White House", "President", "Executive Order", "Administration", "Treasury"]
         }
         self.asset_map = {
-            "XAU": ["GOLD", "XAU", "METAL"],
-            "BTC": ["BITCOIN", "BTC", "CRYPTO"],
-            "EUR": ["EUR", "EURO"],
-            "USD": ["USD", "DOLLAR", "DXY"]
+            "XAU": ["GOLD", "XAU", "METAL", "SAFE HAVEN"],
+            "BTC": ["BITCOIN", "BTC", "CRYPTO", "ETHEREUM", "ELON"],
+            "EUR": ["EUR", "EURO", "ECB"],
+            "USD": ["USD", "DOLLAR", "DXY", "FED", "FOMC", "POWELL", "INFLATION", "CPI"]
         }
         # Caching
         self.last_fetch_time = 0
@@ -91,25 +96,40 @@ class NewsSentimentAnalyzer:
                 root = ET.fromstring(resp.content)
                 
                 # Scan Items
-                for item in root.findall('.//item')[:10]: # Top 10 only
+                for item in root.findall('.//item')[:15]: # Scan more items
                     title = item.find('title').text
                     if not title: continue
                     title_upper = title.upper()
                     
-                    # 1. Check if relevant to symbol
-                    if not any(tk in title_upper for tk in target_keywords):
+                    # 1. Check for TRUMP or WHITE HOUSE (General Market Drivers)
+                    is_political = any(kw.upper() in title_upper for kw in self.keywords["TRUMP"] + self.keywords["WHITEHOUSE"])
+                    is_relevant = any(tk in title_upper for tk in target_keywords)
+
+                    if not (is_political or is_relevant):
                         continue
                         
-                    # 2. Check Direction
+                    # 2. Check Direction (Prioritize Sell/Risk-Off if 'Tariff' or 'Trade War')
+                    if any(w.upper() in title_upper for w in ["TARIFF", "TRADE WAR", "SANCTION"]):
+                         found_signal = ("SELL", f"🚨 Politic/Trade: {title[:50]}...")
+                         break
+
                     for word in self.keywords["BUY"]:
                         if word.upper() in title_upper:
-                             found_signal = ("BUY", f"News Sentiment: {title[:40]}...")
+                             header = "📈 Politic/WH" if is_political else "News"
+                             found_signal = ("BUY", f"{header}: {title[:50]}...")
                              break
                     
+                    if found_signal[0] != "NEUTRAL": break
+
                     for word in self.keywords["SELL"]:
                         if word.upper() in title_upper:
-                             found_signal = ("SELL", f"News Sentiment: {title[:40]}...")
+                             header = "📉 Politic/WH" if is_political else "News"
+                             found_signal = ("SELL", f"{header}: {title[:50]}...")
                              break
+                    
+                    # If political but no direct direction, mark as Neutral but show anyway
+                    if is_political and found_signal[0] == "NEUTRAL":
+                         found_signal = ("NEUTRAL", f"🏛 {title[:60]}...")
                     
                     if found_signal[0] != "NEUTRAL": break
             except Exception as e:

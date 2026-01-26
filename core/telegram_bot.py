@@ -7,6 +7,8 @@ import time
 # Define a logger specifically for Telegram-related errors
 logger = logging.getLogger("Telegram")
 
+import queue
+
 class TelegramBot:
     def __init__(self, token, authorized_chat_id=None, connector=None):
         self.token = token
@@ -16,11 +18,14 @@ class TelegramBot:
         self.api_url = f"https://api.telegram.org/bot{token}"
         self.last_update_id = 0
         self.is_polling = False
+        self.message_queue = queue.Queue()
         self.last_analysis = {
             "prediction": "NEUTRAL",
             "patterns": "Scanning...",
             "sentiment": "NEUTRAL"
         }
+        # Start the message worker thread
+        threading.Thread(target=self._message_worker, daemon=True).start()
 
     def start_polling(self):
         """Starts a background thread to poll for commands"""
@@ -28,6 +33,11 @@ class TelegramBot:
         self.is_polling = True
         threading.Thread(target=self._polling_loop, daemon=True).start()
         logger.info("📡 Telegram Command Polling Started.")
+
+    def stop_polling(self):
+        """Stops the telegram polling loop"""
+        self.is_polling = False
+        logger.info("🛑 Telegram Command Polling Stopped.")
 
     def _polling_loop(self):
         while self.is_polling:
@@ -39,10 +49,14 @@ class TelegramBot:
                 if resp.get("ok"):
                     for update in resp.get("result", []):
                         self.last_update_id = update["update_id"]
+                        logger.info(f"📩 Telegram Update Received: ID {self.last_update_id}")
                         self.process_webhook_update(update)
+                else:
+                    logger.error(f"❌ Telegram API Error (getUpdates): {resp}")
             except Exception as e:
+                logger.debug(f"❌ Telegram Polling Loop Error (Quiet): {e}")
                 time.sleep(5) # Error backoff
-            time.sleep(1)
+            if self.is_polling: time.sleep(1)
 
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
@@ -55,26 +69,58 @@ class TelegramBot:
             "sentiment": sentiment
         }
 
-    def send_message(self, text, chat_id=None):
-        """Sends a text message to Telegram with HTML formatting"""
-        if not self.token: return
-        
-        target_chat = chat_id if chat_id else self.chat_id
-        if not target_chat: return
+    def _message_worker(self):
+        """Worker thread that processes the message queue with rate limiting"""
+        while True:
+            try:
+                text, chat_id = self.message_queue.get()
+                if not text: continue
+                
+                target_chat = chat_id if chat_id else self.chat_id
+                if not target_chat: continue
 
-        try:
-            url = f"{self.api_url}/sendMessage"
-            payload = {
-                "chat_id": target_chat, 
-                "text": text, 
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-                "disable_notification": "Heartbeat" in text or "Scanning" in text
-            }
-            requests.post(url, json=payload, timeout=15)
-        except Exception as e:
-            # Silent fail for network jitters
-            pass
+                url = f"{self.api_url}/sendMessage"
+                payload = {
+                    "chat_id": target_chat, 
+                    "text": text, 
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                    "disable_notification": "Heartbeat" in text or "Scanning" in text
+                }
+                
+                resp = requests.post(url, json=payload, timeout=15).json()
+                if not resp.get("ok"):
+                    desc = resp.get('description', '')
+                    if "Too Many Requests" in desc:
+                        # Extract wait time or default to 10s
+                        retry_after = 10
+                        try:
+                            import re
+                            match = re.search(r"after (\d+)", desc)
+                            if match: retry_after = int(match.group(1))
+                        except: pass
+                        logger.warning(f"⏳ Telegram Rate Limit: Waiting {retry_after}s...")
+                        time.sleep(retry_after)
+                        self.message_queue.put((text, chat_id)) # Re-queue
+                    else:
+                        logger.error(f"❌ Telegram SendMessage Failed: {desc} | Chat ID: {target_chat}")
+                else:
+                    logger.debug(f"📤 Telegram Message Sent to {target_chat}")
+                
+                # Minimum delay between messages to stay safe (30 msgs/sec limit, but let's be conservative)
+                time.sleep(0.5) 
+            except Exception as e:
+                logger.error(f"❌ Telegram Worker Error: {e}")
+                time.sleep(1)
+            finally:
+                self.message_queue.task_done()
+
+    def send_message(self, text, chat_id=None):
+        """Adds a message to the queue to be sent asynchronously and rate-limited"""
+        if not self.token: 
+            logger.warning("⚠️ Telegram: No bot token provided.")
+            return
+        self.message_queue.put((text, chat_id))
 
     def process_webhook_update(self, update):
         """Processes incoming JSON update from Telegram Webhook"""
@@ -85,6 +131,7 @@ class TelegramBot:
             text = msg.get("text", "").strip()
 
             if self.chat_id and chat_id != str(self.chat_id):
+                logger.warning(f"⚠️ Telegram: Unauthorized access attempt from ID {chat_id}")
                 return
 
             self._handle_command(text, chat_id)
@@ -134,7 +181,7 @@ class TelegramBot:
         # 3. /POSITIONS - Manage Trades
         elif command == "/positions":
             if self.connector:
-                pos_list = self.connector.get_open_positions() # Assumes this exists or handles empty
+                pos_list = self.connector.get_open_positions() 
                 if not pos_list:
                     response = "📭 <b>No open positions.</b>"
                 else:
@@ -167,24 +214,46 @@ class TelegramBot:
                 "<i>Use Dashboard for deep confluence logs.</i>"
             )
 
-        # 4b. /NEWS - Direct News Check
+        # 4b. /NEWS - Real-Time Feed & Calendar
         elif command == "/news":
-            sym = self.connector.active_symbol if self.connector else "USD"
-            from filters.news import is_high_impact_news_near
+            sym = self.connector.active_symbol if self.connector else "XAUUSDm"
+            from filters.news import is_high_impact_news_near, analyze_sentiment
+            from core.news_manager import NewsManager
+            
+            nm = NewsManager()
             is_blocked, headline, link = is_high_impact_news_near(sym)
+            upcoming = nm.get_calendar_summary(sym, count=3)
+            sent_type, sent_text = analyze_sentiment(sym)
+            
             status = "🔴 BLOCKED" if is_blocked else "🟢 CLEAR"
             
             response = (
-                f"📰 <b>Real-Time News Feed</b>\n"
-                f"📦 Asset: <b>{sym}</b>\n"
-                f"🚦 Status: <b>{status}</b>\n\n"
-                f"🗞️ <b>Latest Headline:</b>\n"
-                f"<i>{headline if headline else 'No news data available.'}</i>"
+                f"📰 <b>REAL-TIME NEWS & CALENDAR</b>\n"
+                f"📦 Asset: <b>{sym}</b> | 🚦 Status: <b>{status}</b>\n\n"
+                f"📡 <b>Sentiment:</b> {sent_type}\n"
+                f"<i>{sent_text}</i>\n\n"
+                f"🗓 <b>Upcoming Calendar:</b>\n"
             )
-            if link:
-                response += f"\n\n🔗 <a href='{link}'>Read Source Article</a>"
+            
+            for ev in upcoming:
+                impact_icon = "🔥" if ev['impact'] == "High" else "⚠️" if ev['impact'] == "Medium" else "ℹ️"
+                # Calculate deviation if actual exists
+                dev_str = ""
+                if ev['actual'] != '-' and ev['forecast'] != '-':
+                    try:
+                        # Simple calculation: if Actual > Forecast for USD, it's usually bullish
+                        response += f"{impact_icon} {ev['time']} | {ev['title']}\n"
+                        response += f"   └ Act: <b>{ev['actual']}</b> | For: {ev['forecast']} | Prev: {ev['previous']}\n"
+                    except: 
+                        response += f"{impact_icon} {ev['time']} | {ev['title']}\n"
+                        response += f"   └ Act: {ev['actual']} | For: {ev['forecast']}\n"
+                else:
+                    response += f"{impact_icon} {ev['time']} | {ev['title']}\n"
+                    response += f"   └ For: <b>{ev['forecast']}</b> | Prev: {ev['previous']}\n"
+            
+            response += f"\n🔗 <a href='https://www.forexfactory.com/calendar'>Forex Factory Calendar</a>"
 
-        # 5. /SETTINGS - Strategy & Risk
+        # 5. /SETTINGS 
         elif command == "/settings":
             if self.risk_manager:
                 rm = self.risk_manager
@@ -216,12 +285,15 @@ class TelegramLogHandler(logging.Handler):
         try:
             msg = record.getMessage()
 
-            # 1. Define Emojis & Styles based on content keywords
-            if "TP Hit" in msg or "Profit" in msg: emoji, header = "💰", "TAKE PROFIT"
-            elif "SL Hit" in msg or "Loss" in msg: emoji, header = "🛑", "STOP LOSS"
-            elif "Signals Detected" in msg: emoji, header = "🎯", "SIGNAL DETECTED"
-            elif "Executed" in msg: emoji, header = "🚀", "TRADE OPENED"
-            elif "Engine Transition" in msg: emoji, header = "⚡", "ENGINE STATUS"
+            # 1. Define Emojis & Styles based on content keywords (Case-insensitive check)
+            msg_u = msg.upper()
+            if "TP HIT" in msg_u or "PROFIT" in msg_u: emoji, header = "💰", "TAKE PROFIT"
+            elif "SL HIT" in msg_u or "LOSS" in msg_u: emoji, header = "🛑", "STOP LOSS"
+            elif "SIGNAL DETECTED" in msg_u: emoji, header = "🎯", "SIGNAL DETECTED"
+            elif "TF SUMMARY" in msg_u: emoji, header = "📊", "TF SUMMARY"
+            elif "HEARTBEAT" in msg_u: emoji, header = "💓", "HEARTBEAT"
+            elif "EXECUTED" in msg_u or "TRADE OPENED" in msg_u: emoji, header = "🚀", "TRADE OPENED"
+            elif "ENGINE TRANSITION" in msg_u: emoji, header = "⚡", "ENGINE STATUS"
             elif record.levelno >= logging.ERROR: emoji, header = "🚨", "ERROR"
             elif record.levelno >= logging.WARNING: emoji, header = "⚠️", "WARNING"
             else: emoji, header = "ℹ️", "INFO"

@@ -6,18 +6,20 @@
 # - Uses swing highs/lows, FVG (Fair Value Gaps), and confluence with EMAs for signals.
 # - Recommended TFs: H4/D1 for structure, but adaptable to lower TFs.
 # - Output: "BUY" if discount confluence, "SELL" if premium confluence, else "NEUTRAL".
+# FIXED: Handle detected_patterns param (ignore if unused) + Proper FVG filled slicing (no any() errors).
 
 import pandas as pd
 import numpy as np
 from typing import Tuple, Dict, Any
 
-def analyze_pd_parameter_setup(candles: list, df: pd.DataFrame) -> Tuple[str, Any]:
+def analyze_pd_parameter_setup(candles: list, df: pd.DataFrame, detected_patterns: Dict = None) -> Tuple[str, Any]:
     """
     Analyzes PD Array setups for buy/sell signals.
     
     Args:
         candles: List of candle dicts (OHLCV data).
         df: Pandas DataFrame with pre-computed indicators (ema_200, ema_50, rsi, atr, etc.).
+        detected_patterns: Optional patterns dict (ignored for now).
     
     Returns:
         Tuple of (action: str, reason: dict/str) where action is "BUY", "SELL", or "NEUTRAL".
@@ -110,8 +112,12 @@ def _detect_fvgs(df: pd.DataFrame) -> list:
         if prev_high < curr_low:
             gap_top = curr_low
             gap_bottom = prev_high
-            # FIXED: Check if filled: if any subsequent low <= gap_bottom
-            filled = any((df['low'].iloc[i:j] <= gap_bottom).any() for j in range(i+1, min(i+10, len(df))))
+            # FIXED: Proper filled check with slicing (avoids any() on empty)
+            filled = False
+            for j in range(i+1, min(i+10, len(df))):
+                if df['low'].iloc[i:j+1].min() <= gap_bottom:
+                    filled = True
+                    break
             fvgs.append({
                 'type': 'bullish',
                 'top': gap_top,
@@ -126,8 +132,12 @@ def _detect_fvgs(df: pd.DataFrame) -> list:
         if prev_low > curr_high:  # Gap down
             gap_bottom = curr_high
             gap_top = prev_low
-            # FIXED: Check if filled: if any subsequent high >= gap_top
-            filled = any((df['high'].iloc[i:j] >= gap_top).any() for j in range(i+1, min(i+10, len(df))))
+            # FIXED: Proper filled check with slicing
+            filled = False
+            for j in range(i+1, min(i+10, len(df))):
+                if df['high'].iloc[i:j+1].max() >= gap_top:
+                    filled = True
+                    break
             fvgs.append({
                 'type': 'bearish',
                 'top': gap_top,

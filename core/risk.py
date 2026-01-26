@@ -1,37 +1,29 @@
 import time
 import logging
-from core.asset_detector import detect_asset_type  # New import
+from core.asset_detector import detect_asset_type
 
 logger = logging.getLogger("RiskManager")
 
 class RiskManager:
     def __init__(self, config):
-        """
-        Initializes the Risk Manager with safety and psychological parameters.
-        """
         self.config = config.get('risk', {})
         self.risk_per_trade = self.config.get('risk_per_trade', 1.0) 
-        self.max_daily_loss = self.config.get('daily_loss_limit', 5.0) # Corrected key
-        self.max_drawdown_limit = self.config.get('max_drawdown', 5.0) # Corrected key
+        self.max_daily_loss = self.config.get('daily_loss_limit', 5.0)
+        self.max_drawdown_limit = self.config.get('max_drawdown', 5.0)
         self.min_lot = 0.01
-        self.max_lot = 10.0  # Broker limit
+        self.max_lot = 10.0
         
-        # --- PSYCHOLOGY SETTINGS ---
+        # PSYCHOLOGY SETTINGS
         self.max_daily_trades = self.config.get('max_trades', 5) 
-        self.cool_off_period = self.config.get('cool_off_seconds', 5) # Default to 5 seconds for Active trading
+        self.cool_off_period = self.config.get('cool_off_seconds', 5)
         
         self.daily_trades_count = 0
         self.last_trade_time = 0
+        self.config = config  # Expose for UI
 
     def can_trade(self, current_drawdown_pct):
-        """
-        Psychological Gatekeeper: Checks if the bot is allowed to trade.
-        """
         if current_drawdown_pct > self.max_daily_loss:
             return False, f"Daily drawdown limit ({self.max_daily_loss}%) reached."
-
-        # if self.daily_trades_count >= self.max_daily_trades:
-        #     return False, f"Max daily trades ({self.max_daily_trades}) reached."
 
         time_since_last = time.time() - self.last_trade_time
         if time_since_last < self.cool_off_period:
@@ -51,29 +43,15 @@ class RiskManager:
         self.daily_trades_count = 0
 
     def calculate_lot_size(self, balance, entry_price, sl_price, symbol, equity=None):
-        """
-        Calculates dynamic lot size based on risk percentage and contract specs.
-        Adjusted for forex (pip-based) vs crypto (point-based, e.g., BTC $1 per point).
-        """
-        base_capital = equity if equity is not None else balance
-        if base_capital <= 0: 
-            return self.min_lot
-        
         asset_type = detect_asset_type(symbol)
-        risk_multiplier = self.config.get(f"{asset_type}_risk_multiplier", 1.0)
-        risk_amount = base_capital * (self.risk_per_trade / 100) * risk_multiplier
-        
+        risk_amount = balance * (self.risk_per_trade / 100)
         dist_points = abs(entry_price - sl_price)
-        if dist_points < 0.00001: 
-            return self.min_lot
-
-        # Forex (e.g., XAUUSD: $1 per 0.01 move, 100 oz contract)
+        
         if asset_type == "forex":
-            tick_value = 1.0 if "XAU" in symbol.upper() else 10.0  # Adjust per pair
-            raw_lot = risk_amount / (dist_points * tick_value * 100)  # Pip multiplier
-        # Crypto (e.g., BTCUSD: $0.01 per point, but volatile – cap lots)
+            tick_value = 1.0 if "XAU" in symbol.upper() else 10.0
+            raw_lot = risk_amount / (dist_points * tick_value * 100)
         else:  # crypto
-            tick_value = 0.01  # Standard for BTC/ETH
+            tick_value = 0.01
             raw_lot = risk_amount / (dist_points * tick_value)
 
         final_lot = max(self.min_lot, round(raw_lot, 2))
@@ -81,22 +59,23 @@ class RiskManager:
         return min(final_lot, self.max_lot) 
 
     def calculate_sl_tp(self, price, action, atr, symbol, digits=5, risk_reward_ratio=1.5, timeframe="M5"):
-        """
-        Dynamic SL/TP: Tighter for forex, wider for crypto volatility.
-        NEW: Adjusted for M1 timeframe to allow tighter scalping stops.
-        """
         asset_type = detect_asset_type(symbol)
         atr_mult = self.config.get('scalping', {}).get(f"{asset_type}_atr_multiplier", 1.0)
-        volatility = atr * atr_mult if (atr and atr > 0) else price * 0.001  # 0.1% buffer
+        volatility = atr * atr_mult if (atr and atr > 0) else price * 0.001
         
-        # M1 Specific: Allow much tighter stops for fast scalping
         if timeframe == "M1":
             min_dist = price * 0.0002 if asset_type == "forex" else price * 0.002
         else:
             min_dist = price * 0.0005 if asset_type == "forex" else price * 0.005 
-            
-        sl_dist = max(volatility * 1.5, min_dist)  # Snug SL
-        tp_dist = sl_dist * risk_reward_ratio  # Balanced RR
+        
+        sl_dist = max(volatility * 1.5, min_dist)
+        sl_dist = max(sl_dist, min_dist)  
+        tp_dist = sl_dist * risk_reward_ratio
+        tp_dist = max(tp_dist, min_dist * risk_reward_ratio)  
+        
+        if sl_dist < min_dist * 1.1:  
+            logger.warning(f"⚠️ Small SL dist {sl_dist:.5f} for {symbol} on {timeframe} – using min {min_dist:.5f}")
+            sl_dist = min_dist
         
         if action == "BUY":
             sl = price - sl_dist
@@ -105,13 +84,25 @@ class RiskManager:
             sl = price + sl_dist
             tp = price - tp_dist
         
-        # Validation
         if action == "SELL":
-            if sl <= price: sl = price + min_dist
-            if tp >= price: tp = price - min_dist
-        else:
-            if sl >= price: sl = price - min_dist
-            if tp <= price: tp = price + min_dist
+            if sl <= price: 
+                sl = price + max(min_dist, sl_dist)  
+            if tp >= price: 
+                tp = price - max(min_dist * risk_reward_ratio, tp_dist)
+            if (price - tp) < (min_dist * risk_reward_ratio):
+                tp = price - (min_dist * risk_reward_ratio)
+                logger.warning(f"⚠️ Adjusted tiny TP for SELL {symbol}: was {tp:.5f}, now {tp:.5f}")
+        else:  # BUY
+            if sl >= price: 
+                sl = price - max(min_dist, sl_dist)
+            if tp <= price: 
+                tp = price + max(min_dist * risk_reward_ratio, tp_dist)
+            if (tp - price) < (min_dist * risk_reward_ratio):
+                tp = price + (min_dist * risk_reward_ratio)
+                logger.warning(f"⚠️ Adjusted tiny TP for BUY {symbol}: was {tp:.5f}, now {tp:.5f}")
 
-        logger.info(f"SL/TP for {symbol} ({asset_type}) on {timeframe}: SL={sl:.{digits}f}, TP={tp:.{digits}f}")
-        return round(sl, digits), round(tp, digits)
+        sl = round(float(sl), digits)
+        tp = round(float(tp), digits)
+
+        logger.info(f"SL/TP for {symbol} ({asset_type}) on {timeframe}: SL={sl}, TP={tp} (min_dist={min_dist:.5f})")
+        return sl, tp

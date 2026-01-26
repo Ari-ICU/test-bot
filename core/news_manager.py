@@ -46,8 +46,8 @@ class NewsManager:
 
     def get_upcoming_event(self, symbol):
         """
-        Returns the closest upcoming High Impact event for the symbol.
-        Returns: (EventName, MinutesUntil) or (None, None)
+        Returns the closest upcoming High Impact event for the symbol with detailed stats.
+        Returns: (EventName, MinutesUntil, Link, Details)
         """
         if time.time() - self.last_fetch > self.cache_duration:
             self._fetch_calendar()
@@ -57,9 +57,10 @@ class NewsManager:
         
         closest_event = None
         min_diff = float('inf')
+        details = ""
 
         for event in self.events:
-            if event.get('impact') != 'High': continue
+            if event.get('impact') not in ['High', 'Medium']: continue
             if event.get('country') not in currencies and event.get('currency') not in currencies: continue
             
             try:
@@ -71,11 +72,47 @@ class NewsManager:
                 if diff > 0 and diff < min_diff:
                     min_diff = diff
                     closest_event = event.get('title', 'News')
+                    forecast = event.get('forecast', 'N/A')
+                    previous = event.get('previous', 'N/A')
+                    details = f"F: {forecast} | P: {previous}"
             except: continue
         
         if closest_event:
-            return closest_event, int(min_diff), "https://www.forexfactory.com/calendar"
-        return None, None, None
+            return closest_event, int(min_diff), "https://www.forexfactory.com/calendar", details
+        return None, None, None, ""
+
+    def get_calendar_summary(self, symbol, count=5):
+        """
+        Returns a list of upcoming events with detailed forecast/previous values.
+        """
+        if time.time() - self.last_fetch > self.cache_duration:
+            self._fetch_calendar()
+
+        currencies = self._get_currencies(symbol)
+        now_utc = datetime.now(pytz.utc)
+        upcoming = []
+
+        for event in self.events:
+            if event.get('country') not in currencies and event.get('currency') not in currencies: continue
+            
+            try:
+                event_dt = datetime.fromisoformat(event.get('date')).astimezone(pytz.utc)
+                diff = (event_dt - now_utc).total_seconds() / 60
+                
+                if diff > -60: # Show recent and future
+                    upcoming.append({
+                        "time": event_dt.strftime("%H:%M"),
+                        "title": event.get('title'),
+                        "impact": event.get('impact'),
+                        "forecast": event.get('forecast', '-'),
+                        "previous": event.get('previous', '-'),
+                        "actual": event.get('actual', '-'),
+                        "mins": int(diff)
+                    })
+            except: continue
+            
+        upcoming.sort(key=lambda x: x['mins'])
+        return upcoming[:count]
 
     def _get_currencies(self, symbol):
         currencies = ["USD"]
