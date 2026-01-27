@@ -75,8 +75,29 @@ def bot_logic(app):
     risk = app.risk
     ai_predictor = AIPredictor()
     news_manager = NewsManager()
+    news_manager = NewsManager()
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
-    signals_summary = {tf: "NEUTRAL" for tf in AUTO_TABS}
+    last_trade_bar = {tf: 0 for tf in AUTO_TABS}  
+    last_stale_log = {tf: 0 for tf in AUTO_TABS}
+    last_ui_stale_update = {tf: 0 for tf in AUTO_TABS} 
+    last_logged_signal = {tf: None for tf in AUTO_TABS} # NEW: reduce spam
+    stale_tf_map = {tf: False for tf in AUTO_TABS}
+    scan_active = False 
+    time_offset = 0  
+    offset_detected = False
+    signals_summary = {tf: "WAIT..." for tf in AUTO_TABS}
+    
+    # FIXED: Thread-safe UI update queue to prevent PyEval_RestoreThread crash
+    ui_queue = Queue() 
+    def ui_bridge():
+        while True:
+            try:
+                task = ui_queue.get(timeout=0.1)
+                app.after(0, task)
+            except: 
+                if not app.bot_running: break
+                continue
+    threading.Thread(target=ui_bridge, daemon=True).start()
 
     log_queue = Queue(maxsize=1000)
     heartbeat_counter = 0
@@ -86,19 +107,70 @@ def bot_logic(app):
         if app.telegram_bot:
             app.telegram_bot.track_analysis(prediction, patterns, sentiment)
 
-    def scan_tf_worker(tf):
+    def scan_tf_worker(tf, asset_type, style):
         try:
-            candles = connector.request_history(tf, count=350)
+            # Increase count for higher timeframes to ensure enough data for indicators
+            fetch_count = 500 if tf in ["H4", "D1", "W1"] else 350
+            candles = connector.request_history(tf, count=fetch_count)
             if not candles or len(candles) < 50:
                 if not candles:
-                    log_queue.put(f"{Fore.YELLOW}🕐 {tf}: Skipping - No real-time data flow from MT5{Style.RESET_ALL}")
+                    log_queue.put(f"{Fore.YELLOW}🕐 {tf}: Skipping - No data received from MT5 within timeout{Style.RESET_ALL}")
+                    signals_summary[tf] = "NO DATA"
                 else:
                     log_queue.put(f"{Fore.YELLOW}🕐 {tf}: Skipping - Insufficient data ({len(candles)}/50){Style.RESET_ALL}")
+                    signals_summary[tf] = "LOW DATA"
                 return
 
             latest_bar_time = candles[-1].get('time', 0)
-            if latest_bar_time <= last_processed_bar[tf]:
-                return
+            
+            # 1. New Bar Detection + Scan Notification
+            if latest_bar_time > last_processed_bar[tf]:
+                log_queue.put(f"{Fore.GREEN}⚡ [{tf}] New Bar detected. Starting Full Analysis...{Style.RESET_ALL}")
+                last_processed_bar[tf] = latest_bar_time
+            
+            # 1b. Smart Timezone Detection (Ignore bars > 24h old)
+            now_ts = int(time.time())
+            nonlocal time_offset, offset_detected
+            
+            # Only detect offset if the bar is relatively recent (within 24 hours of local time)
+            # This handles large broker timezone differences (GMT+3 etc) correctly.
+            if not offset_detected and tf in ["M1", "M5"]:
+                if abs(now_ts - latest_bar_time) < 86400: # 24 hours
+                    time_offset = now_ts - latest_bar_time
+                    offset_detected = True
+                    log_queue.put(f"{Fore.MAGENTA}🌐 Timezone Sync Verified: {time_offset}s offset.{Style.RESET_ALL}")
+                elif not offset_detected and tf == "M1":
+                    # Keep waiting for fresher M1 data
+                    time_offset = 0
+                    if now_ts % 10 == 0: # Log every 10s to reduce spam
+                        log_queue.put(f"{Fore.YELLOW}⏳ Waiting for reasonably fresh M1/M5 data to sync timezone...{Style.RESET_ALL}")
+
+            adjusted_now = now_ts - time_offset
+            tf_mapping = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400, "W1": 604800, "MN": 2592000}
+            tf_sec = tf_mapping.get(tf, 60)
+            
+            # FIXED: Loosened lag check (Allow 30 min lag for safety during market sync)
+            max_lag_sec = max(tf_sec * 0.5, 1800) 
+            
+            is_stale = False
+            if adjusted_now - latest_bar_time > max_lag_sec:
+                 lag = adjusted_now - latest_bar_time
+                 stale_tf_map[tf] = True
+                 is_stale = True
+                 
+                 if now_ts - last_stale_log[tf] > 300: # Quietly track but don't spam UI
+                     last_stale_log[tf] = now_ts
+                 
+                 if now_ts - last_ui_stale_update[tf] > 15:
+                     # Only update UI with "STALE" if it's REALLY old or we want to keep some indicator
+                     # But user wants "signal instead", so we will let strategy analysis run
+                     pass
+            
+            if not is_stale:
+                stale_tf_map[tf] = False
+
+            if signals_summary[tf] == "WAIT...":
+                signals_summary[tf] = "OK"
 
             last_processed_bar[tf] = latest_bar_time
             df = pd.DataFrame(candles)
@@ -123,7 +195,7 @@ def bot_logic(app):
 
             # AI Predict
             try:
-                ai_result = ai_predictor.predict(df, tf)
+                ai_result = ai_predictor.predict(df, asset_type=asset_type, style=style)
                 if isinstance(ai_result, tuple) and len(ai_result) == 3:
                     ai_pred, detected_patterns, sentiment = ai_result
                 else:
@@ -165,90 +237,98 @@ def bot_logic(app):
 
                 try:
                     signal, reason = analyze_func(candles, df, detected_patterns)
+                    
+                    # FIXED: Only update UI if signal changed or is not NEUTRAL to reduce UI thread load
+                    reason_str = safe_reason_formatter(reason)
+                    last_ui_status = getattr(app, '_last_strat_status', {})
+                    status_key = f"{tf}_{name}"
+                    if last_ui_status.get(status_key) != (signal, reason_str):
+                        # FIXED: Add TF context to UI status reason so user knows which TF is being shown
+                        full_reason = f"[{tf}] {reason_str}"
+                        ui_queue.put(lambda n=name, s=signal, r=full_reason: app.update_strategy_status(n, s, r))
+                        if not hasattr(app, '_last_strat_status'): app._last_strat_status = {}
+                        app._last_strat_status[status_key] = (signal, reason_str)
 
-                    app.after(0, lambda n=name, s=signal, r=reason: app.update_strategy_status(n, s, safe_reason_formatter(reason)))
+                    # Update timeframe-wide signal if non-neutral
+                    if signal != "NEUTRAL":
+                        tf_signal = signal
+                        tf_reason = reason_str
+                    elif tf_reason == "No strong signals": 
+                        tf_reason = f"{name}: {reason_str}"
 
                     # Log to console queue
-                    log_msg = f"🕐 {tf} [{name}]: {signal} - {safe_reason_formatter(reason)}"
-                    log_queue.put(f"{Fore.CYAN}{log_msg}{Style.RESET_ALL}")
-
-                    # Forward BUY/SELL signals to Telegram
-                    if signal in ["BUY", "SELL"]:
-                        logger.info(f"🎯 SIGNAL DETECTED: {log_msg}")
+                    if signal != "NEUTRAL":
+                        log_msg = f"🕐 {tf} [{name}]: {signal} - {reason_str}"
+                        log_queue.put(f"{Fore.CYAN}{log_msg}{Style.RESET_ALL}")
+                        
+                        if signal in ["BUY", "SELL"]:
+                            logger.info(f"🎯 SIGNAL DETECTED: {log_msg}")
 
                     # FIXED: Enhanced Trade Block with Debug Logs + Min ATR Fallback
+                    # FIXED: Enhanced Trade Block - Minimize Lock Duration
                     if signal in ["BUY", "SELL"] and app.auto_trade_var.get():
+                        # SAFETY: Only one trade per bar per timeframe
+                        if latest_bar_time <= last_trade_bar.get(tf, 0):
+                            continue
+                        
                         current_price = df.iloc[-1]['close']
                         atr_series = df['atr']  # Pre-computed
-                        min_atr = 0.5 if "XAU" in connector.active_symbol.upper() else 0.01  # FIXED: Symbol-aware min (ties to SL/TP fix)
+                        min_atr = 0.5 if "XAU" in connector.active_symbol.upper() else 0.01
                         current_atr = max(atr_series.iloc[-1], min_atr) if not pd.isna(atr_series.iloc[-1]) else min_atr
-                        sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
-                        # NEW: PRICING & SLIPPAGE PROTECTION
-                        # Fetch REAL-TIME TICK from MT5 directly (bypass history lag)
+                        
+                        # Fetch REAL-TIME TICK directly
                         tick = connector.get_tick()
                         if not tick:
                             log_queue.put(f"{Fore.RED}❌ {tf} ABORT: No bid/ask tick available{Style.RESET_ALL}")
-                            continue # Skip this strategy's trade attempt, but continue with others
+                            continue
 
                         real_price = tick['ask'] if signal == "BUY" else tick['bid']
-                        signal_price = candles[-1]['close'] # The price the signal was based on
+                        signal_price = candles[-1]['close']
                         
-                        # Slippage Check (Max 0.15% for Gold, 0.05% for others)
-                        threshold = 0.15 if "XAU" in connector.active_symbol.upper() else 0.05
+                        # Slippage Check (Increased for Gold: 1.5%)
+                        threshold = 1.5 if "XAU" in connector.active_symbol.upper() else 0.50
                         slippage_pct = abs(real_price - signal_price) / signal_price * 100
                         if slippage_pct > threshold: 
-                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: High Slippage ({slippage_pct:.2f}%) | Sig: {signal_price:.2f} vs Real: {real_price:.2f}{Style.RESET_ALL}")
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Slippage {slippage_pct:.2f}% > {threshold}% | Try manually or wait for next bar.{Style.RESET_ALL}")
                             continue 
 
-                        # Proceed with safe execution
+                        # Proceed with execution calculations OUTSIDE lock
                         current_price = real_price
-                        # Recalculate SL/TP based on real-time price
                         sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
                         
-                        can_trade, msg = risk.can_trade(0) # 0 for new trade, not modifying existing
+                        can_trade, msg = risk.can_trade(0) 
                         if can_trade:
-                            with connector.lock: # Ensure only one trade request at a time
-                                balance = connector.get_account_balance()
-                                equity = connector.account_info.get('equity', balance)
-                                lots = risk.calculate_lot_size(balance, current_price, sl, connector.active_symbol, equity=equity)
-                                lots = max(lots, 0.01) if lots > 0 else 0.01 # Ensure minimum lot size
+                            balance = connector.get_account_balance()
+                            info = connector.account_info # This uses lock briefly
+                            equity = info.get('equity', balance)
+                            lots = risk.calculate_lot_size(balance, current_price, sl, connector.active_symbol, equity=equity)
+                            lots = max(lots, 0.01) if lots > 0 else 0.01
+                            
+                            debug_msg = f"{Fore.YELLOW}Debug {tf} Trade: Price={current_price:.5f}, ATR={current_atr:.5f}, SL={sl}, TP={tp}{Style.RESET_ALL}"
+                            log_queue.put(debug_msg)
+                            
+                            if sl is not None and tp is not None and lots > 0:
+                                # REMOVED: redundant/deadlocking connector.lock here
+                                success = connector.execute_trade(signal, lots, sl, tp) 
                                 
-                                # FIXED: Debug Log (Remove after testing)
-                                debug_msg = f"{Fore.YELLOW}Debug {tf} Trade: Price={current_price:.5f}, ATR={current_atr:.5f}, SL={sl}, TP={tp}{Style.RESET_ALL}"
-                                log_queue.put(debug_msg)
-                                
-                                risk_pct = getattr(risk, 'risk_per_trade', 1.0)
-                                target_risk_val = balance * (risk_pct / 100.0)
-                                actual_risk_val = lots * abs(current_price - sl) * 100.0 # Standard lot multiplier for XAU-ish
-                                
-                                print(f"DEBUG: {tf} Trade Planning | Balance: ${balance:,.2f} | Lots: {lots:.2f} | Risk: ${actual_risk_val:.2f} (Target: < ${target_risk_val:.2f})")
-                                
-                                if sl is not None and tp is not None and lots > 0:
-                                    success = connector.execute_trade(signal, lots, sl, tp)
-                                    if success:
-                                        log_queue.put(f"{Fore.GREEN}🚀 {tf} AUTO-TRADE: {signal} {lots:.2f} lots | SL: {sl:.5f} | TP: {tp:.5f}{Style.RESET_ALL}")
-                                        risk.record_trade()
-                                    else:
-                                        log_queue.put(f"{Fore.RED}⚠️ {tf} Trade failed: Execution error{Style.RESET_ALL}")
+                                if success:
+                                    log_queue.put(f"{Fore.GREEN}🚀 {tf} AUTO-TRADE: {signal} {lots:.2f} lots | SL: {sl:.5f} | TP: {tp:.5f}{Style.RESET_ALL}")
+                                    risk.record_trade()
+                                    last_trade_bar[tf] = latest_bar_time 
                                 else:
-                                    log_queue.put(f"{Fore.RED}⚠️ {tf} Trade skipped: Invalid SL/TP/Lots (SL={sl}, TP={tp}, Lots={lots}){Style.RESET_ALL}")
+                                    log_queue.put(f"{Fore.RED}⚠️ {tf} Trade failed: Execution error{Style.RESET_ALL}")
+                            else:
+                                log_queue.put(f"{Fore.RED}⚠️ {tf} Trade skipped: Invalid parameters (SL={sl}, TP={tp}, Lots={lots}){Style.RESET_ALL}")
                         else:
                             log_queue.put(f"{Fore.YELLOW}🛡️ {tf} SKIPPED: {msg}{Style.RESET_ALL}")
-
-                    # FIXED: Update strongest signal (prefer first BUY/SELL over NEUTRAL)
-                    if signal in ["BUY", "SELL"] and tf_signal == "NEUTRAL":
-                        tf_signal = signal
-                        tf_reason = safe_reason_formatter(reason)
 
                 except Exception as e:
                     error_msg = f"{tf} [{name}] Error: {e}"
                     log_queue.put(f"{Fore.RED}🔥 {error_msg}{Style.RESET_ALL}")
                     logger.error(error_msg)
-
-            # FIXED: Set summary AFTER loop
-            signals_summary[tf] = tf_signal
-            log_queue.put(f"{Fore.CYAN}🕐 {tf} SUMMARY: {tf_signal} - {tf_reason}{Style.RESET_ALL}")
+            
             update_tg_analysis(ai_pred, list(detected_patterns.keys()) if detected_patterns else [], sentiment)
+            signals_summary[tf] = tf_signal
 
         except Exception as e:
             error_msg = f"{tf} Worker Crash: {e}"
@@ -257,18 +337,37 @@ def bot_logic(app):
 
     last_summary_time = time.time()
     last_heartbeat_time = time.time()
+    last_scan_cycle_time = 0
 
     while app.bot_running:
         try:
-            loop_start = time.time()
-            threads = []
-            for tf in AUTO_TABS:
-                t = threading.Thread(target=scan_tf_worker, args=(tf,), daemon=True)
-                t.start()
-                threads.append(t)
+            now = time.time()
+            loop_start = now
             
-            for t in threads:
-                t.join(timeout=0.5)
+            # --- START SCAN CYCLE ---
+            if not scan_active and (now - last_scan_cycle_time >= 10):
+                scan_active = True
+                last_scan_cycle_time = now
+                
+                def run_all_scans():
+                    nonlocal scan_active
+                    symbol = connector.active_symbol
+                    asset_type = detect_asset_type(symbol)
+                    style = app.style_var.get()
+                    
+                    log_queue.put(f"{Fore.MAGENTA}🔄 Multi-TF Scan Cycle Started: {symbol} ({asset_type}) | Style: {style}{Style.RESET_ALL}")
+                    active_workers = []
+                    for tf in AUTO_TABS:
+                        t = threading.Thread(target=scan_tf_worker, args=(tf, asset_type, style), daemon=True)
+                        t.start()
+                        active_workers.append(t)
+                    
+                    for t in active_workers:
+                        t.join(timeout=15.0) # Give them ample time
+                    scan_active = False
+                    log_queue.put(f"{Fore.MAGENTA}🏁 Multi-TF Scan Cycle Finished.{Style.RESET_ALL}")
+
+                threading.Thread(target=run_all_scans, daemon=True).start()
 
             # 3. GLOBAL NEWS UPDATE (Direct UI Update - Fixes 'WAITING' bug)
             try:
@@ -289,7 +388,7 @@ def bot_logic(app):
                     msg_lower = str(record).lower()
                     skip_phrases = [
                         "fetched", "parsed", "from ea", "from cache", 
-                        "timeout", "insufficient data"
+                        "timeout"
                     ]
                     if any(phrase in msg_lower for phrase in skip_phrases):
                         continue
@@ -298,27 +397,39 @@ def bot_logic(app):
                     break
 
             now = time.time()
-            # 1. Throttle summaries to 60s (Less spam, enough for monitoring)
-            if now - last_summary_time >= 60:
-                summary_text = "| " + " | ".join([f"{tf}: {signals_summary[tf]}" for tf in AUTO_TABS]) + " |"
-                print(f"\n{Fore.MAGENTA}📊 TF SUMMARY ({datetime.now().strftime('%H:%M:%S')}):{Style.RESET_ALL}")
+            # 1. Throttle summaries to 30s (Primary status log with lag check)
+            if now - last_summary_time >= 30:
+                summary_parts = []
+                for tf in AUTO_TABS:
+                    lag = int(now - time_offset - last_processed_bar.get(tf, 0)) if last_processed_bar.get(tf, 0) > 0 else "N/A"
+                    summary_parts.append(f"{tf}: {signals_summary[tf]} ({lag}s)")
+                
+                summary_text = "| " + " | ".join(summary_parts) + " |"
+                print(f"\n{Fore.MAGENTA}📊 TF STATUS ({datetime.now().strftime('%H:%M:%S')}):{Style.RESET_ALL}")
                 print(summary_text)
                 print("-" * 60 + "\n")
                 
+                # Auto-refresh if too many are stale (be more lenient: > 75% of TFs)
+                stale_count = sum(1 for v in stale_tf_map.values() if v)
+                if stale_count >= 6: # If 6 or more TFs are stale
+                    if now - last_stale_log.get('global', 0) > 300: # Max one refresh every 5 min
+                        logger.warning(f"⚠️ {stale_count} TFs Stale. Requesting MT5 Global Refresh...")
+                        connector.force_sync()
+                        last_stale_log['global'] = now
+                
                 # Log summary to Telegram
-                logger.info(f"📊 TF SUMMARY: {summary_text}")
+                logger.info(f"📊 STATUS: {summary_text}")
                 last_summary_time = now
 
-            # 2. Throttle Heartbeat to 120s (Very quiet, just to know it's alive)
+            # 2. Throttle Heartbeat to 120s
             if now - last_heartbeat_time >= 120:
                 daily_count = getattr(risk, 'daily_trades_count', 0)
                 elapsed = now - loop_start
-                hb_msg = f"💓 Heartbeat: {len(AUTO_TABS)} TFs scanned | Trades Today: {daily_count} | Cycle: {elapsed:.2f}s"
+                hb_msg = f"💓 Heartbeat: {len(AUTO_TABS)} TFs scanned | Trades: {daily_count} | SysCycle: {elapsed:.2f}s"
                 print(f"{Fore.BLUE}{hb_msg}{Style.RESET_ALL}")
-                logger.info(hb_msg)
                 last_heartbeat_time = now
 
-            time.sleep(0.05)
+            time.sleep(0.2)  # FIXED: Increased from 0.05 to 0.2 to reduce CPU/Thread pressure
 
         except Exception as e:
             print(f"{Fore.RED}💥 Critical Loop Crash: {e}{Style.RESET_ALL}")
@@ -327,17 +438,24 @@ def bot_logic(app):
 
 def main():
     conf = Config()
-    connector = MT5Connector(host='127.0.0.1', port=8001)
+    mt5_port = conf.get('mt5.port', 8001)
+    connector = MT5Connector(host='127.0.0.1', port=mt5_port)
     if not connector.start():
         logger.critical("❌ FAILED TO CONNECT TO MT5 GATEWAY")
         return
 
-    # Force warmup for all timeframes
-    logger.info("📡 Warming up Multi-TF Data Sync...")
-    for tf in AUTO_TABS: 
-        connector.request_history(tf, count=350)
-    
     connector.open_multi_tf_charts(connector.active_symbol)
+
+    # Force warmup for all timeframes (Batch request)
+    logger.info("📡 Priming Multi-TF Data Sync...")
+    with connector.lock:
+        for tf in AUTO_TABS: 
+            cmd = f"GET_HISTORY|{connector.active_symbol}|{tf}|250"
+            if cmd not in connector.command_queue:
+                connector.command_queue.append(cmd)
+    
+    # Give EA 2s to catch up on the batch
+    time.sleep(2)
 
     # Initialize Telegram Bot
     tg_token = conf.get('telegram.bot_token')

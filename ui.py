@@ -262,6 +262,11 @@ class TradingApp(ttk.Window):
         self.sym_combo = ttk.Combobox(s_f, textvariable=self.symbol_var, width=12, bootstyle="secondary")
         self.sym_combo.pack(fill=X); self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
 
+        t_f = ttk.Frame(conf_frame); t_f.grid(row=1, column=1, sticky=EW, padx=5, pady=2)
+        ttk.Label(t_f, text="Primary TF:", font=("Helvetica", 9)).pack(anchor=W)
+        self.tf_combo = ttk.Combobox(t_f, textvariable=self.tf_var, values=AUTO_TABS, width=12, bootstyle="info")
+        self.tf_combo.pack(fill=X); self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
+
         # 2. AI Style and Max Positions
         st_f = ttk.Frame(conf_frame); st_f.grid(row=2, column=0, sticky=EW, padx=5, pady=2)
         ttk.Label(st_f, text="AI Style:", font=("Helvetica", 9)).pack(anchor=W)
@@ -497,21 +502,22 @@ class TradingApp(ttk.Window):
     def manual_close(self, mode):
         """
         Fixed: Sends specific action strings (CLOSE_WIN, CLOSE_LOSS, CLOSE_ALL)
-        to match the MQL5 ProcessCommand logic.
+        to match the MQL5 ProcessCommand logic. Run in thread to avoid UI freeze.
         """
         sym = self.symbol_var.get()
-       
-        # Format the command to match MQL5 EA's ProcessCommand expectation:
-        # The EA checks: if(action == "CLOSE_ALL") or if(action == "CLOSE_WIN"), etc.
         cmd = f"CLOSE_{mode}|{sym}"
        
-        # Append the command to the connector's queue for the EA to pick up
-        if hasattr(self.connector, 'lock'):
-            with self.connector.lock:
-                self.connector.command_queue.append(cmd)
-           
-        logging.info(f"Manual Close ({mode}) request sent for {sym}")
-        self.show_toast(f"Close {mode} Request Sent for {sym}", "info")
+        def do_close():
+            try:
+                if hasattr(self.connector, 'lock'):
+                    with self.connector.lock:
+                        self.connector.command_queue.append(cmd)
+                logging.info(f"Manual Close ({mode}) request sent for {sym}")
+                self.after(0, lambda: self.show_toast(f"Close {mode} Request Sent for {sym}", "info"))
+            except Exception as e:
+                logging.error(f"Manual close failed: {e}")
+
+        threading.Thread(target=do_close, daemon=True).start()
 
     def clear_logs(self):
         self.log_area.delete(1.0, tk.END)  # FIXED: Use delete for ScrolledText

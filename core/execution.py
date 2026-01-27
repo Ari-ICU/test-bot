@@ -17,15 +17,15 @@ from core.asset_detector import detect_asset_type
 logger = logging.getLogger("Execution")
 
 def GetTFMinutes(tf):  # FIXED: Helper for dummy timestamps (per-TF accurate)
-    mapping = {"M1":1, "M5":5, "M15":15, "M30":30, "H1":60, "H4":240, "D1":1440}
+    mapping = {"M1":1, "M5":5, "M15":15, "M30":30, "H1":60, "H4":240, "D1":1440, "W1":10080, "MN":43200}
     return mapping.get(tf, 5)
 
 class MT5Connector:
     def __init__(self, host='127.0.0.1', port=8001):
         self.host = host
         self.port = self._find_free_port(port)
-        self.lock = threading.Lock()
-        self.history_lock = threading.Lock()  # FIXED: Thread-safe for history reads/writes
+        self.lock = threading.RLock() # FIXED: Use RLock to prevent deadlocks on nested calls
+        self.history_lock = threading.RLock()  # FIXED: Thread-safe for history reads/writes
         self.command_queue = []
         self.available_symbols = []
         self.active_symbol = "XAUUSDm"
@@ -49,7 +49,6 @@ class MT5Connector:
         }
         self.server = None
         self.pending_changes = {}  # Existing if needed
-        self.start()
 
     def start(self):
         """FIXED: Retry with exponential backoff on bind fail."""
@@ -137,39 +136,47 @@ class MT5Connector:
                 if time.time() - cache.get('timestamp', 0) < 5.0:  # Fresh: Return immediately
                     candles = cache['data']
                     if len(candles) > 0:
-                        self.last_good_data[timeframe] = candles[-1]['time']
-                        bar_time = candles[-1].get('time', 0)
-                        self.last_bar_times[timeframe] = bar_time
-                        logger.debug(f"✅ Cache fresh for {timeframe}: {len(candles)} bars")
+                        last_bar_ts = candles[-1].get('time', 0)
+                        m1_time = self.last_bar_times.get("M1", 0)
+                        # NEW: Allow even stale data to return immediately from cache
+                        if m1_time > 0 and timeframe != "M1" and last_bar_ts < m1_time - (GetTFMinutes(timeframe) * 60 * 2):
+                            logger.debug(f"ℹ️ {timeframe} cache is lagging M1 but using it to avoid delay")
+                        
+                        self.last_good_data[timeframe] = last_bar_ts
+                        self.last_bar_times[timeframe] = last_bar_ts
                         return candles
                 else:
                     logger.debug(f"Cache stale for {timeframe} – queuing refresh")
 
-        # Stale/missing: Queue and wait (as before)
+        # Stale/missing: Queue and wait (prevent duplicate queuing)
         cmd = f"GET_HISTORY|{self.active_symbol}|{timeframe}|{count}"
         with self.lock:
-            self.command_queue.append(cmd)
+            if cmd not in self.command_queue:
+                self.command_queue.append(cmd)
+                logger.debug(f"📡 History requested for {timeframe} ({self.active_symbol})")
+            else:
+                logger.debug(f"⏳ History for {timeframe} already in queue, waiting...")
         
         start_time = time.time()
-        while time.time() - start_time < 2.0:
+        while time.time() - start_time < 20.0:  # Increased from 10s to 20s for parallel loads
             with self.history_lock:
                 cache = self.history_cache.get(timeframe, {})
                 if cache and 'data' in cache:
                     candles = cache['data']
                     if len(candles) > 0:
-                        self.last_good_data[timeframe] = candles[-1]['time']
-                        bar_time = candles[-1].get('time', 0)
-                        self.last_bar_times[timeframe] = bar_time
-                        logger.debug(f"✅ Refreshed {len(candles)} for {timeframe}")
+                        last_bar_ts = candles[-1].get('time', 0)
+                        m1_time = self.last_bar_times.get("M1", 0)
+                        # NEW: Allow stale data to pass through, but log it for visibility
+                        if m1_time > 0 and timeframe != "M1" and last_bar_ts < m1_time - (GetTFMinutes(timeframe) * 60 * 2):
+                            lag_sec = int(m1_time - last_bar_ts)
+                            logger.debug(f"ℹ️ {timeframe} data received but is lagging M1 by {lag_sec}s")
+                        
+                        self.last_good_data[timeframe] = last_bar_ts
+                        self.last_bar_times[timeframe] = last_bar_ts
                         return candles
-                    else:
-                        if timeframe in self.last_good_data:
-                            logger.debug(f"Cache empty post-queue for {timeframe}, using last good")
-                            return self._generate_minimal_candles(timeframe, 20)
-            time.sleep(0.01)
+            time.sleep(0.5)  # Slightly slower poll to reduce CPU contention
         
-        logger.warning(f"⚠️ History timeout for {timeframe} – no real data available.")
-        # Return an empty list or a list clearly marked as dummy so strategies can ignore it
+        logger.warning(f"⚠️ History timeout for {timeframe} – no real data received in 20s.")
         return []
 
     def _generate_dummy_candles(self, timeframe, count):
@@ -208,7 +215,7 @@ class MT5Connector:
         return self._account_data.get('balance', 10000.0)
 
     def open_multi_tf_charts(self, symbol):
-        tfs = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+        tfs = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"]
         with self.lock:
             for tf in tfs:
                 cmd = f"OPEN_CHART|{symbol}|{tf}"
@@ -230,9 +237,10 @@ class MT5Connector:
             self.command_queue.append(cmd)
 
     def change_timeframe(self, symbol, minutes):
-        """FIXED: Queue TF change (minutes to string)."""
-        tf_str = {1:"M1",5:"M5",15:"M15",30:"M30",60:"H1",240:"H4",1440:"D1"}.get(minutes, "M5")
-        cmd = f"TF_CHANGE|{tf_str}"
+        """FIXED: Queue TF change (symbol + timeframe string)."""
+        tf_map = {1:"M1", 5:"M5", 15:"M15", 30:"M30", 60:"H1", 240:"H4", 1440:"D1", 10080:"W1", 43200:"MN"}
+        tf_str = tf_map.get(minutes, "M5")
+        cmd = f"TF_CHANGE|{symbol}|{tf_str}"
         with self.lock:
             self.command_queue.append(cmd)
 
@@ -243,8 +251,14 @@ class MT5Connector:
             self.command_queue.append(cmd)
 
     def force_sync(self):
-        """FIXED: Queue full sync."""
+        """FIXED: Queue aggressive full refresh."""
         self.refresh_symbols()
+        with self.lock:
+            # Send both REFRESH and a specific command to trigger M5+ history reload
+            self.command_queue.append("REFRESH_CHARTS")
+            self.command_queue.append("RELOAD_HISTORY")
+            # Clear our internal bar times to force a full re-detect
+            self.last_bar_times = {}
 
 class MT5RequestHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, connector=None, **kwargs):
@@ -258,13 +272,15 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             with self.connector.lock:
-                resp = ";".join(self.connector.command_queue) if self.connector.command_queue else "OK"
-                self.connector.command_queue = []
+                if self.connector.command_queue:
+                    command = self.connector.command_queue.pop(0)
+                else:
+                    command = "OK"
             
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
-            self.wfile.write(resp.encode())
+            self.wfile.write(command.encode())
         except Exception as e:
             logger.error(f"GET request error: {e}")
             self.send_response(500)
@@ -276,10 +292,12 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length).decode('utf-8')
             data = parse_qs(post_data)
 
-            # PRIORITY RESPONSE: Send commands back to MT5 immediately
+            # PRIORITY RESPONSE: Send ONE command back to MT5
             with self.connector.lock:
-                resp = ";".join(self.connector.command_queue) if self.connector.command_queue else "OK"
-                self.connector.command_queue = [] 
+                if self.connector.command_queue:
+                    resp = self.connector.command_queue.pop(0)
+                else:
+                    resp = "OK"
             
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
@@ -315,7 +333,7 @@ class MT5RequestHandler(BaseHTTPRequestHandler):
                                 self.connector.history_cache[tf] = {'data': candles, 'timestamp': time.time()}
                                 # FIXED: Also save last good for fallback
                                 self.connector.last_good_data[tf] = candles[-1]['time']
-                                logger.debug(f"✅ Parsed {len(candles)} real candles for {tf} from EA")  # FIXED: DEBUG (silent)
+                                logger.debug(f"✅ Sync: {len(candles)} candles received for {tf}")
                             else:
                                 logger.debug(f"Invalid/empty JSON for {tf}: len={len(candles) if isinstance(candles, list) else 'N/A'} | Sample: {value[0][:50]}...")  # FIXED: DEBUG
                     except json.JSONDecodeError as e:
