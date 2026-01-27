@@ -4,6 +4,8 @@ import logging
 import time
 from datetime import datetime, timedelta
 import pytz
+import xml.etree.ElementTree as ET
+import re
 
 logger = logging.getLogger("NewsManager")
 
@@ -24,6 +26,18 @@ class NewsManager:
             "AUD": ["AUD", "USD"],
             "CAD": ["CAD", "USD"],
             "USD": ["USD"]
+        }
+        
+        # News Toggles & State
+        self.headlines = []
+        self.last_headline_fetch = 0
+        self.headline_cache_duration = 900  # 15 mins
+        
+        # High Impact Keywords (Sentiment Scorers)
+        self.sentiment_weights = {
+            "negative": ["war", "conflict", "tariff", "attack", "sanction", "tension", "strike", "escalat", "crash", "fear", "crisis", "shutdown"],
+            "positive": ["growth", "deal", "improvement", "surge", "resolution", "bullish", "recovery", "peace", "agreement"],
+            "volatile": ["trump", "fed", "election", "policy", "powell", "emergency", "abrupt"]
         }
 
     def _fetch_calendar(self):
@@ -161,3 +175,78 @@ class NewsManager:
                 pass
                 
         return False, None, 0
+
+    def _fetch_headlines(self):
+        """Fetches latest headlines from Google News RSS for key themes."""
+        try:
+            now = time.time()
+            if now - self.last_headline_fetch < self.headline_cache_duration:
+                return
+
+            queries = ["Trump%20Forex", "World%20War%20Risk", "Economic%20Crisis"]
+            all_headlines = []
+            
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            
+            for q in queries:
+                url = f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+                resp = requests.get(url, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.content)
+                    items = root.findall('.//item')
+                    for item in items[:5]:
+                        title = item.find('title').text
+                        all_headlines.append(title)
+            
+            self.headlines = list(set(all_headlines)) # Dedup
+            self.last_headline_fetch = now
+            logger.info(f"📰 Fetched {len(self.headlines)} global news headlines.")
+        except Exception as e:
+            logger.error(f"❌ Headline Fetch Error: {e}")
+
+    def get_market_sentiment(self):
+        """
+        Analyzes current headlines and returns a sentiment summary.
+        Returns: (SentimentScore, SummaryText, TopHeadlines)
+        Score: -10 (Very Bearish/Risky) to +10 (Very Bullish/Stable)
+        """
+        self._fetch_headlines()
+        
+        if not self.headlines:
+            return 0, "Neutral (No Data)", []
+
+        score = 0
+        risks = []
+        
+        for h in self.headlines:
+            h_lower = h.lower()
+            
+            # Check for negative/risk words
+            for word in self.sentiment_weights["negative"]:
+                if word in h_lower:
+                    score -= 1.5
+                    risks.append(h)
+                    break # Don't double count same headline
+            
+            # Check for positive words
+            for word in self.sentiment_weights["positive"]:
+                if word in h_lower:
+                    score += 1.0
+                    break
+            
+            # Check for high volatility names (Trump etc)
+            for word in self.sentiment_weights["volatile"]:
+                if word in h_lower:
+                    score -= 0.5 # Volatility is usually perceived as risk
+                    break
+
+        # Normalize score
+        score = max(min(score, 10), -10)
+        
+        status = "NEUTRAL"
+        if score <= -3: status = "RISK-OFF (Bearish)"
+        elif score >= 3: status = "RISK-ON (Bullish)"
+        elif score < 0: status = "CAUTIOUS"
+        
+        summary = f"{status} (Score: {score:.1f})"
+        return score, summary, risks[:3]

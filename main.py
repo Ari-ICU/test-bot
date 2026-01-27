@@ -297,6 +297,15 @@ def bot_logic(app):
                         sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
                         
                         can_trade, msg = risk.can_trade(0) 
+                        
+                        # NEW: Global News Sentiment Safety Block
+                        if can_trade and app.strat_vars.get("News_Sentiment", tk.BooleanVar(value=True)).get():
+                            n_score, n_summary, _ = news_manager.get_market_sentiment()
+                            if n_score <= -5: # Moderate to High Panic
+                                log_queue.put(f"{Fore.RED}🛡️ {tf} AUTO-BLOCK: {n_summary} - Volatility High{Style.RESET_ALL}")
+                                can_trade = False
+                                msg = f"News Panic ({n_score})"
+
                         if can_trade:
                             balance = connector.get_account_balance()
                             info = connector.account_info # This uses lock briefly
@@ -369,18 +378,34 @@ def bot_logic(app):
 
                 threading.Thread(target=run_all_scans, daemon=True).start()
 
-            # 3. GLOBAL NEWS UPDATE (Direct UI Update - Fixes 'WAITING' bug)
+            # 3. GLOBAL NEWS & HEADLINE UPDATE (Combined Sentiment)
             try:
+                # Part A: Economic Calendar (Scheduled)
                 is_active, ev_name, _ = news_manager.get_active_impact(connector.active_symbol)
+                
+                # Part B: Global Headlines (Trump, War, etc)
+                score, global_summary, top_risks = news_manager.get_market_sentiment()
+                
+                final_status = "NEUTRAL"
+                final_reason = global_summary
+                
                 if is_active:
-                    status, reason = "HIGH IMPACT", ev_name
+                    final_status = "HIGH IMPACT"
+                    final_reason = f"CAL: {ev_name} | {global_summary}"
+                elif score <= -3:
+                    final_status = "RISK ALERT"
+                    risk_msg = top_risks[0][:20] + "..." if top_risks else "High Risk"
+                    final_reason = f"NEWS: {risk_msg} | {global_summary}"
+                elif score >= 3:
+                    final_status = "RISK-ON"
+                    final_reason = f"BULLISH: {global_summary}"
                 else:
                     ev_title, _, _, _ = news_manager.get_upcoming_event(connector.active_symbol)
-                    status, reason = "NEUTRAL", (ev_title or "Stable")
-                
-                app.after(0, lambda s=status, r=reason: app.update_strategy_status("News_Sentiment", s, r))
+                    final_reason = f"{global_summary} | Next: {ev_title or 'Stable'}"
+
+                app.after(0, lambda s=final_status, r=final_reason: app.update_strategy_status("News_Sentiment", s, r))
             except Exception as e:
-                logger.debug(f"News UI Update error: {e}")
+                logger.debug(f"Combined News UI Update error: {e}")
 
             while not log_queue.empty():
                 try:
