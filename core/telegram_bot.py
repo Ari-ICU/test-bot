@@ -217,10 +217,8 @@ class TelegramBot:
         # 4b. /NEWS - Real-Time Feed & Calendar
         elif command == "/news":
             sym = self.connector.active_symbol if self.connector else "XAUUSDm"
-            from filters.news import is_high_impact_news_near, analyze_sentiment
-            from core.news_manager import NewsManager
+            from filters.news import is_high_impact_news_near, analyze_sentiment, _manager as nm
             
-            nm = NewsManager()
             is_blocked, headline, link = is_high_impact_news_near(sym)
             upcoming = nm.get_calendar_summary(sym, count=3)
             sent_type, sent_text = analyze_sentiment(sym)
@@ -299,7 +297,8 @@ class TelegramLogHandler(logging.Handler):
             else: emoji, header = "ℹ️", "INFO"
 
             # 2. Format the Message
-            clean_msg = msg.replace("EXECUTING:", "").strip()
+            import html
+            clean_msg = html.escape(msg.replace("EXECUTING:", "").strip())
             formatted_text = f"{emoji} <b>{header}</b>\n{clean_msg}"
 
             # 3. Send in BACKGROUND THREAD (Non-blocking)

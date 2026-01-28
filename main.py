@@ -21,7 +21,7 @@ from core.risk import RiskManager
 from core.session import get_detailed_session_status
 from core.telegram_bot import TelegramBot, TelegramLogHandler
 from ui import TradingApp
-from core.news_manager import NewsManager
+from filters.news import _manager as news_manager
 
 # --- STRATEGY IMPORTS ---
 import strategy.trend_following as trend
@@ -74,8 +74,6 @@ def bot_logic(app):
     connector = app.connector
     risk = app.risk
     ai_predictor = AIPredictor()
-    news_manager = NewsManager()
-    news_manager = NewsManager()
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
     last_trade_bar = {tf: 0 for tf in AUTO_TABS}  
     last_stale_log = {tf: 0 for tf in AUTO_TABS}
@@ -128,17 +126,24 @@ def bot_logic(app):
                 log_queue.put(f"{Fore.GREEN}⚡ [{tf}] New Bar detected. Starting Full Analysis...{Style.RESET_ALL}")
                 last_processed_bar[tf] = latest_bar_time
             
-            # 1b. Smart Timezone Detection (Ignore bars > 24h old)
+            # 1b. Smart Timezone Detection (Robust for Large Broker Offsets)
             now_ts = int(time.time())
             nonlocal time_offset, offset_detected
             
-            # Only detect offset if the bar is relatively recent (within 24 hours of local time)
-            # This handles large broker timezone differences (GMT+3 etc) correctly.
-            if not offset_detected and tf in ["M1", "M5"]:
-                if abs(now_ts - latest_bar_time) < 86400: # 24 hours
+            # Using any relatively recent bar to sync time (up to 7 days for weekend restarts)
+            if not offset_detected:
+                if abs(now_ts - latest_bar_time) < 604800: # 7 days
                     time_offset = now_ts - latest_bar_time
                     offset_detected = True
                     log_queue.put(f"{Fore.MAGENTA}🌐 Timezone Sync Verified: {time_offset}s offset.{Style.RESET_ALL}")
+            
+            # 1c. Extreme Lag Recovery
+            check_lag = now_ts - time_offset - latest_bar_time
+            if check_lag > 3600 and tf in ["M1", "M5", "M15"]: # More than 1 hour lag on low TFs
+                if now_ts - last_stale_log.get(tf, 0) > 60:
+                    log_queue.put(f"{Fore.RED}⚠️ {tf} LAG DETECTED ({int(check_lag)}s). Forcing TF Sync...{Style.RESET_ALL}")
+                    connector.command_queue.append(f"GET_HISTORY|{connector.active_symbol}|{tf}|500")
+                    last_stale_log[tf] = now_ts
                 elif not offset_detected and tf == "M1":
                     # Keep waiting for fresher M1 data
                     time_offset = 0
@@ -302,9 +307,12 @@ def bot_logic(app):
                         if can_trade and app.strat_vars.get("News_Sentiment", tk.BooleanVar(value=True)).get():
                             n_score, n_summary, _ = news_manager.get_market_sentiment()
                             if n_score <= -5: # Moderate to High Panic
-                                log_queue.put(f"{Fore.RED}🛡️ {tf} AUTO-BLOCK: {n_summary} - Volatility High{Style.RESET_ALL}")
-                                can_trade = False
-                                msg = f"News Panic ({n_score})"
+                                if app.strat_vars.get("Force_News", tk.BooleanVar(value=False)).get():
+                                    log_queue.put(f"{Fore.YELLOW}🛡️ {tf} NEWS OVERRIDE: {n_summary} - Forcing Trade!{Style.RESET_ALL}")
+                                else:
+                                    log_queue.put(f"{Fore.RED}🛡️ {tf} AUTO-BLOCK: {n_summary} - Volatility High{Style.RESET_ALL}")
+                                    can_trade = False
+                                    msg = f"News Panic ({n_score}) - Use 'Force Trade (News)' in Settings to unlock"
 
                         if can_trade:
                             balance = connector.get_account_balance()
@@ -347,6 +355,7 @@ def bot_logic(app):
     last_summary_time = time.time()
     last_heartbeat_time = time.time()
     last_scan_cycle_time = 0
+    last_news_ui_update = 0
 
     while app.bot_running:
         try:
@@ -378,34 +387,36 @@ def bot_logic(app):
 
                 threading.Thread(target=run_all_scans, daemon=True).start()
 
-            # 3. GLOBAL NEWS & HEADLINE UPDATE (Combined Sentiment)
-            try:
-                # Part A: Economic Calendar (Scheduled)
-                is_active, ev_name, _ = news_manager.get_active_impact(connector.active_symbol)
-                
-                # Part B: Global Headlines (Trump, War, etc)
-                score, global_summary, top_risks = news_manager.get_market_sentiment()
-                
-                final_status = "NEUTRAL"
-                final_reason = global_summary
-                
-                if is_active:
-                    final_status = "HIGH IMPACT"
-                    final_reason = f"CAL: {ev_name} | {global_summary}"
-                elif score <= -3:
-                    final_status = "RISK ALERT"
-                    risk_msg = top_risks[0][:20] + "..." if top_risks else "High Risk"
-                    final_reason = f"NEWS: {risk_msg} | {global_summary}"
-                elif score >= 3:
-                    final_status = "RISK-ON"
-                    final_reason = f"BULLISH: {global_summary}"
-                else:
-                    ev_title, _, _, _ = news_manager.get_upcoming_event(connector.active_symbol)
-                    final_reason = f"{global_summary} | Next: {ev_title or 'Stable'}"
+            # 3. GLOBAL NEWS & HEADLINE UPDATE (Combined Sentiment) - Throttled to 60s
+            if now - last_news_ui_update >= 60:
+                try:
+                    # Part A: Economic Calendar (Scheduled)
+                    is_active, ev_name, _ = news_manager.get_active_impact(connector.active_symbol)
+                    
+                    # Part B: Global Headlines (Trump, War, etc)
+                    score, global_summary, top_risks = news_manager.get_market_sentiment()
+                    
+                    final_status = "NEUTRAL"
+                    final_reason = global_summary
+                    
+                    if is_active:
+                        final_status = "HIGH IMPACT"
+                        final_reason = f"CAL: {ev_name} | {global_summary}"
+                    elif score <= -3:
+                        final_status = "RISK ALERT"
+                        risk_msg = top_risks[0][:20] + "..." if top_risks else "High Risk"
+                        final_reason = f"NEWS: {risk_msg} | {global_summary}"
+                    elif score >= 3:
+                        final_status = "RISK-ON"
+                        final_reason = f"BULLISH: {global_summary}"
+                    else:
+                        ev_title, _, _, _ = news_manager.get_upcoming_event(connector.active_symbol)
+                        final_reason = f"{global_summary} | Next: {ev_title or 'Stable'}"
 
-                app.after(0, lambda s=final_status, r=final_reason: app.update_strategy_status("News_Sentiment", s, r))
-            except Exception as e:
-                logger.debug(f"Combined News UI Update error: {e}")
+                    app.after(0, lambda s=final_status, r=final_reason: app.update_strategy_status("News_Sentiment", s, r))
+                    last_news_ui_update = now
+                except Exception as e:
+                    logger.debug(f"Combined News UI Update error: {e}")
 
             while not log_queue.empty():
                 try:

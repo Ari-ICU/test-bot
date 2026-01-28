@@ -13,6 +13,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledText
 from collections import deque  # For simple dedup queue
+from filters.news import _manager as news_manager
 
 # FIXED: Define AUTO_TABS locally (used in UI, no import needed)
 AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
@@ -67,6 +68,7 @@ class TradingApp(ttk.Window):
             "CRT_TBS": tk.BooleanVar(value=True),
             "PD_Parameter": tk.BooleanVar(value=True),
             "News_Sentiment": tk.BooleanVar(value=True),  # FIXED: Added missing entry
+            "Force_News": tk.BooleanVar(value=False),    # NEW: Allow bypassing news blocks
             "Reversal": tk.BooleanVar(value=True)
         }
        
@@ -134,13 +136,18 @@ class TradingApp(ttk.Window):
         self.tabs.pack(fill=BOTH, expand=YES, padx=5, pady=5)
         self.tab_dashboard = ttk.Frame(self.tabs)
         self.tab_console = ttk.Frame(self.tabs)
+        self.tab_news = ttk.Frame(self.tabs)
         self.tab_settings = ttk.Frame(self.tabs)
         self.tabs.add(self.tab_dashboard, text=" Dashboard ")
         self.tabs.add(self.tab_console, text=" Live Console ")
+        self.tabs.add(self.tab_news, text=" Market News ")
         self.tabs.add(self.tab_settings, text=" Settings ")
+        
+        self._last_news_update = 0
        
         self._build_dashboard_tab()
         self._build_console_tab()
+        self._build_news_tab()
         self._build_settings_tab()
 
         # FIXED: Ensure initial selection matches connector
@@ -311,6 +318,119 @@ class TradingApp(ttk.Window):
         self.log_area.tag_config('WARNING', foreground='#f0ad4e')
         self.log_area.tag_config('ERROR', foreground='#d9534f')
 
+    def _build_news_tab(self):
+        container = ttk.Frame(self.tab_news)
+        container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
+
+        # Top Section: Sentiment & Status
+        top_frame = ttk.Frame(container)
+        top_frame.pack(fill=X, pady=(0, 15))
+        
+        info_frame = ttk.Frame(top_frame)
+        info_frame.pack(side=LEFT)
+        
+        self.lbl_news_sent = ttk.Label(info_frame, text="SENTIMENT: LOADING...", font=("Roboto", 14, "bold"), bootstyle="info")
+        self.lbl_news_sent.pack(anchor=W)
+        
+        self.lbl_news_date = ttk.Label(info_frame, text="DATE: --", font=("Helvetica", 9), bootstyle="secondary")
+        self.lbl_news_date.pack(anchor=W)
+
+        self.lbl_news_status = ttk.Label(top_frame, text="MARKET WATCH: INITIALIZING...", font=("Helvetica", 10), bootstyle="secondary")
+        self.lbl_news_status.pack(side=BOTTOM, anchor=W, pady=(5, 0))
+        
+        ttk.Button(top_frame, text="🔄 Refresh News Now", bootstyle="info-outline", command=self._force_news_refresh).pack(side=RIGHT)
+
+        # Main Content: Split into Calendar and Headlines
+        content_panes = ttk.Panedwindow(container, orient=HORIZONTAL)
+        content_panes.pack(fill=BOTH, expand=YES)
+
+        # Left: Economic Calendar
+        cal_frame = ttk.Labelframe(content_panes, text=" Economic Calendar (Forex Factory) ", padding=10)
+        content_panes.add(cal_frame, weight=3)
+
+        columns = ("Time", "Currency", "Impact", "Event", "Actual", "Forecast", "Previous")
+        self.news_tree = ttk.Treeview(cal_frame, columns=columns, show="headings", height=15)
+        
+        widths = {"Time": 60, "Currency": 70, "Impact": 80, "Event": 250, "Actual": 80, "Forecast": 80, "Previous": 80}
+        for col in columns:
+            self.news_tree.heading(col, text=col)
+            self.news_tree.column(col, width=widths[col], anchor=W)
+        
+        self.news_tree.tag_configure('High', foreground='#d9534f')
+        self.news_tree.tag_configure('Medium', foreground='#f0ad4e')
+        self.news_tree.tag_configure('Low', foreground='#5bc0de')
+        
+        self.news_tree.pack(fill=BOTH, expand=YES)
+
+        # Right: Global Headlines
+        head_frame = ttk.Labelframe(content_panes, text=" Global Headlines & Sentiment ", padding=10)
+        content_panes.add(head_frame, weight=2)
+
+        self.news_feed = ScrolledText(head_frame, height=15, autohide=True, font=("Helvetica", 9))
+        self.news_feed.pack(fill=BOTH, expand=YES)
+        self.news_feed.tag_config('positive', foreground='lightgreen')
+        self.news_feed.tag_config('negative', foreground='#ff6b6b')
+        self.news_feed.tag_config('volatile', foreground='#feca57')
+
+    def _force_news_refresh(self):
+        self._last_news_update = 0
+        self._heavy_refresh()
+        self.show_toast("Refreshing News Data...", "info")
+
+    def _update_news_ui(self):
+        try:
+            now = time.time()
+            if now - self._last_news_update < 60: # Update UI every 60s
+                return
+            
+            sym = self.symbol_var.get()
+            
+            # 1. Update Calendar
+            upcoming = news_manager.get_calendar_summary(sym, count=15)
+            self.news_tree.delete(*self.news_tree.get_children())
+            
+            for ev in upcoming:
+                impact = ev.get('impact', 'Low')
+                self.news_tree.insert("", tk.END, values=(
+                    ev.get('time'),
+                    ev.get('currency', 'USD'),
+                    impact,
+                    ev.get('title'),
+                    ev.get('actual', '-'),
+                    ev.get('forecast', '-'),
+                    ev.get('previous')
+                ), tags=(impact,))
+
+            # 2. Update Sentiment & Status
+            score, summary, risks = news_manager.get_market_sentiment()
+            color = "success" if score >= 3 else "danger" if score <= -3 else "info"
+            self.lbl_news_sent.configure(text=f"SENTIMENT: {summary.upper()}", bootstyle=color)
+            
+            full_date = time.strftime("%A, %B %d, %Y | %H:%M:%S")
+            self.lbl_news_date.configure(text=f"LAST UPDATED: {full_date}")
+
+            # 2b. Update Watch Status
+            status = getattr(news_manager, 'fetch_status', 'OFFLINE')
+            st_color = "success" if status == "ACTIVE" else "warning" if "RATE" in status else "danger"
+            self.lbl_news_status.configure(text=f"MARKET WATCH: {status}", bootstyle=st_color)
+
+            # 3. Update Headlines Feed
+            self.news_feed.delete("1.0", tk.END)
+            self.news_feed.insert(tk.END, "📢 LATEST GLOBAL THEMES:\n\n")
+            
+            for h in news_manager.headlines:
+                tag = "neutral"
+                h_lower = h.lower()
+                if any(w in h_lower for w in ["war", "conflict", "tariff", "attack", "sanction", "tension", "strike", "escalat"]): tag = "negative"
+                elif any(w in h_lower for w in ["growth", "deal", "improvement", "surge", "resolution", "bullish", "recovery"]): tag = "positive"
+                elif any(w in h_lower for w in ["trump", "fed", "election", "policy"]): tag = "volatile"
+                
+                self.news_feed.insert(tk.END, f"• {h}\n\n", tag)
+            
+            self._last_news_update = now
+        except Exception as e:
+            logging.debug(f"News UI update error: {e}")
+
     def _build_settings_tab(self):
         container = ttk.Frame(self.tab_settings)
         container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
@@ -332,7 +452,8 @@ class TradingApp(ttk.Window):
             "TBS_Turtle": {"name": "TBS Turtle", "rec": "Rec: H1"},
             "CRT_TBS": {"name": "CRT Master", "rec": "Rec: H1/H4"},
             "PD_Parameter": {"name": "PD Array Logic", "rec": "Rec: Daily/H4"},
-            "News_Sentiment": {"name": "News Sentiment", "rec": "Rec: All"},
+            "News_Sentiment": {"name": "News Sentiment Filter", "rec": "Rec: Block risky news"},
+            "Force_News": {"name": "Force Trade (News)", "rec": "Ignore news panic block"},
             "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"}
         }
 
@@ -665,6 +786,9 @@ class TradingApp(ttk.Window):
                     if hasattr(self, 'tf_combo'):
                         self.tf_combo.set(ea_tf)
                 self.last_active_tf = ea_tf
+        
+        # 4. Update News UI (if tab is visible or on cycle)
+        self._update_news_ui()
 
     # --- NEW: Strategy Feedback Updater ---
     def update_strategy_status(self, strat_key, action, reason):

@@ -381,6 +381,8 @@ ENUM_TIMEFRAMES StringToTF(string tf_str) {
     if(tf_str == "H1") return PERIOD_H1;
     if(tf_str == "H4") return PERIOD_H4;
     if(tf_str == "D1") return PERIOD_D1;
+    if(tf_str == "W1") return PERIOD_W1;
+    if(tf_str == "MN") return PERIOD_MN1;
     return PERIOD_CURRENT;
 }
 // NEW: Get TF index for cooldown (0-6 for M1 to D1)
@@ -438,7 +440,7 @@ void ProcessCommand(string cmd) {
  
     if(action == "TF_CHANGE") {
         if(ArraySize(parts) < 3) return;
-        string new_tf = parts[1];
+        string new_tf = parts[2];
         int tf_minutes = GetTFMinutes(new_tf);
         ENUM_TIMEFRAMES p = PERIOD_CURRENT;
         if(tf_minutes==1) p=PERIOD_M1; else if(tf_minutes==5) p=PERIOD_M5; else if(tf_minutes==15) p=PERIOD_M15;

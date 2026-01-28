@@ -151,32 +151,31 @@ class MT5Connector:
         # Stale/missing: Queue and wait (prevent duplicate queuing)
         cmd = f"GET_HISTORY|{self.active_symbol}|{timeframe}|{count}"
         with self.lock:
-            if cmd not in self.command_queue:
+            # SAFETY: If queue is over 50 commands, it's jammed. Clear it.
+            if len(self.command_queue) > 50:
+                logger.warning("🚨 Connection Jammed. Clearing command queue!")
+                self.command_queue = [cmd] 
+            elif cmd not in self.command_queue:
                 self.command_queue.append(cmd)
                 logger.debug(f"📡 History requested for {timeframe} ({self.active_symbol})")
-            else:
-                logger.debug(f"⏳ History for {timeframe} already in queue, waiting...")
         
         start_time = time.time()
-        while time.time() - start_time < 20.0:  # Increased from 10s to 20s for parallel loads
+        while time.time() - start_time < 15.0: # Reduced wait to keep loop fast
             with self.history_lock:
                 cache = self.history_cache.get(timeframe, {})
                 if cache and 'data' in cache:
                     candles = cache['data']
-                    if len(candles) > 0:
-                        last_bar_ts = candles[-1].get('time', 0)
-                        m1_time = self.last_bar_times.get("M1", 0)
-                        # NEW: Allow stale data to pass through, but log it for visibility
-                        if m1_time > 0 and timeframe != "M1" and last_bar_ts < m1_time - (GetTFMinutes(timeframe) * 60 * 2):
-                            lag_sec = int(m1_time - last_bar_ts)
-                            logger.debug(f"ℹ️ {timeframe} data received but is lagging M1 by {lag_sec}s")
-                        
-                        self.last_good_data[timeframe] = last_bar_ts
-                        self.last_bar_times[timeframe] = last_bar_ts
+                    if len(candles) > 10: # Accept partial data to prevent blocking
                         return candles
-            time.sleep(0.5)  # Slightly slower poll to reduce CPU contention
+            time.sleep(0.5)
         
-        logger.warning(f"⚠️ History timeout for {timeframe} – no real data received in 20s.")
+        # FINAL FALLBACK: If we have ANY old data, use it instead of returning empty
+        with self.history_lock:
+            if timeframe in self.history_cache:
+                logger.warning(f"⚠️ {timeframe} timeout; using stale cache to prevent crash")
+                return self.history_cache[timeframe]['data']
+        
+        logger.warning(f"⚠️ History timeout for {timeframe} – no data received.")
         return []
 
     def _generate_dummy_candles(self, timeframe, count):
