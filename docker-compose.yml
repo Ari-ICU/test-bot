@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: mt5_algo_terminal
+    env_file: .env
+    # Maps host.docker.internal to the host's IP address
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - DISPLAY=host.docker.internal:0.0
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
