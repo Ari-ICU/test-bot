@@ -33,6 +33,7 @@ import strategy.tbs_breakout_retest as tbs_retest
 import strategy.reversal as reversal_strat
 import strategy.crt_tbs_master as crt_tbs
 import strategy.pd_array_parameter as pd_strat
+import strategy.drqn_strategy as drqn_strat # Import DRQN
 
 # Analysis & Utilities
 from core.indicators import Indicators 
@@ -223,6 +224,7 @@ def bot_logic(app):
 
             strategy_configs = [
                 ("AI_Predict", lambda c, d, p: (ai_signal, {"reason": ai_pred})),
+                ("DRQN", lambda c, d, p: drqn_strat.analyze_drqn_setup(c, d)), # NEW DRQN
                 ("Trend", lambda c, d, p: trend.analyze_trend_setup(c, d, p)),
                 ("ICT_SB", lambda c, d, p: ict_strat.analyze_ict_setup(c, d, p)),
                 ("Scalp", lambda c, d, p: scalping.analyze_scalping_setup(c, d, timeframe=tf)),
@@ -295,7 +297,7 @@ def bot_logic(app):
                         slippage_pct = abs(real_price - signal_price) / signal_price * 100
                         if slippage_pct > threshold: 
                             log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Slippage {slippage_pct:.2f}% > {threshold}% | Try manually or wait for next bar.{Style.RESET_ALL}")
-                            continue 
+                            continue
 
                         # Proceed with execution calculations OUTSIDE lock
                         current_price = real_price

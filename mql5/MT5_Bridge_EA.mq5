@@ -28,6 +28,10 @@ bool g_force_candle_reload = false;
 ENUM_TIMEFRAMES g_auto_tfs[] = {PERIOD_M1, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4, PERIOD_D1, PERIOD_W1};  // Added W1
 datetime g_tf_cooldown[8] = {0,0,0,0,0,0,0,0};  // Index 7=W1
 string g_tf_names[8] = {"M1","M5","M15","M30","H1","H4","D1","W1"};  // Added W1
+
+// NEW: Requested history tracking
+string g_history_req_tf = "";
+int g_history_req_count = 350;
 int OnInit() {
    EventSetMillisecondTimer(TimerInterval);
    g_current_period = _Period;
@@ -308,7 +312,14 @@ void OnTimer() {
     for(int h=0; h<ArraySize(tf_names); h++) {  // Dynamic, now 8
         ENUM_TIMEFRAMES htf = htf_list[h];
         string tf_label = tf_names[h];
-        string hist_json = GetHistoryJson(_Symbol, htf, 350);
+        
+        // Use requested count if this TF matches the request, otherwise default to 350
+        int count_to_get = 350;
+        if(tf_label == g_history_req_tf) {
+            count_to_get = g_history_req_count;
+        }
+        
+        string hist_json = GetHistoryJson(_Symbol, htf, count_to_get);
         if(hist_json != "" && StringLen(hist_json) > 2) {
             post_freezer.Add("&history|" + tf_label + "=" + hist_json);
         } else {
@@ -470,10 +481,10 @@ void ProcessCommand(string cmd) {
         return;
     }
  
-    if(action == "RELOAD_CANDLES") {
-        g_candles_to_send = 300;
+    if(action == "RELOAD_CANDLES" || action == "RELOAD_HISTORY" || action == "REFRESH_CHARTS") {
+        if(g_history_req_count < 300) g_history_req_count = 300;
         g_force_candle_reload = true;
-        Print("🔄 RELOAD_CANDLES Requested – Will send fresh ", g_candles_to_send, " bars next poll");
+        Print("🔄 ", action, " Requested – Will refresh history (Current count: ", g_history_req_count, ")");
         return;
     }
  
@@ -490,37 +501,34 @@ void ProcessCommand(string cmd) {
             count_str = parts[3]; // e.g., "350"
         } else {
             count_str = parts[2]; // Legacy: |symbol|count
+            tf_param = g_tf_string; 
         }
+        
         // Cooldown check (NEW: per-TF, 1s min to prevent spam)
         int tf_idx = GetTFIndex(tf_param);
         if(tf_idx >= 0 && TimeCurrent() - g_tf_cooldown[tf_idx] < 1) {
-            return; // Skip if recent for this TF
+            // return; // Don't return, let it update the requested count even if on cooldown
         }
         if(tf_idx >= 0) g_tf_cooldown[tf_idx] = TimeCurrent();
         
         int requested = (int)StringToInteger(count_str);
         if(StringLen(count_str) == 0 || requested <= 0) {
             requested = 500; // Default if invalid/0
-            // Throttled warning (NEW: once per 10s per TF to reduce spam)
-            static datetime last_warn_time[7] = {0};
-            if(tf_idx >= 0 && TimeCurrent() - last_warn_time[tf_idx] > 10) {
-                Print("⚠️ GET_HISTORY: Invalid count '" + count_str + "' for TF '" + tf_param + "' – Defaulting to 500");
-                last_warn_time[tf_idx] = TimeCurrent();
-            } else if(tf_idx < 0) {
-                Print("⚠️ GET_HISTORY: Invalid count '" + count_str + "' – Defaulting to 500");
-            }
         }
-        g_candles_to_send = requested;
+        
+        // Update trackers
+        g_history_req_tf = tf_param;
+        g_history_req_count = requested;
+        g_candles_to_send = requested; // For legacy &candles=
         g_force_candle_reload = true;
       
         // FIXED: Improved poke – Use effective count & check result
+        ENUM_TIMEFRAMES p = StringToTF(tf_param);
         MqlRates dummy[];
-        int copied = CopyRates(_Symbol, g_current_period, 0, g_candles_to_send, dummy);
-        int effective_bars = (copied > 0) ? copied : iBars(_Symbol, g_current_period);
-        // Log only if no cooldown skip (reduce spam)
-        if(tf_idx < 0 || TimeCurrent() - g_tf_cooldown[tf_idx] >= 1) {
-            Print("📥 GET_HISTORY Requested: ", requested, " bars (TF: ", tf_param, ", effective: ", effective_bars, "). Poked MT5 memory.");
-        }
+        int copied = CopyRates(symbol, p, 0, requested, dummy);
+        int effective_bars = (copied > 0) ? copied : iBars(symbol, p);
+        
+        Print("📥 GET_HISTORY Requested: ", requested, " bars (TF: ", tf_param, ", effective: ", effective_bars, "). Poked MT5 memory.");
         return;
     }
  

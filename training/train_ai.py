@@ -40,12 +40,12 @@ def download_and_train():
     
     logger.info(f"🔄 Requesting {count} candles of {tf_str} data for training symbol: {symbol}...")
     # Trigger history collection
-    connector.request_history(count) 
+    connector.request_history(tf_str, count=count) 
     
     # Wait for candles
     candles = []
     for i in range(120):
-        candles = connector.get_tf_candles(tf_str, count=count)
+        candles = connector.request_history(tf_str, count=count)
         if len(candles) >= 5000: # Threshold for high-quality training
             logger.info(f"✅ Received {len(candles)} candles. Starting training...")
             break
