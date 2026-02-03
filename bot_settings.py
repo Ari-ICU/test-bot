@@ -3,20 +3,14 @@ import os
 from dotenv import load_dotenv
 from typing import Any, Dict, Optional
 import logging
-
-# Load variables from .env file
 load_dotenv()
-
 logger = logging.getLogger(__name__)
-
 class Config:
     def __init__(self, path: str = "config.json"):
-        # Resolve config.json relative to this file's directory
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.path = os.path.join(base_dir, path)
         self.data: Dict[str, Any] = self._load()
-        self._validate_required()  # Check essentials
-
+        self._validate_required()
     def _load(self) -> Dict[str, Any]:
         """Load JSON with error handling."""
         try:
@@ -29,60 +23,50 @@ class Config:
         except json.JSONDecodeError as e:
             logger.error(f"❌ Invalid JSON in {self.path}: {e} – using defaults")
             return self._get_defaults()
-
     def _get_defaults(self) -> Dict[str, Any]:
         """Sane defaults matching your risk/scalping setup."""
         return {
-            # MT5
             "mt5": {"host": "127.0.0.1", "port": 8001, "enabled": True, "active_account": 0},
-            # Telegram
             "telegram": {"enabled": True, "bot_token": "", "chat_id": ""},
-        # Risk (Aligned with Professional Risk Control)
         "risk": {
-            "max_drawdown": 5.0,           # Max drawdown limit
-            "daily_loss_limit": 5.0,       # 5% Max Daily Loss threshold
-            "risk_per_trade": 1.0,         # 1% Risk per Trade
-            "max_trades": 15,              # Max trades per day
-            "cool_off_seconds": 300,       # 5-minute psychological cool-off
-            "max_open_positions": 10,      # Maximum concurrent positions
-            "max_positions_per_symbol": 3, # Allow multiple positions per asset for scaling
-            "max_positions_per_sector": 5, # Allow more sector exposure
-            "reputable_brokers": ["MetaQuotes", "ICMarkets", "Exness", "Pepperstone", "FXTM", "XM", "Hantec"], # Expanded list
-            "require_validated_model": True, # Model risk
-            "hedging_allowed": True,       # Event risk: allow hedging
+            "max_drawdown": 5.0,
+            "daily_loss_limit": 5.0,
+            "risk_per_trade": 1.0,
+            "max_trades": 15,
+            "cool_off_seconds": 300,
+            "max_open_positions": 10,
+            "max_positions_per_symbol": 3,
+            "max_positions_per_sector": 5,
+            "reputable_brokers": ["MetaQuotes", "ICMarkets", "Exness", "Pepperstone", "FXTM", "XM", "Hantec"],
+            "require_validated_model": True,
+            "hedging_allowed": True,
             "lot_size": 0.01,
             "crypto_risk_multiplier": 0.5,
             "forex_risk_multiplier": 1.0
         },
-        # Auto Trading
         "auto_trading": {"enabled": True, "max_positions": 5, "lot_size": 0.01},
-        # Scalping (Dynamic SL/TP settings)
         "scalping": {
-            "rsi_period": 14, 
-            "tp_amount": 0.50, 
+            "rsi_period": 14,
+            "tp_amount": 0.50,
             "max_spread": 20,
-            "crt_htf_minutes": 240, 
-            "crypto_atr_multiplier": 1.5,  # 1.5x ATR for Dynamic SL
-            "forex_atr_multiplier": 1.5,   # 1.5x ATR for Dynamic SL
-            "risk_reward_ratio": 1.5       # 1.5 Reward-to-Risk ratio
+            "crt_htf_minutes": 240,
+            "crypto_atr_multiplier": 1.5,
+            "forex_atr_multiplier": 1.5,
+            "risk_reward_ratio": 1.5
         },
-        # Other
         "update_interval_seconds": 60,
         "sentiment": {"enabled": True, "min_score": 0.2}
     }
-
     def get(self, key: str, default: Any = None) -> Any:
         """Get value: Env (with aliases) > Nested JSON > default. Auto-convert types."""
-        # Env check with aliases (handles your TELEGRAM_BOT_TOKEN)
         env_key_standard = key.upper().replace('.', '_')
-        env_keys = [env_key_standard, f"BOT_{env_key_standard}"] 
+        env_keys = [env_key_standard, f"BOT_{env_key_standard}"]
         env_val = None
         for ek in env_keys:
             env_val = os.getenv(ek)
             if env_val is not None:
                 break
         if env_val is not None:
-            # Auto-convert: int for IDs/ports, float for risks/lots
             if any(x in key.lower() for x in ['id', 'port', 'trades', 'positions']):
                 try: return int(env_val)
                 except ValueError: pass
@@ -90,8 +74,6 @@ class Config:
                 try: return float(env_val)
                 except ValueError: pass
             return env_val
-
-        # Nested JSON support (e.g., 'telegram.bot_token' -> data['telegram']['bot_token'])
         if '.' in key:
             parts = key.split('.')
             val = self.data
@@ -101,10 +83,7 @@ class Config:
                 else:
                     return default
             return val if val != {} else default
-
-        # Flat key
         return self.data.get(key, default)
-
     def _validate_required(self):
         """Warn on missing Telegram/MT5 keys."""
         missing = []
