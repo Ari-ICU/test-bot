@@ -21,73 +21,83 @@ def detect_patterns(candles, df=None):
         'bullish_engulfing': False, 'bearish_engulfing': False,
         'bullish_pinbar': False, 'bearish_pinbar': False,
         'bullish_fvg': False, 'bearish_fvg': False,
-        'bullish_ifvg': False, 'bearish_ifvg': False,  # Added Inverse FVG
+        'bullish_ifvg': False, 'bearish_ifvg': False,
         'bullish_flag': False, 'bearish_flag': False,
         'supply_zone': False, 'demand_zone': False,
         'double_top': False, 'double_bottom': False,
-        'inside_bar': False, 'turtle_soup_buy': False, 'turtle_soup_sell': False,
+        'inside_bar': False, 
+        'turtle_soup_buy': False, 'turtle_soup_sell': False,
         'ict_bullish_mss': False, 'ict_bearish_mss': False, 
-        'ict_bullish_fvg': False, 'ict_bearish_fvg': False
+        'ict_bullish_fvg': False, 'ict_bearish_fvg': False,
+        'ote_bullish': False, 'ote_bearish': False,
+        'cisd_bullish': False, 'cisd_bearish': False,
+        'po3_accumulation': False, 'po3_manipulation': False
     }
 
     def body(k): return abs(k['close'] - k['open'])
     avg_body = df['close'].diff().abs().rolling(14).mean().iloc[-1]
 
     # --- 1. REGULAR FAIR VALUE GAPS (FVG) ---
-    # Bullish: Low of C3 (p1) is higher than High of C1 (p3). No overlapping wicks.
     if p1['low'] > p3['high']:
         signals['bullish_fvg'] = True
-        # ICT Displacement: Quick move to the upside (Large body)
-        if body(p2) > (avg_body * 1.5):
-            signals['ict_bullish_fvg'] = True
+        if body(p2) > (avg_body * 1.5): signals['ict_bullish_fvg'] = True
 
-    # Bearish: High of C3 (p1) is lower than Low of C1 (p3). No overlapping wicks.
     if p1['high'] < p3['low']:
         signals['bearish_fvg'] = True
-        # ICT Displacement: Quick move to the downside (Large body)
-        if body(p2) > (avg_body * 1.5):
-            signals['ict_bearish_fvg'] = True
+        if body(p2) > (avg_body * 1.5): signals['ict_bearish_fvg'] = True
 
     # --- 2. INVERSE FAIR VALUE GAPS (iFVG) ---
-    # Definition: A regular FVG that got "violated" or broken through.
-    
-    # Bullish iFVG: A previous Bearish FVG zone is violated by a close above it
-    # Check if a Bearish FVG existed (p3_low > p1_high) and current price closed above C1 low
     if p3['low'] > p1['high'] and c['close'] > p3['low']:
         signals['bullish_ifvg'] = True
-
-    # Bearish iFVG: A previous Bullish FVG zone is violated by a close below it
-    # Check if a Bullish FVG existed (p3_high < p1_low) and current price closed below C1 high
     if p3['high'] < p1['low'] and c['close'] < p3['high']:
         signals['bearish_ifvg'] = True
 
     # --- 3. ICT: MARKET STRUCTURE SHIFT (MSS) ---
-    # Price breaks recent high/low with displacement.
     recent_high = df['high'].iloc[-15:-2].max()
     recent_low = df['low'].iloc[-15:-2].min()
     if c['close'] > recent_high: signals['ict_bullish_mss'] = True
     if c['close'] < recent_low: signals['ict_bearish_mss'] = True
 
-    # --- 4. ENGULFING PATTERNS ---
-    if c['close'] > c['open'] and p1['close'] < p1['open']:
-        if c['close'] > p1['open'] and c['open'] < p1['close']:
-            signals['bullish_engulfing'] = True
+    # --- 4. OTE (Optimal Trade Entry: 0.618 - 0.786) ---
+    # We look for a retracement into the OTE zone after a displacement move.
+    if signals['ict_bullish_mss']:
+        swing_low = df['low'].iloc[-10:].min()
+        swing_high = df['high'].iloc[-10:].max()
+        range_size = swing_high - swing_low
+        if range_size > 0:
+            ote_low = swing_low + (range_size * 0.618)
+            ote_high = swing_low + (range_size * 0.786)
+            if ote_low <= c['close'] <= ote_high:
+                signals['ote_bullish'] = True
 
-    if c['close'] < c['open'] and p1['close'] > p1['open']:
-        if c['close'] < p1['open'] and c['open'] > p1['close']:
-            signals['bearish_engulfing'] = True
+    if signals['ict_bearish_mss']:
+        swing_high = df['high'].iloc[-10:].max()
+        swing_low = df['low'].iloc[-10:].min()
+        range_size = swing_high - swing_low
+        if range_size > 0:
+            ote_high = swing_high - (range_size * 0.618)
+            ote_low = swing_high - (range_size * 0.786)
+            if ote_low <= c['close'] <= ote_high:
+                signals['ote_bearish'] = True
 
-    # --- 5. PINBARS ---
-    total_len = c['high'] - c['low']
-    if total_len > 0:
-        lower_wick = min(c['close'], c['open']) - c['low']
-        upper_wick = c['high'] - max(c['close'], c['open'])
-        if lower_wick > (total_len * 0.6) and upper_wick < (total_len * 0.2):
-            signals['bullish_pinbar'] = True
-        if upper_wick > (total_len * 0.6) and lower_wick < (total_len * 0.2):
-            signals['bearish_pinbar'] = True
+    # --- 5. CISD (Change in State of Delivery) ---
+    # Happens after a sweep when price closes back inside the previous candle's range with momentum.
+    if signals['ict_bullish_mss'] and c['close'] > p2['high']:
+        signals['cisd_bullish'] = True
+    if signals['ict_bearish_mss'] and c['close'] < p2['low']:
+        signals['cisd_bearish'] = True
 
-    # --- 6. TURTLE SOUP (CRT) ---
+    # --- 6. PO3 (Power of 3: Accumulation, Manipulation, Distribution) ---
+    # Look for low volume accumulation followed by a quick manipulation wick.
+    vol_avg = df['volume'].rolling(20).mean().iloc[-1] if 'volume' in df else 1
+    is_low_vol = df['volume'].iloc[-5:-1].mean() < vol_avg if 'volume' in df else True
+    if is_low_vol and abs(df['close'].iloc[-5:-1].mean() - df['open'].iloc[-5:-1].mean()) < avg_body:
+        signals['po3_accumulation'] = True
+        
+    if signals['po3_accumulation'] and (signals['turtle_soup_buy'] or signals['turtle_soup_sell']):
+        signals['po3_manipulation'] = True
+
+    # --- 7. TURTLE SOUP ---
     if len(df) >= 20:
         prev_20_high = df['high'].iloc[-21:-1].max()
         prev_20_low = df['low'].iloc[-21:-1].min()
@@ -95,16 +105,5 @@ def detect_patterns(candles, df=None):
             signals['turtle_soup_buy'] = True
         if p1['high'] > prev_20_high and c['close'] < prev_20_high:
             signals['turtle_soup_sell'] = True
-
-    # --- 7. ADDITIONAL FILTERS (Inside Bar, Double Top/Bottom) ---
-    if c['high'] < p1['high'] and c['low'] > p1['low']:
-        signals['inside_bar'] = True
-
-    history = df.iloc[-25:-5]
-    if len(history) > 0:
-        swing_high = history['high'].max()
-        swing_low = history['low'].min()
-        if abs(c['high'] - swing_high) < (swing_high * 0.001): signals['double_top'] = True
-        if abs(c['low'] - swing_low) < (swing_low * 0.001): signals['double_bottom'] = True
 
     return signals

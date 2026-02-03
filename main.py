@@ -226,14 +226,14 @@ def bot_logic(app):
                 ("AI_Predict", lambda c, d, p: (ai_signal, {"reason": ai_pred})),
                 ("DRQN", lambda c, d, p: drqn_strat.analyze_drqn_setup(c, d)), # NEW DRQN
                 ("Trend", lambda c, d, p: trend.analyze_trend_setup(c, d, p)),
-                ("ICT_SB", lambda c, d, p: ict_strat.analyze_ict_setup(c, d, p)),
+                ("ICT_Master", lambda c, d, p: ict_strat.analyze_ict_setup(c, d, p)),
                 ("Scalp", lambda c, d, p: scalping.analyze_scalping_setup(c, d, timeframe=tf)),
                 ("Breakout", lambda c, d, p: breakout.analyze_breakout_setup(c, d)),
                 ("TBS_Retest", lambda c, d, p: tbs_retest.analyze_tbs_retest_setup(c, d, p)),
                 ("TBS_Turtle", lambda c, d, p: tbs_strat.analyze_tbs_turtle_setup(c, d, p)),
                 ("Reversal", lambda c, d, p: reversal_strat.analyze_reversal_setup(c, d, p)),
                 ("CRT_TBS", lambda c, d, p: crt_tbs.analyze_crt_tbs_setup(c, connector.request_history(get_higher_tf(tf), count=100), connector.active_symbol, tf, get_higher_tf(tf), app.crt_reclaim_var.get())),
-                ("PD_Parameter", lambda c, d, p: pd_strat.analyze_pd_parameter_setup(c, d, p)),  # FIXED: Key/UI match + pass patterns
+                ("PD_Parameter", lambda c, d, p: pd_strat.analyze_pd_parameter_setup(c, d, p)), 
             ]
 
             for name, analyze_func in strategy_configs:
@@ -272,7 +272,6 @@ def bot_logic(app):
                             logger.info(f"🎯 SIGNAL DETECTED: {log_msg}")
 
                     # FIXED: Enhanced Trade Block with Debug Logs + Min ATR Fallback
-                    # FIXED: Enhanced Trade Block - Minimize Lock Duration
                     if signal in ["BUY", "SELL"] and app.auto_trade_var.get():
                         # SAFETY: Only one trade per bar per timeframe
                         if latest_bar_time <= last_trade_bar.get(tf, 0):
@@ -303,9 +302,32 @@ def bot_logic(app):
                         current_price = real_price
                         sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
                         
-                        can_trade, msg = risk.can_trade(0) 
+                        # 0. STALE DATA PROTECTION (Safety First)
+                        # If the bar we are trading on is more than 5 mins old (on LTF), it's dangerous.
+                        if is_stale and tf in ["M1", "M5", "M15"]:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Data is stale ({int(check_lag)}s). Refreshing...{Style.RESET_ALL}")
+                            connector.force_sync()
+                            continue
+
+                        # CALC DRAWDOWN (Market Risk)
+                        balance = connector.get_account_balance()
+                        info = connector.account_info 
+                        equity = info.get('equity', balance)
+                        drawdown_pct = max(0.0, (balance - equity) / balance * 100.0) if balance > 0 else 0.0
                         
-                        # NEW: Global News Sentiment Safety Block
+                        # COLLECT CONTEXT (Concentration/Liquidity/Credit/Model Risk)
+                        open_positions = connector.positions
+                        broker = info.get('broker', "MetaQuotes")
+                        
+                        can_trade, msg = risk.can_trade(
+                            drawdown_pct, 
+                            open_positions=open_positions, 
+                            symbol=connector.active_symbol, 
+                            broker_name=broker, 
+                            strategy_name=name
+                        ) 
+                        
+                        # NEW: Global News Sentiment Safety Block (Event Risk)
                         if can_trade and app.strat_vars.get("News_Sentiment", tk.BooleanVar(value=True)).get():
                             n_score, n_summary, _ = news_manager.get_market_sentiment()
                             if n_score <= -5: # Moderate to High Panic
@@ -317,9 +339,6 @@ def bot_logic(app):
                                     msg = f"News Panic ({n_score}) - Use 'Force Trade (News)' in Settings to unlock"
 
                         if can_trade:
-                            balance = connector.get_account_balance()
-                            info = connector.account_info # This uses lock briefly
-                            equity = info.get('equity', balance)
                             lots = risk.calculate_lot_size(balance, current_price, sl, connector.active_symbol, equity=equity)
                             lots = max(lots, 0.01) if lots > 0 else 0.01
                             
@@ -447,10 +466,10 @@ def bot_logic(app):
                 print(summary_text)
                 print("-" * 60 + "\n")
                 
-                # Auto-refresh if too many are stale (be more lenient: > 75% of TFs)
+                # Auto-refresh if too many are stale (be more lenient: > 3 TFs)
                 stale_count = sum(1 for v in stale_tf_map.values() if v)
-                if stale_count >= 6: # If 6 or more TFs are stale
-                    if now - last_stale_log.get('global', 0) > 300: # Max one refresh every 5 min
+                if stale_count >= 3: # If 3 or more TFs are stale
+                    if now - last_stale_log.get('global', 0) > 60: # Max one refresh every 1 min
                         logger.warning(f"⚠️ {stale_count} TFs Stale. Requesting MT5 Global Refresh...")
                         connector.force_sync()
                         last_stale_log['global'] = now

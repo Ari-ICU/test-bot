@@ -5,25 +5,52 @@ logger = logging.getLogger("AssetDetector")
 def detect_asset_type(symbol: str) -> str:
     """
     Classify symbol as 'forex' or 'crypto'.
-    Examples: XAUUSD/EURUSD -> 'forex'; BTCUSD/ETHUSD -> 'crypto'.
     """
-    symbol_upper = symbol.upper().replace('M', '')  # Ignore suffixes like 'm'
+    symbol_upper = symbol.upper().replace('M', '').replace('.', '')
     
-    forex_keywords = [
-        "XAU", "XAG", "EUR", "GBP", "USD", "JPY", "AUD", "CAD", "CHF", "NZD", 
-        "HKD", "SGD", "MXN", "ZAR", "CNH", "TRY", "RUB", "BRL"
-    ]
-    crypto_keywords = [
-        "BTC", "ETH", "ADA", "DOT", "SOL", "CRYPTO", "XRP", "LTC", "LINK", 
-        "XLM", "BNB", "AVAX", "DOGE", "SHIB", "TRX", "MATIC"
-    ]
-    
+    crypto_keywords = ["BTC", "ETH", "ADA", "DOT", "SOL", "CRYPTO", "XRP", "LTC", "LINK", "XLM", "BNB", "AVAX", "DOGE", "SHIB", "TRX", "MATIC"]
     if any(kw in symbol_upper for kw in crypto_keywords):
         return "crypto"
-    elif any(kw in symbol_upper for kw in forex_keywords):
-        return "forex"
-    else:
-        # Check for common crypto suffixes or patterns if keywords fail
-        if "USD" in symbol_upper and (len(symbol_upper) > 6 or symbol_upper[:3] in ["TRX", "XRP"]):
-             return "crypto"
-        return "forex"
+    return "forex"
+
+def detect_sector(symbol: str) -> str:
+    """
+    Categorize asset into sectors for concentration risk management (Image Ref: Concentration risk).
+    For Forex, it groups by the primary currency to avoid over-exposure to one economy (Country Risk).
+    """
+    symbol_upper = symbol.upper().replace('M', '').replace('.', '')
+    
+    if any(kw in symbol_upper for kw in ["XAU", "GOLD"]):
+        return "sector_gold"
+    if any(kw in symbol_upper for kw in ["XAG", "SILVER"]):
+        return "sector_silver"
+    if any(kw in symbol_upper for kw in ["BTC", "ETH", "SOL", "DOGE"]):
+        return "sector_crypto"
+    if any(kw in symbol_upper for kw in ["US30", "NAS100", "SPX500", "GER30", "HK50"]):
+        return "sector_indices"
+    
+    # Forex Sectors (grouped by major currency to handle Country/Economy Risk)
+    if "USD" in symbol_upper: return "sector_usd"
+    if "EUR" in symbol_upper: return "sector_eur"
+    if "GBP" in symbol_upper: return "sector_gbp"
+    if "JPY" in symbol_upper: return "sector_jpy"
+    if "CHF" in symbol_upper: return "sector_chf"
+    if "AUD" in symbol_upper: return "sector_aud"
+    if "CAD" in symbol_upper: return "sector_cad"
+    if "NZD" in symbol_upper: return "sector_nzd"
+    
+    return "sector_other"
+
+def get_risk_profile(symbol: str) -> str:
+    """
+    Classify assets as 'risk-on' or 'risk-off' for liquidity risk diversification (Image Ref: Liquidity risk).
+    """
+    symbol_upper = symbol.upper().replace('M', '').replace('.', '')
+    
+    # Risk-Off Assets (Safe Havens)
+    risk_off_keywords = ["XAU", "GOLD", "JPY", "CHF", "USD"]
+    
+    # If it's a pair like EURUSD, it's a mix, but we'll classify based on the presence of safety.
+    if any(kw in symbol_upper for kw in ["XAU", "GOLD", "JPY", "CHF"]):
+        return "risk-off"
+    return "risk-on"

@@ -37,23 +37,39 @@ class Config:
             "mt5": {"host": "127.0.0.1", "port": 8001, "enabled": True, "active_account": 0},
             # Telegram
             "telegram": {"enabled": True, "bot_token": "", "chat_id": ""},
-            # Risk (your values)
-            "risk": {
-                "max_drawdown": 5.0, "daily_loss_limit": 2.0, "lot_size": 0.01,
-                "max_trades": 20, "risk_per_trade": 1.0, "crypto_risk_multiplier": 0.5,
-                "forex_risk_multiplier": 1.0
-            },
-            # Auto Trading
-            "auto_trading": {"enabled": True, "max_positions": 1, "lot_size": 0.01},
-            # Scalping (your values)
-            "scalping": {
-                "rsi_period": 14, "tp_amount": 0.50, "max_spread": 20,
-                "crt_htf_minutes": 240, "crypto_atr_multiplier": 2.0, "forex_atr_multiplier": 1.0
-            },
-            # Other
-            "update_interval_seconds": 60,
-            "sentiment": {"enabled": True, "min_score": 0.2}
-        }
+        # Risk (Aligned with Professional Risk Control)
+        "risk": {
+            "max_drawdown": 5.0,           # Max drawdown limit
+            "daily_loss_limit": 5.0,       # 5% Max Daily Loss threshold
+            "risk_per_trade": 1.0,         # 1% Risk per Trade
+            "max_trades": 15,              # Max trades per day
+            "cool_off_seconds": 300,       # 5-minute psychological cool-off
+            "max_open_positions": 10,      # Maximum concurrent positions
+            "max_positions_per_symbol": 3, # Allow multiple positions per asset for scaling
+            "max_positions_per_sector": 5, # Allow more sector exposure
+            "reputable_brokers": ["MetaQuotes", "ICMarkets", "Exness", "Pepperstone", "FXTM", "XM", "Hantec"], # Expanded list
+            "require_validated_model": True, # Model risk
+            "hedging_allowed": True,       # Event risk: allow hedging
+            "lot_size": 0.01,
+            "crypto_risk_multiplier": 0.5,
+            "forex_risk_multiplier": 1.0
+        },
+        # Auto Trading
+        "auto_trading": {"enabled": True, "max_positions": 5, "lot_size": 0.01},
+        # Scalping (Dynamic SL/TP settings)
+        "scalping": {
+            "rsi_period": 14, 
+            "tp_amount": 0.50, 
+            "max_spread": 20,
+            "crt_htf_minutes": 240, 
+            "crypto_atr_multiplier": 1.5,  # 1.5x ATR for Dynamic SL
+            "forex_atr_multiplier": 1.5,   # 1.5x ATR for Dynamic SL
+            "risk_reward_ratio": 1.5       # 1.5 Reward-to-Risk ratio
+        },
+        # Other
+        "update_interval_seconds": 60,
+        "sentiment": {"enabled": True, "min_score": 0.2}
+    }
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get value: Env (with aliases) > Nested JSON > default. Auto-convert types."""

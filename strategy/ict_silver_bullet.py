@@ -9,48 +9,66 @@ def analyze_ict_setup(candles, df=None, patterns=None):
         if not candles or len(candles) < 30: return "NEUTRAL", "Insufficient data"
         df = pd.DataFrame(candles)
     
-    # 1. Setup Timezones
-    ny_tz = pytz.timezone('America/New_York')
-    kh_tz = pytz.timezone('Asia/Phnom_Penh') # Cambodia Time
+    ict = patterns if patterns else detect_patterns(candles, df=df)
     
-    # 2. Get Current Time in New York (Algorithmic Standard)
+    # Setup Timezones for Silver Bullet Window
+    ny_tz = pytz.timezone('America/New_York')
     now_ny = datetime.now(ny_tz)
     now_hour = now_ny.hour
     
-    # 3. ICT Silver Bullet Windows (New York Local Time)
-    # These are the precise institutional hours for the strategy
-    is_london_sb = (3 <= now_hour < 4)    # London Open: 3 AM - 4 AM NY Time
-    is_am_sb     = (10 <= now_hour < 11)  # NY AM: 10 AM - 11 AM NY Time
-    is_pm_sb     = (14 <= now_hour < 15)  # NY PM: 2 PM - 3 PM NY Time
+    # Silver Bullet Windows
+    is_london_sb = (3 <= now_hour < 4)
+    is_am_sb     = (10 <= now_hour < 11)
+    is_pm_sb     = (14 <= now_hour < 15)
+    in_sb_window = is_london_sb or is_am_sb or is_pm_sb
 
-    if not (is_london_sb or is_am_sb or is_pm_sb):
-        local_time = datetime.now(kh_tz).strftime('%H:%M')
-        ny_time = now_ny.strftime('%H:%M')
-        return "NEUTRAL", f"Outside SB Hours (NY: {ny_time} | Local: {local_time})"
+    # --- MODEL 1: SILVER BULLET (Time-based MSS + FVG) ---
+    if in_sb_window:
+        if ict.get('ict_bullish_mss') and ict.get('ict_bullish_fvg'):
+            return "BUY", "ICT M1: Silver Bullet (MSS + FVG)"
+        if ict.get('ict_bearish_mss') and ict.get('ict_bearish_fvg'):
+            return "SELL", "ICT M1: Silver Bullet (MSS + FVG)"
 
-    # 4. Pattern Detection
-    ict = patterns if patterns else detect_patterns(candles, df=df)
-    
-    # 5. Volatility Filter (Squeeze)
-    is_squeezing = df['is_squeezing'].iloc[-1] if 'is_squeezing' in df else Indicators.is_bollinger_squeeze(df)
+    # --- MODEL 2: CAMERON'S MODEL (Sweep + Displacement + FVG) ---
+    if ict.get('turtle_soup_buy') and ict.get('ict_bullish_fvg'):
+        return "BUY", "ICT M2: Cameron's Model (Sweep + FVG)"
+    if ict.get('turtle_soup_sell') and ict.get('ict_bearish_fvg'):
+        return "SELL", "ICT M2: Cameron's Model (Sweep + FVG)"
 
-    # --- ENTRY STRATEGIES (Aligned with your FVG Slides) ---
-    
-    # Strategy A: Standard ICT (MSS + FVG Displacement)
-    if ict.get('ict_bullish_mss') and ict.get('ict_bullish_fvg'):
-        return "BUY", "ICT SB: MSS + FVG Displacement (NY Session)"
+    # --- MODEL 3: INVERSION FVG (FVG Violation) ---
+    if ict.get('bullish_ifvg') and ict.get('ict_bullish_mss'):
+        return "BUY", "ICT M3: Inversion FVG (Violation)"
+    if ict.get('bearish_ifvg') and ict.get('ict_bearish_mss'):
+        return "SELL", "ICT M3: Inversion FVG (Violation)"
 
-    if ict.get('ict_bearish_mss') and ict.get('ict_bearish_fvg'):
-        return "SELL", "ICT SB: MSS + FVG Displacement (NY Session)"
+    # --- MODEL 4: TURTLE SOUP (Liquidity Grab / Stop Hunt) ---
+    if ict.get('turtle_soup_buy'):
+        return "BUY", "ICT M4: Turtle Soup (Stop Hunt)"
+    if ict.get('turtle_soup_sell'):
+        return "SELL", "ICT M4: Turtle Soup (Stop Hunt)"
 
-    # Strategy B: Inverse FVG (Gap Violation)
-    if ict.get('bullish_ifvg'):
-        return "BUY", "ICT SB: iFVG Violation/Retest"
-        
-    if ict.get('bearish_ifvg'):
-        return "SELL", "ICT SB: iFVG Violation/Retest"
+    # --- MODEL 5: CRT (Candle Reclaim / Displacement Retest) ---
+    # Simplified version: Market Structure Shift with immediate reclaim
+    if ict.get('ict_bullish_mss') and df['close'].iloc[-1] > df['open'].iloc[-1]:
+        return "BUY", "ICT M5: CRT (Candle Reclaim)"
+    if ict.get('ict_bearish_mss') and df['close'].iloc[-1] < df['open'].iloc[-1]:
+        return "SELL", "ICT M5: CRT (Candle Reclaim)"
 
-    if is_squeezing:
-        return "NEUTRAL", "ICT: Squeeze active, waiting for MSS/FVG"
-            
-    return "NEUTRAL", "ICT: Scanning for setups in SB window"
+    # --- MODEL 6: OTE (Optimal Trade Entry 61.8-78.6%) ---
+    if ict.get('ote_bullish'):
+        return "BUY", "ICT M6: OTE (Optimal Trade Entry)"
+    if ict.get('ote_bearish'):
+        return "SELL", "ICT M6: OTE (Optimal Trade Entry)"
+
+    # --- MODEL 7: CISD (Change in State of Delivery) ---
+    if ict.get('cisd_bullish'):
+        return "BUY", "ICT M7: CISD (Delivery Shift)"
+    if ict.get('cisd_bearish'):
+        return "SELL", "ICT M7: CISD (Delivery Shift)"
+
+    # --- MODEL 8: PO3 (Power of 3 - AMD Manipulation) ---
+    if ict.get('po3_manipulation'):
+        direction = "BUY" if ict.get('turtle_soup_buy') else "SELL"
+        return direction, "ICT M8: PO3 (AMD Manipulation)"
+
+    return "NEUTRAL", "ICT: Scanning for model confluence"
