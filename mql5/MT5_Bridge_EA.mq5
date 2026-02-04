@@ -159,8 +159,8 @@ void UpdateCandleHistory() {
     StringFreezer freezer;
     int available = iBars(_Symbol, g_current_period);
     int count = MathMin(g_candles_to_send, available);
-    for(int i=0; i<count; i++) {
-        if(i > 0) freezer.Add("|");
+    for(int i=count-1; i>=0; i--) {
+        if(freezer.Len() > 0) freezer.Add("|");
         freezer.Add(DoubleToString(iHigh(_Symbol, g_current_period, i), _Digits) + "," +
                     DoubleToString(iLow(_Symbol, g_current_period, i), _Digits) + "," +
                     DoubleToString(iOpen(_Symbol, g_current_period, i), _Digits) + "," +
@@ -844,16 +844,15 @@ string GetHistoryJson(string symbol, ENUM_TIMEFRAMES tf, int count) {
     count = MathMin(count, total_bars); 
     string json = "[";
    
-    for(int i = 0; i < count; i++) {
+    for(int i = count - 1; i >= 0; i--) {
         datetime t = iTime(symbol, tf, i);
         double o = iOpen(symbol, tf, i);
         double h = iHigh(symbol, tf, i);
         double l = iLow(symbol, tf, i);
         double c = iClose(symbol, tf, i);
        
-        if(i > 0) json += ","; 
+        if(json != "[") json += ","; 
        
-        
         json += StringFormat(
             "{\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f}",
             (int)t, o, h, l, c

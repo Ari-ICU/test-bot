@@ -39,9 +39,11 @@ def get_higher_tf(ltf):
     }
     return mapping.get(ltf, "D1")
 def safe_reason_formatter(reason):
-
+    if not reason: return "N/A"
     if isinstance(reason, dict):
-        return ", ".join([f"{k}: {v}" for k, v in reason.items()])
+        base = reason.get('reason', 'Signal Confirmed')
+        confluence = [f"{k.upper()}: {reason[k]}" for k in ['tp', 'sl', 'tp1', 'tp2'] if k in reason]
+        return f"{base} ({' | '.join(confluence)})" if confluence else str(base)
     return str(reason)
 def setup_enhanced_logger():
     root_logger = logging.getLogger()
@@ -172,12 +174,12 @@ def bot_logic(app):
             now_ts = int(time.time())
             nonlocal time_offset, offset_detected
             if not offset_detected:
-                if abs(now_ts - latest_bar_time) < 3600:
+                # ONLY sync timezone using M1 or M5 (most reliable current data)
+                if tf in ["M1", "M5"] and abs(now_ts - latest_bar_time) < 3600:
                     time_offset = now_ts - latest_bar_time
                     offset_detected = True
-                    log_queue.put(f"{Fore.MAGENTA}🌐 Timezone Sync Verified: {time_offset}s offset.{Style.RESET_ALL}")
+                    log_queue.put(f"{Fore.MAGENTA}🌐 Timezone Sync Verified (via {tf}): {time_offset}s offset.{Style.RESET_ALL}")
                 elif tf == "M1":
-                    # If M1 is stale, don't sync offset yet
                     pass
             check_lag = now_ts - time_offset - latest_bar_time
             if check_lag > 3600 and tf in ["M1", "M5", "M15"]:
@@ -192,18 +194,20 @@ def bot_logic(app):
             adjusted_now = now_ts - time_offset
             tf_mapping = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400, "W1": 604800, "MN": 2592000}
             tf_sec = tf_mapping.get(tf, 60)
-            max_lag_sec = max(tf_sec * 0.5, 1800)
+            
+            # Universal Stale Check: Data must be within 2 candles of current time
+            max_lag_sec = max(tf_sec * 2, 300) 
             is_stale = False
-            if adjusted_now - latest_bar_time > max_lag_sec:
+            
+            if offset_detected and (adjusted_now - latest_bar_time > max_lag_sec):
                  lag = adjusted_now - latest_bar_time
                  stale_tf_map[tf] = True
                  is_stale = True
-                 if now_ts - last_stale_log[tf] > 300:
+                 if now_ts - last_stale_log.get(tf, 0) > 300:
+                     log_queue.put(f"{Fore.RED}⚠️ {tf} DATA STALE ({int(lag)}s lag). Skipping...{Style.RESET_ALL}")
                      last_stale_log[tf] = now_ts
-                 if now_ts - last_ui_stale_update[tf] > 15:
-                     pass
-            if not is_stale:
-                stale_tf_map[tf] = False
+            else:
+                 stale_tf_map[tf] = False
             if signals_summary[tf] == "WAIT...":
                 signals_summary[tf] = "OK"
             last_processed_bar[tf] = latest_bar_time
@@ -293,10 +297,14 @@ def bot_logic(app):
                         atr_series = df['atr']
                         min_atr = 0.5 if "XAU" in connector.active_symbol.upper() else 0.01
                         current_atr = max(atr_series.iloc[-1], min_atr) if not pd.isna(atr_series.iloc[-1]) else min_atr
-                        # Ensure we have fresh data before checking slippage
-                        if is_stale and tf in ["M1", "M5", "M15"]:
-                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Data is stale ({int(check_lag)}s). Refreshing...{Style.RESET_ALL}")
+                        # Enforce Freshness for ALL TFs (Universal Guard)
+                        if is_stale:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Data is stale ({int(adjusted_now - latest_bar_time)}s). Force syncing...{Style.RESET_ALL}")
                             connector.force_sync()
+                            continue
+                        
+                        if not offset_detected:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Waiting for TimeZone Sync (Need fresh M1/M5 data){Style.RESET_ALL}")
                             continue
 
                         tick = connector.get_tick()
@@ -391,8 +399,13 @@ def bot_logic(app):
                     nonlocal scan_active
                     symbol = connector.active_symbol
                     asset_type = detect_asset_type(symbol)
-                    style = app.style_var.get()
-                    log_queue.put(f"{Fore.MAGENTA}🔄 Multi-TF Scan Cycle Started: {symbol} ({asset_type}) | Style: {style}{Style.RESET_ALL}")
+                    
+                    # Clean UI style (remove emojis and lower)
+                    raw_style = app.style_var.get()
+                    style = "".join([c for c in raw_style if c.isalnum() or c.isspace()]).strip().lower().split()[-1]
+                    if not style: style = "scalp" # fallback
+                    
+                    log_queue.put(f"{Fore.MAGENTA}🔄 Multi-TF Scan Cycle Started: {symbol} ({asset_type}) | Style: {style.upper()}{Style.RESET_ALL}")
                     active_workers = []
                     for tf in AUTO_TABS:
                         t = threading.Thread(target=scan_tf_worker, args=(tf, asset_type, style), daemon=True)
