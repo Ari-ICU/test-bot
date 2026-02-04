@@ -159,14 +159,13 @@ def bot_logic(app):
         try:
             fetch_count = 500 if tf in ["H4", "D1", "W1"] else 350
             candles = connector.request_history(tf, count=fetch_count)
-            if not candles or len(candles) < 50:
-                if not candles:
-                    log_queue.put(f"{Fore.YELLOW}🕐 {tf}: Skipping - No data received from MT5 within timeout{Style.RESET_ALL}")
-                    signals_summary[tf] = "NO DATA"
-                else:
-                    log_queue.put(f"{Fore.YELLOW}🕐 {tf}: Skipping - Insufficient data ({len(candles)}/50){Style.RESET_ALL}")
-                    signals_summary[tf] = "LOW DATA"
+            if not candles or len(candles) < 20: 
                 return
+            
+            # Filter out invalid candles
+            candles = [c for c in candles if c.get('time', 0) > 1000000000]
+            if len(candles) < 10: return
+
             latest_bar_time = candles[-1].get('time', 0)
             if latest_bar_time > last_processed_bar[tf]:
                 log_queue.put(f"{Fore.GREEN}⚡ [{tf}] New Bar detected. Starting Full Analysis...{Style.RESET_ALL}")
@@ -312,14 +311,17 @@ def bot_logic(app):
                             log_queue.put(f"{Fore.RED}❌ {tf} ABORT: No bid/ask tick available{Style.RESET_ALL}")
                             continue
 
+                        # Dynamic Slippage Threshold based on Timeframe
+                        tf_mult = {"M1": 1.0, "M5": 1.5, "M15": 2.0, "M30": 2.5, "H1": 4.0, "H4": 6.0, "D1": 10.0, "W1": 15.0}
+                        base_threshold = tf_mult.get(tf, 1.0)
+                        if "XAU" in connector.active_symbol.upper(): base_threshold *= 1.5
+                        
                         real_price = tick['ask'] if signal == "BUY" else tick['bid']
                         signal_price = df.iloc[-1]['close']
-                        
-                        threshold = 2.0 if "XAU" in connector.active_symbol.upper() else 0.50
                         slippage_pct = abs(real_price - signal_price) / signal_price * 100
                         
-                        if slippage_pct > threshold:
-                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: High Slippage {slippage_pct:.2f}% (Signal: {signal_price:.2f}, Live: {real_price:.2f}). Market volatile or stale sync.{Style.RESET_ALL}")
+                        if slippage_pct > base_threshold:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: High Slippage {slippage_pct:.2f}% (Signal: {signal_price:.2f}, Live: {real_price:.2f}). Max: {base_threshold:.1f}%{Style.RESET_ALL}")
                             continue
 
                         current_price = real_price
