@@ -2,13 +2,6 @@ import pandas as pd
 from core.indicators import Indicators
 from core.patterns import detect_patterns
 def analyze_tbs_retest_setup(candles, df=None, patterns=None):
-    """
-    Implementation of the TBS Breakout & Retest Strategy.
-    Logic: 
-    1. Identify a Break of Structure (BOS).
-    2. Wait for a pullback to the breakout level (Retest).
-    3. Enter on confirmation (Engulfing or Rejection candle).
-    """
     if df is None:
         if not candles or len(candles) < 50:
             return "NEUTRAL", "Insufficient data"

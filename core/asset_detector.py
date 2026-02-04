@@ -1,19 +1,12 @@
 import logging
 logger = logging.getLogger("AssetDetector")
 def detect_asset_type(symbol: str) -> str:
-    """
-    Classify symbol as 'forex' or 'crypto'.
-    """
     symbol_upper = symbol.upper().replace('M', '').replace('.', '')
     crypto_keywords = ["BTC", "ETH", "ADA", "DOT", "SOL", "CRYPTO", "XRP", "LTC", "LINK", "XLM", "BNB", "AVAX", "DOGE", "SHIB", "TRX", "MATIC"]
     if any(kw in symbol_upper for kw in crypto_keywords):
         return "crypto"
     return "forex"
 def detect_sector(symbol: str) -> str:
-    """
-    Categorize asset into sectors for concentration risk management (Image Ref: Concentration risk).
-    For Forex, it groups by the primary currency to avoid over-exposure to one economy (Country Risk).
-    """
     symbol_upper = symbol.upper().replace('M', '').replace('.', '')
     if any(kw in symbol_upper for kw in ["XAU", "GOLD"]):
         return "sector_gold"
@@ -33,9 +26,6 @@ def detect_sector(symbol: str) -> str:
     if "NZD" in symbol_upper: return "sector_nzd"
     return "sector_other"
 def get_risk_profile(symbol: str) -> str:
-    """
-    Classify assets as 'risk-on' or 'risk-off' for liquidity risk diversification (Image Ref: Liquidity risk).
-    """
     symbol_upper = symbol.upper().replace('M', '').replace('.', '')
     risk_off_keywords = ["XAU", "GOLD", "JPY", "CHF", "USD"]
     if any(kw in symbol_upper for kw in ["XAU", "GOLD", "JPY", "CHF"]):

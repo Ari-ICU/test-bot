@@ -47,12 +47,10 @@ class AIPredictor:
         ]
         os.makedirs(self.model_dir, exist_ok=True)
     def _get_model_path(self, asset_type, style="scalp"):
-        """Helper to get path based on asset type and style"""
         if not asset_type:
             return os.path.join(self.model_dir, f"trading_model_{style}.joblib")
         return os.path.join(self.model_dir, f"trading_model_{asset_type}_{style}.joblib")
     def load_model(self, asset_type="forex", style="scalp"):
-        """Load the pre-trained model for a specific asset type and style"""
         if self.model is not None and self.current_asset_type == asset_type and self.current_style == style:
             return
         specific_path = self._get_model_path(asset_type, style)
@@ -76,7 +74,6 @@ class AIPredictor:
             logging.getLogger("Main").warning(f"⚠️ No AI Model found for {asset_type}/{style}. Checked: {[specific_path, style_path, generic_path]}")
             self.model = None
     def _detect_market_structure(self, df, lookback=20):
-        """Detect market structure: HH/HL (uptrend), LH/LL (downtrend), or range"""
         highs = df['high'].tail(lookback)
         lows = df['low'].tail(lookback)
         recent_high = highs.max()
@@ -89,20 +86,6 @@ class AIPredictor:
             return -1
         return 0
     def _detect_bos_choch(self, df, lookback=30):
-        """
-        Detect VALID Break of Structure (BOS) and Change of Character (CHoCH)
-        Based on 10 professional validation rules:
-        1. BOS confirms trend continuation (not prediction)
-        2. Trend identification comes first (HH/HL or LH/LL)
-        3. Mark correct key levels (significant swing points only)
-        4. Wait for actual break (decisive, strong momentum)
-        5. Candle body close confirmation (not just wicks)
-        6. Bullish BOS vs Bearish BOS distinction
-        7. Pullback after BOS (best entry area)
-        8. Multi-timeframe confirmation
-        9. Liquidity sweeps vs real BOS
-        10. Avoid common mistakes (minor breaks, immediate entries)
-        """
         bos = 0
         bos_strength = 0
         choch = 0
@@ -168,7 +151,6 @@ class AIPredictor:
         bos_weighted = bos * max(0.5, bos_strength)
         return bos_weighted, pullback_zone, choch
     def _detect_liquidity_zones(self, df, lookback=30):
-        """Detect buy-side and sell-side liquidity (equal highs/lows)"""
         recent = df.tail(lookback)
         current_price = df['close'].iloc[-1]
         highs = recent['high']
@@ -191,7 +173,6 @@ class AIPredictor:
                 sweep = 1
         return buyside_liq, sellside_liq, sweep
     def _detect_order_blocks(self, df, lookback=20):
-        """Detect bullish and bearish order blocks (institutional entry zones)"""
         bullish_ob = 0
         bearish_ob = 0
         confluence = 0
@@ -218,7 +199,6 @@ class AIPredictor:
         confluence = (bullish_ob + bearish_ob) / 2
         return bullish_ob, bearish_ob, confluence
     def _detect_supply_demand_zones(self, df, lookback=40):
-        """Detect fresh vs tested supply/demand zones"""
         fresh_demand = 0
         fresh_supply = 0
         zone_strength = 0
@@ -246,7 +226,6 @@ class AIPredictor:
                     break
         return fresh_demand, fresh_supply, zone_strength
     def _detect_fvg(self, df):
-        """Detect Fair Value Gaps (price imbalances)"""
         bullish_fvg = 0
         bearish_fvg = 0
         fvg_size = 0
@@ -262,7 +241,6 @@ class AIPredictor:
             bearish_fvg = 1
         return bullish_fvg, bearish_fvg, fvg_size
     def _calculate_premium_discount(self, df, lookback=50):
-        """Calculate if price is in premium (50-100%) or discount (0-50%) zone"""
         recent = df.tail(lookback)
         high = recent['high'].max()
         low = recent['low'].min()
@@ -277,7 +255,6 @@ class AIPredictor:
         equilibrium_dist = abs(current - fib_50) / fib_50
         return discount, premium, equilibrium_dist
     def _detect_session_timing(self, df):
-        """Detect if currently in kill zone (optimal trading session)"""
         in_kill_zone = 0.5
         session_bias = 0
         return in_kill_zone, session_bias
@@ -343,9 +320,6 @@ class AIPredictor:
             logger.error(f"Error preparing AI features: {e}")
             return None
     def predict(self, df, asset_type="forex", style="scalp"):
-        """
-        Returns: 'BUY', 'SELL', or 'NEUTRAL'
-        """
         self.load_model(asset_type, style)
         if self.model is None:
             return "NEUTRAL", 0.0
@@ -387,9 +361,6 @@ class AIPredictor:
             logging.getLogger("Main").error(f"AI Prediction error: {e}")
             return "NEUTRAL", 0.0
     def train_model(self, historical_df, asset_type="forex", style="scalp"):
-        """
-        Trains and saves a model for a specific asset type and trading style.
-        """
         logger.info(f"🧠 Training AI Model ({style}) for {asset_type}...")
         data = historical_df.copy()
         data['price_vs_ema200'] = (data['close'] - data['ema_200']) / data['ema_200'] * 100

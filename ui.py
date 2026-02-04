@@ -10,7 +10,6 @@ from collections import deque
 from filters.news import _manager as news_manager
 AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
 class QueueHandler(logging.Handler):
-    """Class to send logging records to a queue"""
     def __init__(self, log_queue):
         super().__init__()
         self.log_queue = log_queue
@@ -52,7 +51,9 @@ class TradingApp(ttk.Window):
             "PD_Parameter": tk.BooleanVar(value=True),
             "News_Sentiment": tk.BooleanVar(value=True),
             "Force_News": tk.BooleanVar(value=False),
-            "Reversal": tk.BooleanVar(value=True)
+            "Reversal": tk.BooleanVar(value=True),
+            "SMC_Master": tk.BooleanVar(value=True),
+            "PowerTF": tk.BooleanVar(value=True)
         }
         self.last_avail_syms = []
         self.last_account_info = None
@@ -70,7 +71,6 @@ class TradingApp(ttk.Window):
         self._start_heavy_refresh()
         self.after(100, self._auto_start_bot)
     def _auto_start_bot(self):
-        """FIXED: Auto-starts bot on init, sets status to RUNNING, starts thread."""
         if not self.bot_running:
             return
         self.status_var.set("BOT: RUNNING")
@@ -144,7 +144,9 @@ class TradingApp(ttk.Window):
             ("CRT_TBS", "CRT MT5 Master"),
             ("PD_Parameter", "PD Array Logic"),
             ("News_Sentiment", "News Sentiment"),
-            ("Reversal", "Reversal Engine")
+            ("Reversal", "Reversal Engine"),
+            ("SMC_Master", "SMC Master"),
+            ("PowerTF", "Power of TF")
         ]
         for key, name in strat_list:
             f = ttk.Frame(strategy_monitor_inner)
@@ -338,7 +340,9 @@ class TradingApp(ttk.Window):
             "PD_Parameter": {"name": "PD Array Logic", "rec": "Rec: Daily/H4"},
             "News_Sentiment": {"name": "News Sentiment Filter", "rec": "Rec: Block risky news"},
             "Force_News": {"name": "Force Trade (News)", "rec": "Ignore news panic block"},
-            "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"}
+            "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"},
+            "SMC_Master": {"name": "SMC Master (Patterns)", "rec": "Rec: M15/H1"},
+            "PowerTF": {"name": "Power of Timeframe", "rec": "Rec: M15 (H4/H1 Bias)"}
         }
         col = 0
         row = 0
@@ -383,7 +387,6 @@ class TradingApp(ttk.Window):
         if hasattr(self.connector, 'change_timeframe'):
             self.connector.change_timeframe(self.symbol_var.get(), minutes)
     def force_refresh(self):
-        """Force connector to sync symbols and TF from EA."""
         if hasattr(self.connector, 'force_sync'):
             self.connector.force_sync()
         if hasattr(self.connector, 'refresh_symbols'):
@@ -401,7 +404,6 @@ class TradingApp(ttk.Window):
             self.telegram_bot.chat_id = self.tg_chat_var.get()
             logging.info("Telegram credentials updated")
     def toggle_bot(self):
-        """FIXED: Toggle now works with auto-start; UI updates thread-safe via after()."""
         self.bot_running = not self.bot_running
         if self.bot_running:
             self.after(0, lambda: self.status_var.set("BOT: RUNNING"))
@@ -435,26 +437,22 @@ class TradingApp(ttk.Window):
                 self.after(0, lambda: self._on_trade_error(btn, original_text, str(e)))
         threading.Thread(target=send_in_background, daemon=True).start()
     def _get_buy_sell_button(self, action):
-        """Helper to get button reference for feedback."""
         if action == "BUY":
             return self.buy_btn
         elif action == "SELL":
             return self.sell_btn
         return None
     def _on_trade_success(self, btn, original_text, action, vol):
-        """Handle successful trade feedback."""
         if btn:
             btn.configure(text=original_text, state="normal", bootstyle="success-outline")
             btn.configure(bootstyle="success")
             self.after(300, lambda: btn.configure(bootstyle="success-outline"))
         self.show_toast(f"{action} Order Sent! ({vol} lots)", "success")
     def _on_trade_error(self, btn, original_text, error_msg):
-        """Handle trade error feedback."""
         if btn:
             btn.configure(text=original_text, state="normal", bootstyle="danger-outline")
         self.show_toast(f"Trade Error: {error_msg}", "error")
     def show_toast(self, message, toast_type="info"):
-        """Show smooth toast notification."""
         if self.toast_label:
             self.toast_label.destroy()
         self.toast_label = ttk.Label(self, text=message, bootstyle=f"{toast_type}-inverse")
@@ -463,10 +461,6 @@ class TradingApp(ttk.Window):
             self.after(delay, self.toast_label.destroy)
         fade_out()
     def manual_close(self, mode):
-        """
-        Fixed: Sends specific action strings (CLOSE_WIN, CLOSE_LOSS, CLOSE_ALL)
-        to match the MQL5 ProcessCommand logic. Run in thread to avoid UI freeze.
-        """
         sym = self.symbol_var.get()
         cmd = f"CLOSE_{mode}|{sym}"
         def do_close():

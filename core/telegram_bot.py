@@ -22,13 +22,11 @@ class TelegramBot:
         }
         threading.Thread(target=self._message_worker, daemon=True).start()
     def start_polling(self):
-        """Starts a background thread to poll for commands"""
         if not self.token or self.is_polling: return
         self.is_polling = True
         threading.Thread(target=self._polling_loop, daemon=True).start()
         logger.info("📡 Telegram Command Polling Started.")
     def stop_polling(self):
-        """Stops the telegram polling loop"""
         self.is_polling = False
         logger.info("🛑 Telegram Command Polling Stopped.")
     def _polling_loop(self):
@@ -51,14 +49,12 @@ class TelegramBot:
     def set_risk_manager(self, risk_manager):
         self.risk_manager = risk_manager
     def track_analysis(self, prediction, patterns, sentiment):
-        """Updates the internal cache for the /analysis command"""
         self.last_analysis = {
             "prediction": prediction,
             "patterns": patterns if patterns else "None detected",
             "sentiment": sentiment
         }
     def _message_worker(self):
-        """Worker thread that processes the message queue with rate limiting"""
         while True:
             try:
                 text, chat_id = self.message_queue.get()
@@ -97,13 +93,11 @@ class TelegramBot:
             finally:
                 self.message_queue.task_done()
     def send_message(self, text, chat_id=None):
-        """Adds a message to the queue to be sent asynchronously and rate-limited"""
         if not self.token: 
             logger.warning("⚠️ Telegram: No bot token provided.")
             return
         self.message_queue.put((text, chat_id))
     def process_webhook_update(self, update):
-        """Processes incoming JSON update from Telegram Webhook"""
         try:
             if "message" not in update: return
             msg = update["message"]
@@ -116,7 +110,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error processing Telegram update: {e}")
     def _handle_command(self, text, chat_id):
-        """Parses and executes Telegram commands"""
         if not text: return
         command = text.split()[0].lower()
         response = ""
@@ -224,7 +217,6 @@ class TelegramBot:
         if response:
             self.send_message(response, chat_id)
 class TelegramLogHandler(logging.Handler):
-    """Formats logs with emojis and HTML for Telegram"""
     def __init__(self, bot):
         super().__init__()
         self.bot = bot

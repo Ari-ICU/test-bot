@@ -13,11 +13,6 @@ def get_agent(input_size=5):
         _agent.load(model_path)
     return _agent
 def prepare_features(df):
-    """
-    Replicates the feature engineering from backtest_env.py EXACTLY.
-    Input: df with 'close' column (and others)
-    Output: normalized numpy array of shape (window_size, num_features)
-    """
     feature_df = df.copy()
     if 'time' in feature_df.columns:
         feature_df = feature_df.drop(columns=['time'])
@@ -38,9 +33,6 @@ def prepare_features(df):
     obs = obs_df.iloc[-window_size:].values.astype(np.float32)
     return obs
 def analyze_drqn_setup(candles, df, detected_patterns=None):
-    """
-    Strategy interface compatible with main.py
-    """
     try:
         obs = prepare_features(df)
         if obs is None:

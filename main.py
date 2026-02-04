@@ -24,20 +24,22 @@ import strategy.reversal as reversal_strat
 import strategy.crt_tbs_master as crt_tbs
 import strategy.pd_array_parameter as pd_strat
 import strategy.drqn_strategy as drqn_strat
+import strategy.smc_master as smc_strat
+import strategy.power_tf_master as power_tf
 from core.indicators import Indicators
 from core.asset_detector import detect_asset_type
 from core.predictor import AIPredictor
 from core.patterns import detect_patterns
 init(autoreset=True)
 def get_higher_tf(ltf):
-    """Maps lower timeframes to higher timeframes for multi-TF strategies."""
+
     mapping = {
         "M1": "M15", "M5": "M30", "M15": "H1",
         "M30": "H4", "H1": "H4", "H4": "D1", "D1": "W1"
     }
     return mapping.get(ltf, "D1")
 def safe_reason_formatter(reason):
-    """Safely converts dict or string reasons to string."""
+
     if isinstance(reason, dict):
         return ", ".join([f"{k}: {v}" for k, v in reason.items()])
     return str(reason)
@@ -80,10 +82,10 @@ def bot_logic(app):
     heartbeat_counter = 0
     summary_counter = 0
     def sync_ui_settings():
-        """Syncs UI dashboard variables to internal risk/bot settings."""
+
         risk.max_daily_trades = app.max_trades_var.get()
         risk.cool_off_period = app.cool_off_var.get()
-        risk.risk_per_trade = app.lot_var.get() # Utilizing lot_var as base
+        risk.risk_per_trade = app.lot_var.get()
         connector.active_symbol = app.symbol_var.get()
     
     sync_ui_settings()
@@ -108,36 +110,42 @@ def bot_logic(app):
                     entry = pos['price']
                     current_sl = pos['sl']
                     current_tp = pos['tp']
-                    pos_type = pos['type'] # "BUY" or "SELL"
+                    pos_type = pos['type']
                     curr_price = tick['bid'] if pos_type == "BUY" else tick['ask']
-                    # NEW: Min Hold Time Check (avoiding scalp noise)
-                    # Note: We don't have position entry time in current bridge, 
-                    # so we will skip this for now or assume its okay.
-                    # 1. Breakeven logic
-                    if pm_cfg.get('breakeven_enabled'):
-                        trigger_dist = entry * 0.002 # 0.2% profit trigger
-                        if pos_type == "BUY":
-                            if curr_price > entry + trigger_dist and (current_sl < entry or current_sl == 0):
-                                new_sl = entry + (2 * (entry * 0.0001)) # Tiny profit lock
-                                connector.modify_position(ticket, new_sl, current_tp)
-                                log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven for Ticket #{ticket}{Style.RESET_ALL}")
-                        else:
-                            if curr_price < entry - trigger_dist and (current_sl > entry or current_sl == 0):
-                                new_sl = entry - (2 * (entry * 0.0001))
-                                connector.modify_position(ticket, new_sl, current_tp)
-                                log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven for Ticket #{ticket}{Style.RESET_ALL}")
-                    # 2. Trailing Stop logic
-                    if pm_cfg.get('trailing_stop_enabled'):
-                        trail_dist = entry * 0.005 # 0.5% trailing
-                        if pos_type == "BUY":
-                            potential_sl = curr_price - trail_dist
-                            if potential_sl > current_sl + (entry * 0.0002): # Only move if significant improvement
-                                connector.modify_position(ticket, potential_sl, current_tp)
-                        else:
-                            potential_sl = curr_price + trail_dist
-                            if current_sl == 0 or potential_sl < current_sl - (entry * 0.0002):
-                                connector.modify_position(ticket, potential_sl, current_tp)
-                time.sleep(5)
+
+                    # Improved Position Management logic
+                    if pm_cfg.get('breakeven_enabled') or pm_cfg.get('trailing_stop_enabled'):
+                        dist_to_tp = abs(pos['tp'] - entry)
+                        dist_to_sl = abs(pos['sl'] - entry)
+                        profit_dist = (curr_price - entry) if pos_type == "BUY" else (entry - curr_price)
+                        
+                        # Phase 1: Break-even at 50% distance to TP
+                        if profit_dist > (dist_to_tp * 0.5) and (current_sl < entry if pos_type == "BUY" else current_sl > entry or current_sl == 0):
+                            new_sl = entry + (entry * 0.0002) if pos_type == "BUY" else entry - (entry * 0.0002)
+                            connector.modify_position(ticket, new_sl, current_tp)
+                            log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven (50% Target) for Ticket #{ticket}{Style.RESET_ALL}")
+                        
+                        # Phase 2: Lock 50% Profit at 80% distance to TP
+                        elif profit_dist > (dist_to_tp * 0.8):
+                            locked_profit_price = entry + (dist_to_tp * 0.5) if pos_type == "BUY" else entry - (dist_to_tp * 0.5)
+                            if (pos_type == "BUY" and current_sl < locked_profit_price) or (pos_type == "SELL" and (current_sl > locked_profit_price or current_sl == 0)):
+                                connector.modify_position(ticket, locked_profit_price, current_tp)
+                                log_queue.put(f"{Fore.GREEN}🔒 SECURE: Locked 50% Profit (80% Target) for Ticket #{ticket}{Style.RESET_ALL}")
+
+                        # Standard Trailing Stop if enabled
+                        if pm_cfg.get('trailing_stop_enabled'):
+                            trail_pct = pm_cfg.get('trailing_stop_pct', 0.5) / 100.0
+                            trail_dist = entry * trail_pct
+                            if pos_type == "BUY":
+                                potential_sl = curr_price - trail_dist
+                                if potential_sl > current_sl + (entry * 0.0001):
+                                    connector.modify_position(ticket, potential_sl, current_tp)
+                            else:
+                                potential_sl = curr_price + trail_dist
+                                if current_sl == 0 or potential_sl < current_sl - (entry * 0.0001):
+                                    connector.modify_position(ticket, potential_sl, current_tp)
+                
+                time.sleep(2) # Faster polling for better responsiveness
             except Exception as e:
                 logger.error(f"Position Manager Error: {e}")
                 time.sleep(10)
@@ -164,10 +172,13 @@ def bot_logic(app):
             now_ts = int(time.time())
             nonlocal time_offset, offset_detected
             if not offset_detected:
-                if abs(now_ts - latest_bar_time) < 604800:
+                if abs(now_ts - latest_bar_time) < 3600:
                     time_offset = now_ts - latest_bar_time
                     offset_detected = True
                     log_queue.put(f"{Fore.MAGENTA}🌐 Timezone Sync Verified: {time_offset}s offset.{Style.RESET_ALL}")
+                elif tf == "M1":
+                    # If M1 is stale, don't sync offset yet
+                    pass
             check_lag = now_ts - time_offset - latest_bar_time
             if check_lag > 3600 and tf in ["M1", "M5", "M15"]:
                 if now_ts - last_stale_log.get(tf, 0) > 60:
@@ -227,6 +238,15 @@ def bot_logic(app):
             tf_signal = "NEUTRAL"
             tf_reason = "No strong signals"
             ui_key_map = {"PD_Array": "PD_Parameter"}
+            
+            # Pre-fetch Multi-TF data for PowerTF
+            h1_data, h1_df, h4_data, h4_df = None, None, None, None
+            if tf == "M15" and app.strat_vars.get("PowerTF", tk.BooleanVar(value=True)).get():
+                h1_data = connector.request_history("H1", count=100)
+                h1_df = pd.DataFrame(h1_data) if h1_data else None
+                h4_data = connector.request_history("H4", count=100)
+                h4_df = pd.DataFrame(h4_data) if h4_data else None
+
             strategy_configs = [
                 ("AI_Predict", lambda c, d, p: (ai_signal, {"reason": ai_pred})),
                 ("DRQN", lambda c, d, p: drqn_strat.analyze_drqn_setup(c, d)),
@@ -239,6 +259,8 @@ def bot_logic(app):
                 ("Reversal", lambda c, d, p: reversal_strat.analyze_reversal_setup(c, d, p)),
                 ("CRT_TBS", lambda c, d, p: crt_tbs.analyze_crt_tbs_setup(c, connector.request_history(get_higher_tf(tf), count=100), connector.active_symbol, tf, get_higher_tf(tf), app.crt_reclaim_var.get())),
                 ("PD_Parameter", lambda c, d, p: pd_strat.analyze_pd_parameter_setup(c, d, p)),
+                ("SMC_Master", lambda c, d, p: smc_strat.analyze_smc_setup(c, d, p)),
+                ("PowerTF", lambda c, d, p: power_tf.analyze_power_tf_setup(c, d, h1_data, h1_df, h4_data, h4_df, p) if tf == "M15" else ("NEUTRAL", "PowerTF: M15 Only")),
             ]
             for name, analyze_func in strategy_configs:
                 ui_key = ui_key_map.get(name, name)
@@ -271,23 +293,39 @@ def bot_logic(app):
                         atr_series = df['atr']
                         min_atr = 0.5 if "XAU" in connector.active_symbol.upper() else 0.01
                         current_atr = max(atr_series.iloc[-1], min_atr) if not pd.isna(atr_series.iloc[-1]) else min_atr
-                        tick = connector.get_tick()
-                        if not tick:
-                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: No bid/ask tick available{Style.RESET_ALL}")
-                            continue
-                        real_price = tick['ask'] if signal == "BUY" else tick['bid']
-                        signal_price = df.iloc[-1]['close']
-                        threshold = 1.0 if "XAU" in connector.active_symbol.upper() else 0.50
-                        slippage_pct = abs(real_price - signal_price) / signal_price * 100
-                        if slippage_pct > threshold:
-                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Slippage {slippage_pct:.2f}% > {threshold}% | Market volatile, securing...{Style.RESET_ALL}")
-                            continue
-                        current_price = real_price
-                        sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
+                        # Ensure we have fresh data before checking slippage
                         if is_stale and tf in ["M1", "M5", "M15"]:
                             log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Data is stale ({int(check_lag)}s). Refreshing...{Style.RESET_ALL}")
                             connector.force_sync()
                             continue
+
+                        tick = connector.get_tick()
+                        if not tick:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: No bid/ask tick available{Style.RESET_ALL}")
+                            continue
+
+                        real_price = tick['ask'] if signal == "BUY" else tick['bid']
+                        signal_price = df.iloc[-1]['close']
+                        
+                        threshold = 2.0 if "XAU" in connector.active_symbol.upper() else 0.50
+                        slippage_pct = abs(real_price - signal_price) / signal_price * 100
+                        
+                        if slippage_pct > threshold:
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: High Slippage {slippage_pct:.2f}% (Signal: {signal_price:.2f}, Live: {real_price:.2f}). Market volatile or stale sync.{Style.RESET_ALL}")
+                            continue
+
+                        current_price = real_price
+                        sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
+                        
+                        if isinstance(reason, dict):
+                            if reason.get('sl'): sl = reason['sl']
+                            if reason.get('tp2'): tp = reason['tp2']
+                            elif reason.get('tp1'): tp = reason['tp1']
+                            elif reason.get('tp'): tp = reason['tp']
+                        
+                        sym_upper = connector.active_symbol.upper()
+                        digits = 2 if "XAU" in sym_upper else 3 if "JPY" in sym_upper else 5
+                        sl, tp = round(float(sl), digits), round(float(tp), digits)
                         balance = connector.get_account_balance()
                         info = connector.account_info
                         equity = info.get('equity', balance)

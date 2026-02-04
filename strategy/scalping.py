@@ -3,12 +3,6 @@ import logging
 from core.indicators import Indicators
 logger = logging.getLogger(__name__)
 def analyze_scalping_setup(candles, df=None, timeframe=None):
-    """
-    Optimized M1/M5 Scalping Strategy (SAFE VERSION 2.0)
-    - Added TF guardrail: Only runs on M1/M5.
-    - Granular try-excepts for indicators to isolate bugs.
-    - Enhanced error handling for "Format specifier" crashes.
-    """
     pass
     if df is None:
         if not candles or len(candles) < 50:

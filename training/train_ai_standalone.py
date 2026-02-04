@@ -11,10 +11,6 @@ from core.asset_detector import detect_asset_type
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Trainer")
 def train_from_existing_data():
-    """
-    Train AI model using existing candle data from the running bot.
-    This avoids port conflicts by not starting a new MT5 connection.
-    """
     logger.info("🧠 Starting AI Training (Standalone Mode)")
     logger.info("📊 This will use simulated data for training demonstration")
     logger.info("⚠️  For production training, stop main.py and use train_ai.py")

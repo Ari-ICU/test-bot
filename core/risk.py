@@ -22,9 +22,6 @@ class RiskManager:
         self.daily_trades_count = 0
         self.last_trade_time = 0
     def can_trade(self, current_drawdown_pct, open_positions=None, symbol=None, broker_name=None, strategy_name=None):
-        """
-        Enforces professional discipline and multi-risk management (Market, Liquidity, Concentration, Credit, Model).
-        """
         if open_positions is None: open_positions = []
         open_positions_count = len(open_positions)
         if current_drawdown_pct >= self.max_daily_loss:
@@ -54,16 +51,11 @@ class RiskManager:
                 return False, f"Model Risk: {strategy_name} is not a validated/backtested model."
         return True, "Ready"
     def record_trade(self):
-        """Called after a successful order execution."""
         self.daily_trades_count += 1
         self.last_trade_time = time.time()
     def reset_daily_stats(self):
-        """Reset at the start of a new trading day."""
         self.daily_trades_count = 0
     def calculate_lot_size(self, balance, entry_price, sl_price, symbol, equity=None):
-        """
-        Calculates lot size based on equity risk (Market Risk mitigation).
-        """
         try:
             asset_type = detect_asset_type(symbol)
             sym_upper = symbol.upper()
@@ -91,16 +83,15 @@ class RiskManager:
             logger.error(f"💥 Lot Size Error: {e}")
             return self.min_lot
     def calculate_sl_tp(self, price, action, atr, symbol, digits=None, **kwargs):
-        """
-        Dynamic SL/TP: Market risk solution.
-        """
         asset_type = detect_asset_type(symbol)
         sym_upper = symbol.upper()
-        rr_ratio = self.scalp_cfg.get('risk_reward_ratio', 1.5)
-        atr_mult = self.scalp_cfg.get(f"{asset_type}_atr_multiplier", 1.5)
+        rr_ratio = self.scalp_cfg.get('risk_reward_ratio', 2.5)
+        atr_mult = self.scalp_cfg.get(f"{asset_type}_atr_multiplier", 2.0)
         if digits is None:
             digits = 2 if "XAU" in sym_upper else 3 if "JPY" in sym_upper else 5
         sl_dist = (atr * atr_mult) if (atr and atr > 0) else (price * 0.005)
+        if "XAU" in sym_upper:
+            sl_dist = max(sl_dist, 1.5)
         tp_dist = sl_dist * rr_ratio
         if action == "BUY":
             sl = price - sl_dist

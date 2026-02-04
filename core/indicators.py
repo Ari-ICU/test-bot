@@ -16,7 +16,6 @@ class Indicators:
         return 100 - (100 / (1 + rs))
     @staticmethod
     def calculate_atr(df, period=14):
-        """Average True Range for Volatility"""
         high_low = df['high'] - df['low']
         high_close = np.abs(df['high'] - df['close'].shift())
         low_close = np.abs(df['low'] - df['close'].shift())
@@ -24,7 +23,6 @@ class Indicators:
         return tr.rolling(window=period).mean()
     @staticmethod
     def calculate_adx(df, period=14):
-        """Corrected Wilder's ADX (Trend Strength)"""
         df_copy = df.copy()
         high_low = df_copy['high'] - df_copy['low']
         high_close = np.abs(df_copy['high'] - df_copy['close'].shift())
@@ -45,7 +43,6 @@ class Indicators:
         return adx
     @staticmethod
     def calculate_supertrend(df, period=10, multiplier=3):
-        """Optimized SuperTrend to prevent formatting and performance issues"""
         atr = Indicators.calculate_atr(df, period)
         hl2 = (df['high'] + df['low']) / 2
         upper_vals = (hl2 + (multiplier * atr)).values
@@ -72,7 +69,6 @@ class Indicators:
         return pd.Series(supertrend, index=df.index), pd.Series(final_upperband, index=df.index), pd.Series(final_lowerband, index=df.index)
     @staticmethod
     def calculate_macd(series, fast=12, slow=26, signal=9):
-        """MACD: Moving Average Convergence Divergence"""
         exp1 = series.ewm(span=fast, adjust=False).mean()
         exp2 = series.ewm(span=slow, adjust=False).mean()
         macd = exp1 - exp2
@@ -81,7 +77,6 @@ class Indicators:
         return macd, signal_line, histogram
     @staticmethod
     def calculate_bollinger_bands(series, period=20, std_dev=2):
-        """Bollinger Bands"""
         sma = series.rolling(window=period).mean()
         std = series.rolling(window=period).std()
         upper = sma + (std * std_dev)
@@ -89,7 +84,6 @@ class Indicators:
         return upper, lower
     @staticmethod
     def calculate_keltner_channels(df, period=20, multiplier=1.5):
-        """Keltner Channels using ATR"""
         ema = Indicators.calculate_ema(df['close'], period)
         atr = Indicators.calculate_atr(df, period)
         upper = ema + (multiplier * atr)
@@ -97,18 +91,12 @@ class Indicators:
         return upper, lower
     @staticmethod
     def is_bollinger_squeeze(df, period=20):
-        """Returns True if BB is inside Keltner Channels (The Squeeze)"""
         bb_upper, bb_lower = Indicators.calculate_bollinger_bands(df['close'], period, 2)
         kc_upper, kc_lower = Indicators.calculate_keltner_channels(df, period, 1.5)
         squeeze_series = (bb_upper < kc_upper) & (bb_lower > kc_lower)
         return squeeze_series.iloc[-1]
     @staticmethod
     def calculate_stoch(df, period=14, smooth_k=3, smooth_d=3):
-        """
-        Stochastic Oscillator (Hardened for Low-Vol/Flat Bars)
-        %K = (Current Close - Lowest Low) / (Highest High - Lowest Low) * 100
-        %D = Moving Average of %K
-        """
         low_min = df['low'].rolling(window=period).min()
         high_max = df['high'].rolling(window=period).max()
         range_val = high_max - low_min

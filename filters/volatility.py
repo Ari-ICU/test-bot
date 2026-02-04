@@ -4,10 +4,6 @@ from core.indicators import Indicators
 from core.asset_detector import detect_asset_type
 logger = logging.getLogger("VolatilityFilter")
 def is_volatility_sufficient(candles, symbol, min_atr_threshold=0.01, max_atr_threshold=500.0):
-    """
-    Checks if market volatility is within safe and active limits using ATR.
-    Dynamic thresholds per asset. FIXED: Added debug logging for ATR/len(candles); relaxed crypto min for testing.
-    """
     try:
         if not candles or len(candles) < 20:
             logger.info(f"Volatility: Insufficient candles for {symbol}: {len(candles)} < 20")

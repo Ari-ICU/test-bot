@@ -2,15 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Dict, Any
 def analyze_pd_parameter_setup(candles: list, df: pd.DataFrame, detected_patterns: Dict = None) -> Tuple[str, Any]:
-    """
-    Analyzes PD Array setups for buy/sell signals.
-    Args:
-        candles: List of candle dicts (OHLCV data).
-        df: Pandas DataFrame with pre-computed indicators (ema_200, ema_50, rsi, atr, etc.).
-        detected_patterns: Optional patterns dict (ignored for now).
-    Returns:
-        Tuple of (action: str, reason: dict/str) where action is "BUY", "SELL", or "NEUTRAL".
-    """
     if len(df) < 50:
         return "NEUTRAL", "Insufficient data for PD Array analysis."
     swing_highs, swing_lows = _detect_swings(df)
@@ -58,7 +49,6 @@ def analyze_pd_parameter_setup(candles: list, df: pd.DataFrame, detected_pattern
     }
     return "NEUTRAL", reason
 def _detect_swings(df: pd.DataFrame, window: int = 5) -> Tuple[list, list]:
-    """Detect swing highs and lows using a simple zigzag-like method."""
     highs = []
     lows = []
     for i in range(window, len(df) - window):
@@ -70,7 +60,6 @@ def _detect_swings(df: pd.DataFrame, window: int = 5) -> Tuple[list, list]:
             lows.append((df['close'].iloc[i], df.index[i]))
     return [h[0] for h in highs[-5:]], [l[0] for l in lows[-5:]]
 def _detect_fvgs(df: pd.DataFrame) -> list:
-    """Detect Fair Value Gaps (imbalances between candles)."""
     fvgs = []
     for i in range(2, len(df)):
         prev_high = df['high'].iloc[i-2]

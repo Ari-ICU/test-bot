@@ -88,10 +88,6 @@ class NewsManager:
                 self.url_index += 1
                 logger.error(f"❌ News Fetch Error: {e}")
     def get_upcoming_event(self, symbol):
-        """
-        Returns the closest upcoming High Impact event for the symbol with detailed stats.
-        Returns: (EventName, MinutesUntil, Link, Details)
-        """
         if time.time() - self.last_fetch > self.cache_duration:
             self._fetch_calendar()
         currencies = self._get_currencies(symbol)
@@ -118,9 +114,6 @@ class NewsManager:
             return closest_event, int(min_diff), "https://www.forexfactory.com/calendar", details
         return None, None, None, ""
     def get_calendar_summary(self, symbol, count=15):
-        """
-        Returns upcoming events. If no specific news for symbol, returns all high impact.
-        """
         if time.time() - self.last_fetch > self.cache_duration:
             self._fetch_calendar()
         currencies = self._get_currencies(symbol)
@@ -180,11 +173,6 @@ class NewsManager:
                 currencies.extend(v)
         return list(set(currencies))
     def get_active_impact(self, symbol, buffer_minutes=30):
-        """
-        Checks if there is High Impact news for the symbol's currencies 
-        within +/- buffer_minutes of NOW.
-        Returns: (ActiveBool, EventName, MinutesLeft)
-        """
         if time.time() - self.last_fetch > self.cache_duration:
             self._fetch_calendar()
         if not self.events:
@@ -208,7 +196,6 @@ class NewsManager:
                 pass
         return False, None, 0
     def _fetch_headlines(self):
-        """Fetches latest headlines from Google News RSS for key themes."""
         try:
             now = time.time()
             if now - self.last_headline_fetch < self.headline_cache_duration:
@@ -245,11 +232,6 @@ class NewsManager:
             self._last_headline_fail = time.time()
             logger.error(f"❌ Headline Fetch Error: {e}")
     def get_market_sentiment(self):
-        """
-        Analyzes current headlines and returns a sentiment summary.
-        Returns: (SentimentScore, SummaryText, TopHeadlines)
-        Score: -10 (Very Bearish/Risky) to +10 (Very Bullish/Stable)
-        """
         self._fetch_headlines()
         if not self.headlines:
             return 0, "Neutral (No Data)", []

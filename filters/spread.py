@@ -2,10 +2,6 @@ import logging
 from core.asset_detector import detect_asset_type
 logger = logging.getLogger("SpreadFilter")
 def is_spread_fine(symbol, bid, ask, max_spread_limit=0.50):
-    """
-    Checks if the current market spread is within acceptable limits.
-    Dynamic based on asset type.
-    """
     logger.debug(f"Spread Check for {symbol}: Bid={bid}, Ask={ask}")
     if bid == 0 or ask == 0:
         logger.warning(f"Invalid prices for {symbol}: Bid={bid}, Ask={ask} – Check MT5 symbol selection")

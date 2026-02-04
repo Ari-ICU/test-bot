@@ -3,10 +3,6 @@ import pandas as pd
 import gymnasium as gym
 from gymnasium import spaces
 class TradingEnv(gym.Env):
-    """
-    A custom OpenAI Gym-like environment for Financial DRQN testing.
-    As per Algorithm 1: Financial DRQN Algorithm.
-    """
     def __init__(self, df, window_size=10, initial_balance=10000):
         super(TradingEnv, self).__init__()
         self.raw_df = df.reset_index(drop=True)

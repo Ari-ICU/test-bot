@@ -12,7 +12,6 @@ class Config:
         self.data: Dict[str, Any] = self._load()
         self._validate_required()
     def _load(self) -> Dict[str, Any]:
-        """Load JSON with error handling."""
         try:
             if os.path.exists(self.path):
                 with open(self.path, 'r') as f:
@@ -24,7 +23,6 @@ class Config:
             logger.error(f"❌ Invalid JSON in {self.path}: {e} – using defaults")
             return self._get_defaults()
     def _get_defaults(self) -> Dict[str, Any]:
-        """Sane defaults matching your risk/scalping setup."""
         return {
             "mt5": {"host": "127.0.0.1", "port": 8001, "enabled": True, "active_account": 0},
             "telegram": {"enabled": True, "bot_token": "", "chat_id": ""},
@@ -63,7 +61,6 @@ class Config:
         "sentiment": {"enabled": True, "min_score": 0.2}
     }
     def get(self, key: str, default: Any = None) -> Any:
-        """Get value: Env (with aliases) > Nested JSON > default. Auto-convert types."""
         env_key_standard = key.upper().replace('.', '_')
         env_keys = [env_key_standard, f"BOT_{env_key_standard}"]
         env_val = None
@@ -90,7 +87,6 @@ class Config:
             return val if val != {} else default
         return self.data.get(key, default)
     def _validate_required(self):
-        """Warn on missing Telegram/MT5 keys."""
         missing = []
         if not self.get('telegram.bot_token') and not os.getenv('TELEGRAM_BOT_TOKEN'):
             missing.append('telegram.bot_token / TELEGRAM_BOT_TOKEN')

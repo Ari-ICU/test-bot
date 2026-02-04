@@ -41,7 +41,6 @@ class MT5Connector:
         self.server = None
         self.pending_changes = {}
     def start(self):
-        """FIXED: Retry with exponential backoff on bind fail."""
         max_retries = 3
         retry_delay = 0.1
         for attempt in range(max_retries):
@@ -73,7 +72,6 @@ class MT5Connector:
             self.server.shutdown()
             self.server.server_close()
     def _find_free_port(self, start_port):
-        """ULTIMATE FIX: Raw socket.bind() test – instant, no temp server races."""
         port = start_port
         max_scan = 20
         for i in range(max_scan):
@@ -105,11 +103,9 @@ class MT5Connector:
             raise Exception(f"CRITICAL: Can't bind even fallback {fallback_port} – check firewall/privs")
     @property
     def account_info(self):
-        """FIXED: Returns full account dict (thread-safe read)."""
         with self.lock:
             return self._account_data.copy()
     def request_history(self, timeframe="M5", count=350):
-        """FIXED: Skip queue if cache fresh (<5s); queue+wait only on stale/missing."""
         with self.history_lock:
             cache = self.history_cache.get(timeframe, {})
             if cache and 'data' in cache:
@@ -149,7 +145,6 @@ class MT5Connector:
         logger.warning(f"⚠️ History timeout for {timeframe} – no data received.")
         return []
     def _generate_dummy_candles(self, timeframe, count):
-        """FIXED: TF-specific dummy (minutes * 60 for timestamps)."""
         dummy_candles = []
         base_price = 2000.0
         tf_min = GetTFMinutes(timeframe)
@@ -166,7 +161,6 @@ class MT5Connector:
         self.last_good_data[timeframe] = dummy_candles[-1]['time']
         return dummy_candles
     def _generate_minimal_candles(self, timeframe, min_count=20):
-        """FIXED: Minimal dummy for fallback (quick, TF-aware)."""
         return self._generate_dummy_candles(timeframe, min_count)
     def get_last_bar_time(self, tf):
         return self.last_bar_times.get(tf, 0)
@@ -177,14 +171,12 @@ class MT5Connector:
         logger.info(f"Trade queued: {cmd}")
         return True
     def modify_position(self, ticket, sl, tp):
-        """Modified: Queue SL/TP update for an existing position."""
         cmd = f"ORDER_MODIFY|{ticket}|{sl}|{tp}"
         with self.lock:
             self.command_queue.append(cmd)
         logger.info(f"Modify queued: {cmd}")
         return True
     def close_ticket(self, ticket):
-        """Modified: Queue closure of a specific ticket."""
         cmd = f"CLOSE_TICKET|{ticket}"
         with self.lock:
             self.command_queue.append(cmd)
@@ -207,24 +199,20 @@ class MT5Connector:
                 return None
         return {'bid': bid, 'ask': ask}
     def change_symbol(self, symbol):
-        """FIXED: Queue symbol change."""
         cmd = f"SYMBOL_CHANGE|{symbol}"
         with self.lock:
             self.command_queue.append(cmd)
     def change_timeframe(self, symbol, minutes):
-        """FIXED: Queue TF change (symbol + timeframe string)."""
         tf_map = {1:"M1", 5:"M5", 15:"M15", 30:"M30", 60:"H1", 240:"H4", 1440:"D1", 10080:"W1", 43200:"MN"}
         tf_str = tf_map.get(minutes, "M5")
         cmd = f"TF_CHANGE|{symbol}|{tf_str}"
         with self.lock:
             self.command_queue.append(cmd)
     def refresh_symbols(self):
-        """FIXED: Queue symbols refresh."""
         cmd = "GET_SYMBOLS"
         with self.lock:
             self.command_queue.append(cmd)
     def force_sync(self):
-        """FIXED: Queue aggressive full refresh."""
         self.refresh_symbols()
         with self.lock:
             self.command_queue.append("REFRESH_CHARTS")

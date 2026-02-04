@@ -3,10 +3,6 @@ import logging
 logger = logging.getLogger("NewsFilter")
 _manager = NewsManager()
 def is_high_impact_news_near(symbol):
-    """
-    Checks ForexFactory Calendar for high impact news within 30 mins (pre/post).
-    Returns (is_blocked, headline, time_info)
-    """
     try:
         is_active, event_name, mins_diff = _manager.get_active_impact(symbol, buffer_minutes=35)
         if is_active:
@@ -20,9 +16,6 @@ def is_high_impact_news_near(symbol):
         logger.error(f"News Check Error: {e}")
         return False, "", ""
 def get_next_news_info(symbol):
-    """
-    Returns (EventName, MinutesUntil, Link) for display purposes.
-    """
     try:
         return _manager.get_upcoming_event(symbol)
     except:
@@ -54,9 +47,6 @@ class NewsSentimentAnalyzer:
         self.last_fetch_time = 0
         self.cached_result = ("NEUTRAL", "No news")
     def fetch_signals(self, symbol):
-        """
-        Scans RSS feeds with 60s caching.
-        """
         import time
         if time.time() - self.last_fetch_time < 60:
             return self.cached_result

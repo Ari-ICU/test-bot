@@ -11,10 +11,6 @@ SESSIONS = {
     "Sydney": {"start": 7, "end": 16, "tz": "Australia/Sydney"}
 }
 def get_detailed_session_status(symbol="XAUUSD"):
-    """
-    Returns: (bool is_open, str session_type, float risk_multiplier)
-    Crypto: Always open, but adjust risk during low-liq hours.
-    """
     asset_type = detect_asset_type(symbol)
     if asset_type == "crypto":
         now_utc = datetime.utcnow()
@@ -41,7 +37,6 @@ def is_market_open(symbol, tz_name="Auto", start_hour=8, end_hour=20):
     is_open, _, _ = get_detailed_session_status(symbol)
     return is_open
 def is_silver_bullet(symbol):
-    """ICT Silver Bullet hours (NY Time) – Skip for crypto."""
     if detect_asset_type(symbol) == "crypto":
         return True
     try:
