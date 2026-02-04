@@ -28,14 +28,15 @@ class TradingApp(ttk.Window):
         self.log_queue = queue.Queue(maxsize=1000)
         self.bot_running = True
         self.bot_thread = None
-        risk_conf = self.risk.config if hasattr(self.risk, 'config') else {}
-        self.lot_var = tk.DoubleVar(value=risk_conf.get('lot_size', 0.01))
+        risk_cfg = self.config.get('risk', {})
+        self.lot_var = tk.DoubleVar(value=risk_cfg.get('lot_size', 0.01))
         self.symbol_var = tk.StringVar(value=self.connector.active_symbol)
         self.tf_var = tk.StringVar(value=self.connector.active_tf) 
         self.style_var = tk.StringVar(value="scalp") 
         self.auto_trade_var = tk.BooleanVar(value=False)
-        self.max_trades_var = tk.IntVar(value=risk_conf.get('max_trades', 5))
-        self.cool_off_var = tk.IntVar(value=risk_conf.get('cool_off_seconds', 5)) 
+        self.max_trades_var = tk.IntVar(value=risk_cfg.get('max_trades', 10))
+        self.max_pos_var = tk.IntVar(value=risk_cfg.get('max_open_positions', 10))
+        self.cool_off_var = tk.IntVar(value=risk_cfg.get('cool_off_seconds', 300)) 
         self.crt_reclaim_var = tk.DoubleVar(value=0.25)
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
@@ -237,6 +238,10 @@ class TradingApp(ttk.Window):
         crt_f = ttk.Frame(conf_frame); crt_f.grid(row=4, column=1, sticky=EW, padx=5, pady=2)
         ttk.Label(crt_f, text="🎯 CRT Reclaim:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
         ttk.Spinbox(crt_f, from_=0.05, to=0.95, increment=0.05, textvariable=self.crt_reclaim_var, width=10, bootstyle="primary").pack(fill=X)
+
+        mop_f = ttk.Frame(conf_frame); mop_f.grid(row=5, column=0, sticky=EW, padx=5, pady=2)
+        ttk.Label(mop_f, text="🛡️ Max Open Pos:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
+        ttk.Spinbox(mop_f, from_=1, to=1000, textvariable=self.max_pos_var, width=10, bootstyle="danger").pack(fill=X)
     def _build_console_tab(self):
         console_frame = ttk.Frame(self.tab_console)
         console_frame.pack(fill=BOTH, expand=YES, padx=10, pady=10)

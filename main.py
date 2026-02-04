@@ -84,8 +84,8 @@ def bot_logic(app):
     heartbeat_counter = 0
     summary_counter = 0
     def sync_ui_settings():
-
         risk.max_daily_trades = app.max_trades_var.get()
+        risk.max_open_positions = app.max_pos_var.get()
         risk.cool_off_period = app.cool_off_var.get()
         risk.risk_per_trade = app.lot_var.get()
         connector.active_symbol = app.symbol_var.get()
