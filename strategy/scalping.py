@@ -14,6 +14,8 @@ def analyze_scalping_setup(candles, df=None, timeframe=None):
         if not candles or len(candles) < 50:
             return "NEUTRAL", {"reason": "Insufficient data (<50 candles)"}
         df = pd.DataFrame(candles)
+    else:
+        df = df.copy()
     try:
         numeric_cols = ['open', 'high', 'low', 'close']
         for col in numeric_cols:

@@ -13,6 +13,8 @@ def analyze_tbs_retest_setup(candles, df=None, patterns=None):
         if not candles or len(candles) < 50:
             return "NEUTRAL", "Insufficient data"
         df = pd.DataFrame(candles)
+    else:
+        df = df.copy()
     if 'ema_20' not in df:
         df['ema_20'] = Indicators.calculate_ema(df['close'], 20)
     if patterns is None:

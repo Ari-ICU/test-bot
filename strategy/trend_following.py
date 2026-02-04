@@ -8,6 +8,8 @@ def analyze_trend_setup(candles, df=None, patterns=None):
         if not candles or len(candles) < 50:
             return "NEUTRAL", {"reason": "Insufficient data"}
         df = pd.DataFrame(candles)
+    else:
+        df = df.copy()
     try:
         for col in ['open', 'high', 'low', 'close']:
             df[col] = pd.to_numeric(df[col], errors='coerce')

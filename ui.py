@@ -24,6 +24,7 @@ class TradingApp(ttk.Window):
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
         self.risk = risk_manager
+        self.config = getattr(risk_manager, 'full_config', {})
         self.telegram_bot = telegram_bot
         self.log_queue = queue.Queue(maxsize=1000)
         self.bot_running = True
@@ -34,7 +35,7 @@ class TradingApp(ttk.Window):
         self.tf_var = tk.StringVar(value=self.connector.active_tf) 
         self.style_var = tk.StringVar(value="scalp") 
         self.auto_trade_var = tk.BooleanVar(value=False)
-        self.max_pos_var = tk.IntVar(value=risk_conf.get('max_trades', 5))
+        self.max_trades_var = tk.IntVar(value=risk_conf.get('max_trades', 5))
         self.cool_off_var = tk.IntVar(value=risk_conf.get('cool_off_seconds', 5)) 
         self.crt_reclaim_var = tk.DoubleVar(value=0.25)
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
@@ -216,8 +217,8 @@ class TradingApp(ttk.Window):
         ttk.Label(st_f, text="Rec TF: Sniper(M1) | Scalp(M5)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
         ttk.Label(st_f, text="Intra(M15-M30) | Swing(H1+)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
         mp_f = ttk.Frame(conf_frame); mp_f.grid(row=2, column=1, sticky=EW, padx=5, pady=2)
-        ttk.Label(mp_f, text="Max Pos:", font=("Helvetica", 9)).pack(anchor=W)
-        ttk.Spinbox(mp_f, from_=1, to=20, textvariable=self.max_pos_var, width=10).pack(fill=X)
+        ttk.Label(mp_f, text="Max Daily Trades:", font=("Helvetica", 9)).pack(anchor=W)
+        ttk.Spinbox(mp_f, from_=1, to=100, textvariable=self.max_trades_var, width=10).pack(fill=X)
         v_f = ttk.Frame(conf_frame); v_f.grid(row=3, column=0, sticky=EW, padx=5, pady=2)
         ttk.Label(v_f, text="Volume (Lots):", font=("Helvetica", 9)).pack(anchor=W)
         ttk.Spinbox(v_f, from_=0.01, to=50, textvariable=self.lot_var, width=10).pack(fill=X)

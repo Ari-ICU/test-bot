@@ -282,10 +282,8 @@ class AIPredictor:
         session_bias = 0
         return in_kill_zone, session_bias
     def prepare_features(self, df):
-        """
-        Convert indicator data + Smart Money Concepts into AI features.
-        """
         try:
+            df = df.copy()
             df['price_vs_ema200'] = (df['close'] - df['ema_200']) / df['ema_200'] * 100
             df['bb_width'] = (df['upper_bb'] - df['lower_bb']) / df['ema_200'] * 100
             if 'supertrend' in df.columns:

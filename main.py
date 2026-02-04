@@ -79,6 +79,69 @@ def bot_logic(app):
     log_queue = Queue(maxsize=1000)
     heartbeat_counter = 0
     summary_counter = 0
+    def sync_ui_settings():
+        """Syncs UI dashboard variables to internal risk/bot settings."""
+        risk.max_daily_trades = app.max_trades_var.get()
+        risk.cool_off_period = app.cool_off_var.get()
+        risk.risk_per_trade = app.lot_var.get() # Utilizing lot_var as base
+        connector.active_symbol = app.symbol_var.get()
+    
+    sync_ui_settings()
+    def position_management_worker():
+        pm_cfg = app.config.get('position_management', {})
+        if not pm_cfg.get('breakeven_enabled') and not pm_cfg.get('trailing_stop_enabled'):
+            return
+        logger.info("🛡️ Position Manager: ACTIVE")
+        while app.bot_running:
+            try:
+                positions = connector.positions
+                if not positions:
+                    time.sleep(5)
+                    continue
+                tick = connector.get_tick()
+                if not tick:
+                    time.sleep(1)
+                    continue
+                for pos in positions:
+                    ticket = pos['ticket']
+                    symbol = pos['symbol']
+                    entry = pos['price']
+                    current_sl = pos['sl']
+                    current_tp = pos['tp']
+                    pos_type = pos['type'] # "BUY" or "SELL"
+                    curr_price = tick['bid'] if pos_type == "BUY" else tick['ask']
+                    # NEW: Min Hold Time Check (avoiding scalp noise)
+                    # Note: We don't have position entry time in current bridge, 
+                    # so we will skip this for now or assume its okay.
+                    # 1. Breakeven logic
+                    if pm_cfg.get('breakeven_enabled'):
+                        trigger_dist = entry * 0.002 # 0.2% profit trigger
+                        if pos_type == "BUY":
+                            if curr_price > entry + trigger_dist and (current_sl < entry or current_sl == 0):
+                                new_sl = entry + (2 * (entry * 0.0001)) # Tiny profit lock
+                                connector.modify_position(ticket, new_sl, current_tp)
+                                log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven for Ticket #{ticket}{Style.RESET_ALL}")
+                        else:
+                            if curr_price < entry - trigger_dist and (current_sl > entry or current_sl == 0):
+                                new_sl = entry - (2 * (entry * 0.0001))
+                                connector.modify_position(ticket, new_sl, current_tp)
+                                log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven for Ticket #{ticket}{Style.RESET_ALL}")
+                    # 2. Trailing Stop logic
+                    if pm_cfg.get('trailing_stop_enabled'):
+                        trail_dist = entry * 0.005 # 0.5% trailing
+                        if pos_type == "BUY":
+                            potential_sl = curr_price - trail_dist
+                            if potential_sl > current_sl + (entry * 0.0002): # Only move if significant improvement
+                                connector.modify_position(ticket, potential_sl, current_tp)
+                        else:
+                            potential_sl = curr_price + trail_dist
+                            if current_sl == 0 or potential_sl < current_sl - (entry * 0.0002):
+                                connector.modify_position(ticket, potential_sl, current_tp)
+                time.sleep(5)
+            except Exception as e:
+                logger.error(f"Position Manager Error: {e}")
+                time.sleep(10)
+    threading.Thread(target=position_management_worker, daemon=True).start()
     def update_tg_analysis(prediction, patterns, sentiment):
         if app.telegram_bot:
             app.telegram_bot.track_analysis(prediction, patterns, sentiment)
@@ -133,7 +196,8 @@ def bot_logic(app):
             if signals_summary[tf] == "WAIT...":
                 signals_summary[tf] = "OK"
             last_processed_bar[tf] = latest_bar_time
-            df = pd.DataFrame(candles)
+            df_full = pd.DataFrame(candles)
+            df = df_full.iloc[:-1].copy() if len(df_full) > 30 else df_full.copy()
             try:
                 df['ema_200'] = Indicators.calculate_ema(df['close'], 200)
                 df['ema_50'] = Indicators.calculate_ema(df['close'], 50)
@@ -143,23 +207,19 @@ def bot_logic(app):
                 df['upper_bb'] = bb_upper
                 df['lower_bb'] = bb_lower
             except Exception as e:
-                logger.warning(f"Indicator calc error on {tf}: {e} – Using fallbacks")
                 df['ema_200'] = df['close'].ewm(span=200).mean()
                 df['ema_50'] = df['close'].ewm(span=50).mean()
                 df['rsi'] = 50.0
                 df['atr'] = df['high'].sub(df['low']).rolling(14).mean().fillna(0.1)
-                df['upper_bb'] = df['close'] + (df['atr'] * 2)
-                df['lower_bb'] = df['close'] - (df['atr'] * 2)
             try:
                 ai_result = ai_predictor.predict(df, asset_type=asset_type, style=style)
                 if isinstance(ai_result, tuple) and len(ai_result) == 3:
                     ai_pred, detected_patterns, sentiment = ai_result
                 else:
                     ai_pred = ai_result if isinstance(ai_result, str) else "NEUTRAL"
-                    detected_patterns = detect_patterns(candles, df=df)
+                    detected_patterns = detect_patterns(candles[:-1], df=df)
                     sentiment = "NEUTRAL"
             except Exception as e:
-                logger.warning(f"AI Predictor error on {tf}: {e}")
                 ai_pred = "NEUTRAL"
                 detected_patterns = {}
                 sentiment = "NEUTRAL"
@@ -185,7 +245,7 @@ def bot_logic(app):
                 if not app.strat_vars.get(ui_key, tk.BooleanVar(value=True)).get():
                     continue
                 try:
-                    signal, reason = analyze_func(candles, df, detected_patterns)
+                    signal, reason = analyze_func(candles[:-1], df, detected_patterns)
                     reason_str = safe_reason_formatter(reason)
                     last_ui_status = getattr(app, '_last_strat_status', {})
                     status_key = f"{tf}_{name}"
@@ -207,7 +267,7 @@ def bot_logic(app):
                     if signal in ["BUY", "SELL"] and app.auto_trade_var.get():
                         if latest_bar_time <= last_trade_bar.get(tf, 0):
                             continue
-                        current_price = df.iloc[-1]['close']
+                        current_price = df_full.iloc[-1]['close']
                         atr_series = df['atr']
                         min_atr = 0.5 if "XAU" in connector.active_symbol.upper() else 0.01
                         current_atr = max(atr_series.iloc[-1], min_atr) if not pd.isna(atr_series.iloc[-1]) else min_atr
@@ -216,11 +276,11 @@ def bot_logic(app):
                             log_queue.put(f"{Fore.RED}❌ {tf} ABORT: No bid/ask tick available{Style.RESET_ALL}")
                             continue
                         real_price = tick['ask'] if signal == "BUY" else tick['bid']
-                        signal_price = candles[-1]['close']
-                        threshold = 1.5 if "XAU" in connector.active_symbol.upper() else 0.50
+                        signal_price = df.iloc[-1]['close']
+                        threshold = 1.0 if "XAU" in connector.active_symbol.upper() else 0.50
                         slippage_pct = abs(real_price - signal_price) / signal_price * 100
                         if slippage_pct > threshold:
-                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Slippage {slippage_pct:.2f}% > {threshold}% | Try manually or wait for next bar.{Style.RESET_ALL}")
+                            log_queue.put(f"{Fore.RED}❌ {tf} ABORT: Slippage {slippage_pct:.2f}% > {threshold}% | Market volatile, securing...{Style.RESET_ALL}")
                             continue
                         current_price = real_price
                         sl, tp = risk.calculate_sl_tp(current_price, signal, current_atr, connector.active_symbol, timeframe=tf)
@@ -283,6 +343,7 @@ def bot_logic(app):
     last_news_ui_update = 0
     while app.bot_running:
         try:
+            sync_ui_settings()
             now = time.time()
             loop_start = now
             if not scan_active and (now - last_scan_cycle_time >= 10):

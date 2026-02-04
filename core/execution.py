@@ -176,6 +176,20 @@ class MT5Connector:
             self.command_queue.append(cmd)
         logger.info(f"Trade queued: {cmd}")
         return True
+    def modify_position(self, ticket, sl, tp):
+        """Modified: Queue SL/TP update for an existing position."""
+        cmd = f"ORDER_MODIFY|{ticket}|{sl}|{tp}"
+        with self.lock:
+            self.command_queue.append(cmd)
+        logger.info(f"Modify queued: {cmd}")
+        return True
+    def close_ticket(self, ticket):
+        """Modified: Queue closure of a specific ticket."""
+        cmd = f"CLOSE_TICKET|{ticket}"
+        with self.lock:
+            self.command_queue.append(cmd)
+        logger.info(f"Close queued: {cmd}")
+        return True
     def get_account_balance(self):
         return self._account_data.get('balance', 10000.0)
     def open_multi_tf_charts(self, symbol):

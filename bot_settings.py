@@ -34,9 +34,6 @@ class Config:
             "risk_per_trade": 1.0,
             "max_trades": 15,
             "cool_off_seconds": 300,
-            "max_open_positions": 10,
-            "max_positions_per_symbol": 3,
-            "max_positions_per_sector": 5,
             "reputable_brokers": ["MetaQuotes", "ICMarkets", "Exness", "Pepperstone", "FXTM", "XM", "Hantec"],
             "require_validated_model": True,
             "hedging_allowed": True,
@@ -53,6 +50,14 @@ class Config:
             "crypto_atr_multiplier": 1.5,
             "forex_atr_multiplier": 1.5,
             "risk_reward_ratio": 1.5
+        },
+        "position_management": {
+            "breakeven_enabled": True,
+            "breakeven_trigger_atr_mult": 1.5,
+            "trailing_stop_enabled": True,
+            "trailing_stop_atr_mult": 2.0,
+            "partial_tp_enabled": False,
+            "min_hold_time_seconds": 60
         },
         "update_interval_seconds": 60,
         "sentiment": {"enabled": True, "min_score": 0.2}

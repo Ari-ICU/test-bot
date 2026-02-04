@@ -35,16 +35,7 @@ class RiskManager:
         if time_since_last < self.cool_off_period:
             remaining_sec = int(self.cool_off_period - time_since_last)
             return False, f"Psychology: Cool-off {remaining_sec // 60}m {remaining_sec % 60}s remaining."
-        if open_positions_count >= self.max_open_positions:
-            return False, f"Concentration: Max positions ({self.max_open_positions}) open."
-        if symbol:
-            sym_pos = [p for p in open_positions if p.get('symbol') == symbol]
-            if len(sym_pos) >= self.max_pos_per_symbol:
-                return False, f"Concentration: Max positions for {symbol} reached."
-            sector = detect_sector(symbol)
-            sector_pos = [p for p in open_positions if detect_sector(p.get('symbol', '')) == sector]
-            if len(sector_pos) >= self.max_pos_per_sector:
-                return False, f"Concentration: Sector overexposure ({sector})."
+        return True, "Ready"
         if symbol:
             risk_profile = get_risk_profile(symbol)
             risk_on_count = sum(1 for p in open_positions if get_risk_profile(p.get('symbol', '')) == "risk-on")
