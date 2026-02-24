@@ -38,7 +38,7 @@ class TradingApp(ttk.Window):
         self.auto_trade_var = tk.BooleanVar(value=False)
         self.max_trades_var = tk.IntVar(value=risk_cfg.get('max_trades', 10))
         self.max_pos_var = tk.IntVar(value=risk_cfg.get('max_open_positions', 10))
-        self.cool_off_var = tk.IntVar(value=risk_cfg.get('cool_off_seconds', 300)) 
+        self.cool_off_var = tk.IntVar(value=risk_cfg.get('cool_off_seconds', 60)) # Default to 1 min (60s) instead of 5 min
         self.crt_reclaim_var = tk.DoubleVar(value=0.25)
         self.tg_token_var = tk.StringVar(value=self.telegram_bot.token if self.telegram_bot else "")
         self.tg_chat_var = tk.StringVar(value=self.telegram_bot.chat_id if self.telegram_bot else "")
@@ -179,66 +179,61 @@ class TradingApp(ttk.Window):
         canvas.pack(side=LEFT, fill=BOTH, expand=YES)
         scrollbar.pack(side=RIGHT, fill=Y)
 
-        # --- Top Section: Account & Performance ---
-        top_row = ttk.Frame(container)
-        top_row.pack(fill=X, pady=(0, 15))
+        # --- Top Section: Combined Unified Metrics (Saved Space) ---
+        metric_row = ttk.Frame(container)
+        metric_row.pack(fill=X, pady=(0, 10))
 
-        # Account Info Card
-        acc_frame = ttk.Labelframe(top_row, text=" Wallet & Account ", padding=10)
-        acc_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 5))
+        # Wallet & Performance Unified Card
+        stats_frame = ttk.Labelframe(metric_row, text=" Unified Terminal State & Performance ", padding=10)
+        stats_frame.pack(side=LEFT, fill=BOTH, expand=YES)
         
-        self._create_stat_box(acc_frame, "MODE", "lbl_acc_mode", "info", "CONNECTING...", 0, 0)
-        self._create_stat_box(acc_frame, "BALANCE", "lbl_balance", "primary", "$0.00", 0, 1)
-        self._create_stat_box(acc_frame, "EQUITY", "lbl_equity", "primary", "$0.00", 1, 0)
-        self._create_stat_box(acc_frame, "FLOATING", "lbl_profit", "success", "$0.00", 1, 1)
+        # Row 0: Account Status
+        self._create_stat_box(stats_frame, "MODE", "lbl_acc_mode", "info", "N/A", 0, 0)
+        self._create_stat_box(stats_frame, "BALANCE", "lbl_balance", "primary", "$0.00", 0, 1)
+        self._create_stat_box(stats_frame, "EQUITY", "lbl_equity", "info", "$0.00", 0, 2)
+        self._create_stat_box(stats_frame, "FLOATING P/L", "lbl_profit", "success", "$0.00", 0, 3)
+        
+        # Row 1: Trading Stats
+        self._create_stat_box(stats_frame, "DAILY P/L", "lbl_prof_today", "danger", "$0.00", 1, 0)
+        self._create_stat_box(stats_frame, "WEEKLY", "lbl_prof_week", "danger", "$0.00", 1, 1)
+        self._create_stat_box(stats_frame, "WIN RATE", "lbl_win_rate", "warning", "0.0%", 1, 2)
+        self._create_stat_box(stats_frame, "TRADES", "lbl_daily_trades", "info", "0", 1, 3)
+        self._create_stat_box(stats_frame, "TOTAL POS", "lbl_total_count", "secondary", "0", 1, 4)
 
-        # Performance Card
-        perf_frame = ttk.Labelframe(top_row, text=" Daily Performance ", padding=10)
-        perf_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=5)
-        
-        self._create_stat_box(perf_frame, "TRADES", "lbl_daily_trades", "secondary", "0", 0, 0)
-        self._create_stat_box(perf_frame, "DAILY P/L", "lbl_prof_today", "success", "$0.00", 0, 1)
-        self._create_stat_box(perf_frame, "WEEKLY", "lbl_prof_week", "success", "$0.00", 1, 0)
-        self._create_stat_box(perf_frame, "WIN RATE", "lbl_win_rate", "info", "0%", 1, 1)
+        # Market Quick Glance
+        mkt_frame = ttk.Labelframe(metric_row, text=" Live Feed ", padding=10)
+        mkt_frame.pack(side=RIGHT, fill=Y, padx=(10, 0))
+        self._create_stat_box(mkt_frame, "BID", "lbl_bid", "warning", "0.00000", 0, 0)
+        self._create_stat_box(mkt_frame, "ASK", "lbl_ask", "warning", "0.00000", 1, 0)
+        self._create_stat_box(mkt_frame, "BUY POS", "lbl_buy_count", "info", "0", 0, 1)
+        self._create_stat_box(mkt_frame, "SELL POS", "lbl_sell_count", "danger", "0", 1, 1)
 
-        # Market Prices Card
-        price_frame = ttk.Labelframe(top_row, text=" Live Market ", padding=10)
-        price_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(5, 0))
-        
-        self._create_stat_box(price_frame, "BID", "lbl_bid", "warning", "0.00000", 0, 0)
-        self._create_stat_box(price_frame, "ASK", "lbl_ask", "warning", "0.00000", 0, 1)
-        self._create_stat_box(price_frame, "BUY POS", "lbl_buy_count", "secondary", "0", 1, 0)
-        self._create_stat_box(price_frame, "SELL POS", "lbl_sell_count", "secondary", "0", 1, 1)
-        self._create_stat_box(price_frame, "TOTAL POS", "lbl_total_count", "info", "0", 2, 0)
-
-        # --- Middle Section: Strategy Monitor ---
-        strat_frame = ttk.Labelframe(container, text=" AI Strategy Intelligence Grid ", padding=10)
-        strat_frame.pack(fill=X, pady=10)
-        
-        self.strat_ui_items = {}
-        strat_list = [
-            ("AI_Predict", "AI Smart Predictor"), ("Trend", "Trend Following"),
-            ("Scalp", "M5 Scalper"), ("Breakout", "Breakout Engine"),
-            ("ICT_Master", "ICT Master"), ("TBS_Turtle", "TBS Turtle"),
-            ("TBS_Retest", "TBS Retest"), ("CRT_TBS", "CRT MT5 Master"),
-            ("PD_Parameter", "PD Array Logic"), ("News_Sentiment", "News Sentiment"),
-            ("Reversal", "Reversal Engine"), ("SMC_Master", "SMC Master"),
-            ("PowerTF", "Power of TF")
-        ]
+        # --- Middle Section: Strategy Monitor (Compact 7-Column) ---
+        strat_frame = ttk.Labelframe(container, text=" AI strategy Intelligence Matrix ", padding=8)
+        strat_frame.pack(fill=X, pady=8)
         
         grid_inner = ttk.Frame(strat_frame)
         grid_inner.pack(fill=X)
         
-        for i, (key, name) in enumerate(strat_list):
-            r, c = divmod(i, 5) # 5 columns
-            f = ttk.Frame(grid_inner, padding=5)
+        strategies = [
+            ("AI Predictor", "AI_Predict"), ("Trend Follow", "Trend"), ("Scalp M5", "Scalp"),
+            ("Breakout", "Breakout"), ("ICT Master", "ICT_Master"), ("Turtle", "TBS_Turtle"),
+            ("TBS Retest", "TBS_Retest"), ("CRT Master", "CRT_TBS"), ("PD Array", "PD_Parameter"),
+            ("News Sent", "News_Sentiment"), ("Reversal", "Reversal"), ("SMC Master", "SMC_Master"),
+            ("Power TF", "PowerTF")
+        ]
+        
+        self.strat_ui_items = {}
+        for i, (name, key) in enumerate(strategies):
+            r, c = divmod(i, 7) # 7 columns for smaller vertical footprint
+            f = ttk.Frame(grid_inner, padding=3)
             f.grid(row=r, column=c, sticky=NSEW)
             grid_inner.columnconfigure(c, weight=1)
             
-            ttk.Label(f, text=name, font=("Helvetica", 8, "bold"), bootstyle="secondary").pack(anchor=W)
-            status_lbl = ttk.Label(f, text="SYNCING", font=("Helvetica", 9, "bold"), bootstyle=SECONDARY)
+            ttk.Label(f, text=name, font=("Helvetica", 7, "bold"), bootstyle="secondary").pack(anchor=W)
+            status_lbl = ttk.Label(f, text="SYNCING", font=("Helvetica", 8, "bold"), bootstyle=SECONDARY)
             status_lbl.pack(anchor=W)
-            reason_lbl = ttk.Label(f, text="...", font=("Helvetica", 7), bootstyle=LIGHT)
+            reason_lbl = ttk.Label(f, text="...", font=("Helvetica", 6), bootstyle=LIGHT)
             reason_lbl.pack(anchor=W)
             self.strat_ui_items[key] = {"status": status_lbl, "reason": reason_lbl}
 
@@ -304,15 +299,15 @@ class TradingApp(ttk.Window):
         history_frame.pack(fill=X, pady=(15, 0)) # Don't expand inside canvas if we want fixed height
         
         columns = ("Time", "TF", "Strategy", "Signal", "Reason")
-        # Explicit height in pixels for the treeview to prevent squashing
-        self.signal_tree = ttk.Treeview(history_frame, columns=columns, show="headings", height=10, bootstyle="primary")
+        # Explicit height in pixels for the treeview to ensure it Dominates the space
+        self.signal_tree = ttk.Treeview(history_frame, columns=columns, show="headings", height=15, bootstyle="primary")
         
-        # Tech styling for treeview
+        # Tech styling for treeview - High contrast for trading
         style = ttk.Style()
-        style.configure("Treeview", rowheight=28, font=("Helvetica", 9))
-        style.configure("Treeview.Heading", font=("Helvetica", 9, "bold"))
+        style.configure("Treeview", rowheight=32, font=("Consolas", 9))
+        style.configure("Treeview.Heading", font=("Helvetica", 9, "bold"), foreground="#00ccff")
 
-        widths = {"Time": 80, "TF": 60, "Strategy": 150, "Signal": 100, "Reason": 400}
+        widths = {"Time": 90, "TF": 70, "Strategy": 160, "Signal": 110, "Reason": 420}
         for col in columns:
             self.signal_tree.heading(col, text=col.upper())
             self.signal_tree.column(col, width=widths[col], anchor=W if col=="Reason" else CENTER)
@@ -510,6 +505,11 @@ class TradingApp(ttk.Window):
         ttk.Checkbutton(risk_grp, text="Require Validated Models (Backtested Only)", variable=self.validate_models_var, bootstyle="round-toggle").pack(anchor=W, pady=5)
         ttk.Checkbutton(risk_grp, text="Force Trades during News (Risk High)", variable=self.force_news_var, bootstyle="round-toggle").pack(anchor=W, pady=5)
         
+        co_row = ttk.Frame(risk_grp)
+        co_row.pack(fill=X, pady=5)
+        ttk.Label(co_row, text="Cool-off (Seconds):", font=("Helvetica", 9)).pack(side=LEFT)
+        ttk.Spinbox(co_row, from_=0, to=3600, increment=30, textvariable=self.cool_off_var, width=8).pack(side=RIGHT)
+        
         # Position Management Card
         pm_grp = ttk.Labelframe(right_col, text=" Advanced Trade Protection ", padding=15)
         pm_grp.pack(fill=X, pady=(0, 20))
@@ -599,6 +599,7 @@ class TradingApp(ttk.Window):
         
         # Sync Risk Toggles
         self.risk.require_validated = self.validate_models_var.get()
+        self.risk.cool_off_period = self.cool_off_var.get()
         if "Force_News" in self.strat_vars:
             self.strat_vars["Force_News"].set(self.force_news_var.get())
         

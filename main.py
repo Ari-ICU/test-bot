@@ -366,7 +366,8 @@ def bot_logic(app):
                             open_positions=open_positions,
                             symbol=connector.active_symbol,
                             broker_name=broker,
-                            strategy_name=name
+                            strategy_name=name,
+                            timeframe=tf
                         )
                         if can_trade and app.strat_vars.get("News_Sentiment", tk.BooleanVar(value=True)).get():
                             n_score, n_summary, _ = news_manager.get_market_sentiment()
@@ -386,7 +387,7 @@ def bot_logic(app):
                                 success = connector.execute_trade(signal, lots, sl, tp)
                                 if success:
                                     log_queue.put(f"{Fore.GREEN}🚀 {tf} AUTO-TRADE: {signal} {lots:.2f} lots | SL: {sl:.5f} | TP: {tp:.5f}{Style.RESET_ALL}")
-                                    risk.record_trade()
+                                    risk.record_trade(timeframe=tf)
                                     last_trade_bar[tf] = latest_bar_time
                                 else:
                                     log_queue.put(f"{Fore.RED}⚠️ {tf} Trade failed: Execution error{Style.RESET_ALL}")

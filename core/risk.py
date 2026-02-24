@@ -20,8 +20,9 @@ class RiskManager:
         self.min_lot = 0.01
         self.max_lot = 10.0
         self.daily_trades_count = 0
-        self.last_trade_time = 0
-    def can_trade(self, current_drawdown_pct, open_positions=None, symbol=None, broker_name=None, strategy_name=None):
+        self.last_trade_times = {} # Per-timeframe cool-off tracking
+
+    def can_trade(self, current_drawdown_pct, open_positions=None, symbol=None, broker_name=None, strategy_name=None, timeframe="global"):
         if open_positions is None: open_positions = []
         open_positions_count = len(open_positions)
         
@@ -31,10 +32,12 @@ class RiskManager:
         if self.daily_trades_count >= self.max_daily_trades:
             return False, f"Psychology: Max daily trades ({self.max_daily_trades}) reached."
             
-        time_since_last = time.time() - self.last_trade_time
+        # Per-TF Cool-off logic
+        last_time = self.last_trade_times.get(timeframe, 0)
+        time_since_last = time.time() - last_time
         if time_since_last < self.cool_off_period:
             remaining_sec = int(self.cool_off_period - time_since_last)
-            return False, f"Psychology: Cool-off {remaining_sec // 60}m {remaining_sec % 60}s remaining."
+            return False, f"Psychology: {timeframe} Cool-off {remaining_sec // 60}m {remaining_sec % 60}s remaining."
 
         if symbol:
             risk_profile = get_risk_profile(symbol)
@@ -60,9 +63,9 @@ class RiskManager:
 
         return True, "Ready"
 
-    def record_trade(self):
+    def record_trade(self, timeframe="global"):
         self.daily_trades_count += 1
-        self.last_trade_time = time.time()
+        self.last_trade_times[timeframe] = time.time()
 
     def reset_daily_stats(self):
         self.daily_trades_count = 0
