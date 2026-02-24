@@ -20,8 +20,8 @@ class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
         self.title("MT5 Advanced AI Terminal")
-        self.geometry("1100x750")
-        self.minsize(1000, 700)
+        self.geometry("980x680") # Better fit for 13.3" (typically 1280-1440 width)
+        self.minsize(900, 600)
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
         self.risk = risk_manager
@@ -102,54 +102,77 @@ class TradingApp(ttk.Window):
         header = ttk.Frame(self, bootstyle="dark")
         header.pack(fill=X, padx=0, pady=0)
         
-        header_inner = ttk.Frame(header, bootstyle="dark", padding=(20, 10))
+        header_inner = ttk.Frame(header, bootstyle="dark", padding=(20, 12))
         header_inner.pack(fill=X)
 
         title_frame = ttk.Frame(header_inner, bootstyle="dark")
         title_frame.pack(side=LEFT)
         
-        ttk.Label(title_frame, text="MT5", font=("Roboto", 18, "bold"), bootstyle="info").pack(side=LEFT)
-        ttk.Label(title_frame, text=" QUANT TERMINAL", font=("Roboto", 18, "bold"), bootstyle="light").pack(side=LEFT)
+        # Premium Logo styling
+        logo_f = ttk.Frame(title_frame, bootstyle="dark")
+        logo_f.pack(side=LEFT)
+        ttk.Label(logo_f, text="MT5", font=("Orbitron", 18, "bold"), bootstyle="info").pack(side=LEFT)
+        ttk.Label(logo_f, text=" QUANT", font=("Orbitron", 18, "bold"), bootstyle="light").pack(side=LEFT)
+        ttk.Label(logo_f, text=" TERMINAL", font=("Helvetica", 10, "bold"), bootstyle="secondary").pack(side=LEFT, padx=(5, 0), pady=(5, 0))
         
         status_frame = ttk.Frame(header_inner, bootstyle="dark")
         status_frame.pack(side=RIGHT)
         
-        self.lbl_server = ttk.Label(status_frame, text="● SERVER: OFF", bootstyle="danger", font=("Helvetica", 10, "bold"))
+        self.lbl_server = ttk.Label(status_frame, text="● SERVER: OFF", bootstyle="danger", font=("Helvetica", 9, "bold"))
         self.lbl_server.pack(side=LEFT, padx=10)
         
         self.status_var = tk.StringVar(value="BOT: STOPPED")
-        self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="warning", font=("Helvetica", 10, "bold"))
+        self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="warning", font=("Helvetica", 9, "bold"))
         self.lbl_status.pack(side=LEFT, padx=10)
         
-        # Scan Health Indicator
-        self.lbl_health = ttk.Label(status_frame, text="LATENCY: 0.0s", bootstyle="info", font=("Helvetica", 9))
+        self.lbl_health = ttk.Label(status_frame, text="LATENCY: 0.0s", bootstyle="info", font=("Consolas", 9))
         self.lbl_health.pack(side=LEFT, padx=15)
 
         # Content Area with Notebook
         style = ttk.Style()
         style.configure("TNotebook.Tab", font=("Helvetica", 10, "bold"), padding=[15, 5])
         
-        self.tabs = ttk.Notebook(self)
-        self.tabs.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=BOTH, expand=YES, padx=10, pady=5)
         
-        self.tab_dashboard = ttk.Frame(self.tabs, padding=10)
-        self.tab_console = ttk.Frame(self.tabs, padding=10)
-        self.tab_news = ttk.Frame(self.tabs, padding=10)
-        self.tab_settings = ttk.Frame(self.tabs, padding=10)
+        self.tab_dashboard = ttk.Frame(self.notebook)
+        self.tab_console = ttk.Frame(self.notebook)
+        self.tab_market = ttk.Frame(self.notebook)
+        self.tab_settings = ttk.Frame(self.notebook)
         
-        self.tabs.add(self.tab_dashboard, text=" 📊 DASHBOARD ")
-        self.tabs.add(self.tab_console, text=" 💻 CONSOLE ")
-        self.tabs.add(self.tab_news, text=" 🌐 MARKET ")
-        self.tabs.add(self.tab_settings, text=" ⚙️ SETTINGS ")
-        self._last_news_update = 0
+        self.notebook.add(self.tab_dashboard, text="📊 DASHBOARD")
+        self.notebook.add(self.tab_console, text="💻 CONSOLE")
+        self.notebook.add(self.tab_market, text="🌐 MARKET")
+        self.notebook.add(self.tab_settings, text="⚙️ SETTINGS")
+        
         self._build_dashboard_tab()
         self._build_console_tab()
-        self._build_news_tab()
+        self._build_market_tab()
         self._build_settings_tab()
-        self.sym_combo.set(self.connector.active_symbol)    
+        self.sym_combo.set(self.connector.active_symbol)
+
+        # Startup check: Add a verification signal to ensure the timeline works
+        self.after(2000, lambda: self.add_signal_to_log("SYS", "Backbone", "STARTUP", "Intelligence Timeline Verified - Ready for Signals"))
+    
     def _build_dashboard_tab(self):
-        container = ttk.Frame(self.tab_dashboard)
-        container.pack(fill=BOTH, expand=YES)
+        # Make Dashboard Scrollable for small screens
+        canvas = tk.Canvas(self.tab_dashboard, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.tab_dashboard, orient=VERTICAL, command=canvas.yview)
+        container = ttk.Frame(canvas, padding=12)
+
+        canvas.create_window((0, 0), window=container, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Auto-resize canvas width to match scrollable frame
+        def on_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_win, width=e.width)
+
+        canvas_win = canvas.create_window((0,0), window=container, anchor="nw")
+        canvas.bind("<Configure>", on_configure)
+
+        canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+        scrollbar.pack(side=RIGHT, fill=Y)
 
         # --- Top Section: Account & Performance ---
         top_row = ttk.Frame(container)
@@ -273,19 +296,27 @@ class TradingApp(ttk.Window):
 
         # --- Footer Section: Signal History ---
         history_frame = ttk.Labelframe(container, text=" Live Signal Intelligence Timeline ", padding=10)
-        history_frame.pack(fill=BOTH, expand=YES, pady=(15, 0))
+        history_frame.pack(fill=X, pady=(15, 0)) # Don't expand inside canvas if we want fixed height
         
         columns = ("Time", "TF", "Strategy", "Signal", "Reason")
-        self.signal_tree = ttk.Treeview(history_frame, columns=columns, show="headings", height=8, bootstyle="primary")
+        # Explicit height in pixels for the treeview to prevent squashing
+        self.signal_tree = ttk.Treeview(history_frame, columns=columns, show="headings", height=10, bootstyle="primary")
         
+        # Tech styling for treeview
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=28, font=("Helvetica", 9))
+        style.configure("Treeview.Heading", font=("Helvetica", 9, "bold"))
+
         widths = {"Time": 80, "TF": 60, "Strategy": 150, "Signal": 100, "Reason": 400}
         for col in columns:
-            self.signal_tree.heading(col, text=col)
+            self.signal_tree.heading(col, text=col.upper())
             self.signal_tree.column(col, width=widths[col], anchor=W if col=="Reason" else CENTER)
             
         self.signal_tree.tag_configure('BUY', foreground='#1aff1a', font=("Helvetica", 9, "bold"))
         self.signal_tree.tag_configure('SELL', foreground='#ff4d4d', font=("Helvetica", 9, "bold"))
-        self.signal_tree.pack(fill=BOTH, expand=YES)
+        self.signal_tree.tag_configure('STARTUP', foreground='#00ccff', font=("Helvetica", 9, "italic"))
+        
+        self.signal_tree.pack(fill=X, side=LEFT, expand=YES)
         
         # Add scrollbar to signal tree
         sig_scroll = ttk.Scrollbar(history_frame, orient=VERTICAL, command=self.signal_tree.yview)
@@ -293,13 +324,14 @@ class TradingApp(ttk.Window):
         sig_scroll.pack(side=RIGHT, fill=Y)
 
     def _create_stat_box(self, parent, label, attr_name, color, initial, row, col):
-        frame = ttk.Frame(parent, padding=5)
-        frame.grid(row=row, column=col, sticky=EW)
+        # Card-like frame for stats
+        frame = ttk.Frame(parent, padding=6, bootstyle="secondary-subtle")
+        frame.grid(row=row, column=col, sticky=EW, padx=3, pady=3)
         parent.columnconfigure(col, weight=1)
         
-        ttk.Label(frame, text=label, font=("Helvetica", 7, "bold"), bootstyle="secondary").pack(anchor=W)
+        ttk.Label(frame, text=label, font=("Helvetica", 8, "bold"), bootstyle="secondary").pack(anchor=W)
         val_lbl = ttk.Label(frame, text=initial, font=("Roboto", 12, "bold"), bootstyle=color)
-        val_lbl.pack(anchor=W)
+        val_lbl.pack(anchor=W, pady=(1, 0))
         setattr(self, attr_name, val_lbl)
     def _build_console_tab(self):
         console_frame = ttk.Frame(self.tab_console)
@@ -315,8 +347,8 @@ class TradingApp(ttk.Window):
         self.log_area.tag_config('ERROR', foreground='#ff6b6b')   # Soft red
         self.log_area.tag_config('DEBUG', foreground='#a0a0a0')   # Muted gray
         self.log_area.tag_config('TIMESTAMP', foreground='#5bc0de') # Cyan for time
-    def _build_news_tab(self):
-        container = ttk.Frame(self.tab_news)
+    def _build_market_tab(self):
+        container = ttk.Frame(self.tab_market)
         container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
         top_frame = ttk.Frame(container)
         top_frame.pack(fill=X, pady=(0, 15))
@@ -399,25 +431,34 @@ class TradingApp(ttk.Window):
         except Exception as e:
             logging.debug(f"News UI update error: {e}")
     def _build_settings_tab(self):
-        # Using a vertical scrolled frame for settings would be better
+        # Settings is already using a container, let's make it scrollable like dashboard
         canvas = tk.Canvas(self.tab_settings, borderwidth=0, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.tab_settings, orient=VERTICAL, command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        container = ttk.Frame(canvas, padding=15)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.create_window((0, 0), window=container, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        def on_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_win, width=e.width)
+
+        canvas_win = canvas.create_window((0,0), window=container, anchor="nw")
+        canvas.bind("<Configure>", on_configure)
 
         canvas.pack(side=LEFT, fill=BOTH, expand=YES)
         scrollbar.pack(side=RIGHT, fill=Y)
 
-        # --- Strategy Section ---
-        strat_grp = ttk.Labelframe(scrollable_frame, text=" Strategy Configuration ", padding=15)
-        strat_grp.pack(fill=X, pady=10, padx=5)
+        # 2-Column Layout to eliminate empty space
+        left_col = ttk.Frame(container)
+        left_col.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 10))
+        
+        right_col = ttk.Frame(container)
+        right_col.pack(side=LEFT, fill=BOTH, expand=YES, padx=(10, 0))
+
+        # --- LEFT: Strategy Selection ---
+        strat_grp = ttk.Labelframe(left_col, text=" AI Strategy Intelligence Engines ", padding=15)
+        strat_grp.pack(fill=BOTH, expand=YES)
         
         strat_desc = ttk.Label(strat_grp, text="Toggle specific logic engines and view recommended timeframes.", font=("Helvetica", 9, "italic"), bootstyle="secondary")
         strat_desc.pack(anchor=W, pady=(0, 15))
@@ -433,58 +474,63 @@ class TradingApp(ttk.Window):
             "CRT_TBS": {"name": "CRT Master", "rec": "H1/H4"},
             "PD_Parameter": {"name": "PD Array Logic", "rec": "Daily"},
             "News_Sentiment": {"name": "News Filter", "rec": "Global"},
-            "Force_News": {"name": "Force News", "rec": "Risky"},
             "Reversal": {"name": "Reversal Engine", "rec": "M15"},
             "SMC_Master": {"name": "SMC Master", "rec": "M15/H1"},
             "PowerTF": {"name": "Power of TF", "rec": "M15 Focus"}
         }
 
+        # Grid for strategies in left column
         strat_grid = ttk.Frame(strat_grp)
         strat_grid.pack(fill=X)
         
-        for i, (strat_key, var) in enumerate(self.strat_vars.items()):
-            meta = strat_meta.get(strat_key, {"name": strat_key, "rec": ""})
-            r, c = divmod(i, 3)
-            cell = ttk.Frame(strat_grid, padding=10)
+        # Filter out keys that might not be in strat_vars to prevent crash
+        active_strats = [k for k in strat_meta.keys() if k in self.strat_vars]
+        
+        for i, strat_key in enumerate(active_strats):
+            var = self.strat_vars[strat_key]
+            meta = strat_meta[strat_key]
+            r, c = divmod(i, 2) # 2 columns inside the left panel
+            cell = ttk.Frame(strat_grid, padding=8)
             cell.grid(row=r, column=c, sticky=NW)
             
             ttk.Checkbutton(cell, text=meta["name"], variable=var, bootstyle="round-toggle").pack(anchor=W)
             ttk.Label(cell, text=f"Best: {meta['rec']}", font=("Helvetica", 8), bootstyle="secondary").pack(anchor=W, padx=25)
 
-        # --- Telegram Section ---
-        tg_grp = ttk.Labelframe(scrollable_frame, text=" Telegram Integration ", padding=15)
-        tg_grp.pack(fill=X, pady=10, padx=5)
-        
-        ttk.Label(tg_grp, text="Token:", font=("Helvetica", 9)).pack(anchor=W)
-        ttk.Entry(tg_grp, textvariable=self.tg_token_var, show="*", width=50).pack(fill=X, pady=5)
-        
-        ttk.Label(tg_grp, text="Chat ID:", font=("Helvetica", 9)).pack(anchor=W, pady=(10, 0))
-        chat_f = ttk.Frame(tg_grp)
-        chat_f.pack(fill=X, pady=5)
-        ttk.Entry(chat_f, textvariable=self.tg_chat_var).pack(side=LEFT, fill=X, expand=YES)
-        ttk.Button(chat_f, text="Test Conn", bootstyle="info-outline", command=self.test_telegram).pack(side=LEFT, padx=10)
-        
-        ttk.Button(tg_grp, text="Save Telegram Config", bootstyle="primary", command=self.update_telegram).pack(pady=15)
-
-        # --- Position Management Section ---
-        pm_grp = ttk.Labelframe(scrollable_frame, text=" Advanced Position Management ", padding=15)
-        pm_grp.pack(fill=X, pady=10, padx=5)
+        # --- RIGHT: Integration & Risk ---
+        # Position Management Card
+        pm_grp = ttk.Labelframe(right_col, text=" Advanced Trade Protection ", padding=15)
+        pm_grp.pack(fill=X, pady=(0, 20))
         
         # Break-even
         be_frame = ttk.Frame(pm_grp)
-        be_frame.pack(fill=X, pady=5)
-        ttk.Checkbutton(be_frame, text="Break-Even (BE)", variable=self.be_enabled_var, bootstyle="round-toggle").pack(side=LEFT)
-        ttk.Label(be_frame, text="Trigger at % of TP:", font=("Helvetica", 9)).pack(side=LEFT, padx=(20, 5))
+        be_frame.pack(fill=X, pady=8)
+        ttk.Checkbutton(be_frame, text="Auto Break-Even (BE)", variable=self.be_enabled_var, bootstyle="round-toggle").pack(side=LEFT)
+        ttk.Label(be_frame, text="Trigger %:", font=("Helvetica", 9)).pack(side=LEFT, padx=(20, 5))
         ttk.Spinbox(be_frame, from_=10, to=90, textvariable=self.be_trigger_var, width=5).pack(side=LEFT)
         
         # Trailing
         tr_frame = ttk.Frame(pm_grp)
-        tr_frame.pack(fill=X, pady=5)
-        ttk.Checkbutton(tr_frame, text="Trailing Stop", variable=self.trail_enabled_var, bootstyle="round-toggle").pack(side=LEFT)
-        ttk.Label(tr_frame, text="Trail Distance %:", font=("Helvetica", 9)).pack(side=LEFT, padx=(32, 5))
+        tr_frame.pack(fill=X, pady=8)
+        ttk.Checkbutton(tr_frame, text="Auto Trailing Stop", variable=self.trail_enabled_var, bootstyle="round-toggle").pack(side=LEFT)
+        ttk.Label(tr_frame, text="Trail %:", font=("Helvetica", 9)).pack(side=LEFT, padx=(37, 5))
         ttk.Spinbox(tr_frame, from_=0.1, to=10.0, increment=0.1, textvariable=self.trail_pct_var, width=5).pack(side=LEFT)
 
-        ttk.Button(pm_grp, text="Update Risk/Trade Settings", bootstyle="info-outline", command=self.update_risk_settings).pack(pady=10)
+        ttk.Button(pm_grp, text="SYNC RISK PARAMETERS", bootstyle="info-outline", command=self.update_risk_settings).pack(fill=X, pady=(10, 0))
+
+        # Telegram Card
+        tg_grp = ttk.Labelframe(right_col, text=" Secure Telegram Bridge ", padding=15)
+        tg_grp.pack(fill=X)
+        
+        ttk.Label(tg_grp, text="Bot Token API Key:", font=("Helvetica", 8, "bold"), bootstyle="secondary").pack(anchor=W)
+        ttk.Entry(tg_grp, textvariable=self.tg_token_var, show="*", width=50).pack(fill=X, pady=(5, 15))
+        
+        ttk.Label(tg_grp, text="Authorized Chat ID:", font=("Helvetica", 8, "bold"), bootstyle="secondary").pack(anchor=W)
+        chat_f = ttk.Frame(tg_grp)
+        chat_f.pack(fill=X, pady=5)
+        ttk.Entry(chat_f, textvariable=self.tg_chat_var).pack(side=LEFT, fill=X, expand=YES)
+        ttk.Button(chat_f, text="Test", bootstyle="info-outline", command=self.test_telegram, width=8).pack(side=LEFT, padx=(10, 0))
+        
+        ttk.Button(tg_grp, text="SAVE CONFIGURATION", bootstyle="primary", command=self.update_telegram).pack(fill=X, pady=(15, 0))
     def on_auto_trade_toggle(self):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
         msg = f"🚀 Auto-Trading {state} - Real-Time Analysis Active" if state == "ENABLED"              else f"⏸️ Auto-Trading {state} - Switching to Manual Mode"
@@ -789,12 +835,18 @@ class TradingApp(ttk.Window):
                 pass
     def add_signal_to_log(self, tf, strategy, action, reason):
         """Thread-safe signal logging for the UI Timeline"""
-        now = datetime.now().strftime("%H:%M:%S")
-        self.signal_tree.insert("", 0, values=(now, tf, strategy, action, reason), tags=(action,))
-        
-        # Keep history light
-        if len(self.signal_tree.get_children()) > 100:
-            self.signal_tree.delete(self.signal_tree.get_children()[-1])
+        try:
+            now = datetime.now().strftime("%H:%M:%S")
+            self.signal_tree.insert("", 0, values=(now, tf, strategy, action, reason), tags=(action,))
+            
+            # Keep history light
+            if len(self.signal_tree.get_children()) > 100:
+                self.signal_tree.delete(self.signal_tree.get_children()[-1])
+            
+            # Scroll to top to ensure visibility
+            self.signal_tree.yview_moveto(0)
+        except Exception as e:
+            logging.debug(f"Signal Timeline update error: {e}")
 
     def update_scan_health(self, latency):
         color = "success" if latency < 5 else "warning" if latency < 12 else "danger"
