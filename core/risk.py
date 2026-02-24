@@ -14,7 +14,7 @@ class RiskManager:
         self.max_pos_per_sector = self.risk_cfg.get('max_positions_per_sector', 2)
         self.reputable_brokers = self.risk_cfg.get('reputable_brokers', [])
         self.require_validated = self.risk_cfg.get('require_validated_model', True)
-        self.validated_models = ["AI_Predict", "Trend", "Scalp", "ICT_SB", "DRQN"]
+        self.validated_models = ["AI_Predict", "Trend", "Scalp", "ICT_SB", "DRQN", "SMC_Master", "CRT_TBS", "PowerTF", "ICT_Master", "Breakout", "TBS_Retest", "TBS_Turtle", "Reversal", "PD_Parameter"]
         self.max_daily_trades = self.risk_cfg.get('max_trades', 5)
         self.cool_off_period = self.risk_cfg.get('cool_off_seconds', 900)
         self.min_lot = 0.01
