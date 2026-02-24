@@ -107,6 +107,8 @@ def bot_logic(app):
                     time.sleep(1)
                     continue
                 for pos in positions:
+                    # Re-fetch config inside loop to catch live changes from UI
+                    pm_cfg = app.config.get('position_management', {})
                     ticket = pos['ticket']
                     symbol = pos['symbol']
                     entry = pos['price']
@@ -115,37 +117,49 @@ def bot_logic(app):
                     pos_type = pos['type']
                     curr_price = tick['bid'] if pos_type == "BUY" else tick['ask']
 
-                    # Improved Position Management logic
-                    if pm_cfg.get('breakeven_enabled') or pm_cfg.get('trailing_stop_enabled'):
-                        dist_to_tp = abs(pos['tp'] - entry)
-                        dist_to_sl = abs(pos['sl'] - entry)
-                        profit_dist = (curr_price - entry) if pos_type == "BUY" else (entry - curr_price)
-                        
-                        # Phase 1: Break-even at 50% distance to TP
-                        if profit_dist > (dist_to_tp * 0.5) and (current_sl < entry if pos_type == "BUY" else current_sl > entry or current_sl == 0):
-                            new_sl = entry + (entry * 0.0002) if pos_type == "BUY" else entry - (entry * 0.0002)
-                            connector.modify_position(ticket, new_sl, current_tp)
-                            log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven (50% Target) for Ticket #{ticket}{Style.RESET_ALL}")
-                        
-                        # Phase 2: Lock 50% Profit at 80% distance to TP
-                        elif profit_dist > (dist_to_tp * 0.8):
-                            locked_profit_price = entry + (dist_to_tp * 0.5) if pos_type == "BUY" else entry - (dist_to_tp * 0.5)
-                            if (pos_type == "BUY" and current_sl < locked_profit_price) or (pos_type == "SELL" and (current_sl > locked_profit_price or current_sl == 0)):
-                                connector.modify_position(ticket, locked_profit_price, current_tp)
-                                log_queue.put(f"{Fore.GREEN}🔒 SECURE: Locked 50% Profit (80% Target) for Ticket #{ticket}{Style.RESET_ALL}")
+                    # Check if TP exists, otherwise we can't use distance-based triggers
+                    if current_tp == 0: continue
 
-                        # Standard Trailing Stop if enabled
-                        if pm_cfg.get('trailing_stop_enabled'):
-                            trail_pct = pm_cfg.get('trailing_stop_pct', 0.5) / 100.0
-                            trail_dist = entry * trail_pct
-                            if pos_type == "BUY":
-                                potential_sl = curr_price - trail_dist
-                                if potential_sl > current_sl + (entry * 0.0001):
-                                    connector.modify_position(ticket, potential_sl, current_tp)
-                            else:
-                                potential_sl = curr_price + trail_dist
-                                if current_sl == 0 or potential_sl < current_sl - (entry * 0.0001):
-                                    connector.modify_position(ticket, potential_sl, current_tp)
+                    dist_to_tp = abs(current_tp - entry)
+                    profit_dist = (curr_price - entry) if pos_type == "BUY" else (entry - curr_price)
+                    
+                    # 🛡️ Dynamic Break-even
+                    if pm_cfg.get('breakeven_enabled'):
+                        trigger_pct = pm_cfg.get('breakeven_trigger_pct', 50.0) / 100.0
+                        if profit_dist > (dist_to_tp * trigger_pct):
+                            # Move to entry + small buffer
+                            buffer = entry * 0.0001
+                            new_sl = entry + buffer if pos_type == "BUY" else entry - buffer
+                            
+                            should_mod = False
+                            if pos_type == "BUY" and (current_sl < entry or current_sl == 0):
+                                should_mod = True
+                            elif pos_type == "SELL" and (current_sl > entry or current_sl == 0):
+                                should_mod = True
+                                
+                            if should_mod:
+                                connector.modify_position(ticket, new_sl, current_tp)
+                                log_queue.put(f"{Fore.CYAN}🛡️ BE: Moved SL to Breakeven ({int(trigger_pct*100)}% Target) for Ticket #{ticket}{Style.RESET_ALL}")
+                    
+                    # 🔒 Secure Profit (at 80% to TP, lock 50% profit)
+                    if profit_dist > (dist_to_tp * 0.8):
+                        locked_profit_price = entry + (dist_to_tp * 0.5) if pos_type == "BUY" else entry - (dist_to_tp * 0.5)
+                        if (pos_type == "BUY" and current_sl < locked_profit_price) or (pos_type == "SELL" and (current_sl > locked_profit_price or current_sl == 0)):
+                            connector.modify_position(ticket, locked_profit_price, current_tp)
+                            log_queue.put(f"{Fore.GREEN}🔒 SECURE: Locked 50% Profit (80% Target) for Ticket #{ticket}{Style.RESET_ALL}")
+
+                    # 🎢 Dynamic Trailing Stop
+                    if pm_cfg.get('trailing_stop_enabled'):
+                        trail_pct = pm_cfg.get('trailing_stop_pct', 0.5) / 100.0
+                        trail_dist = entry * trail_pct
+                        if pos_type == "BUY":
+                            potential_sl = curr_price - trail_dist
+                            if potential_sl > current_sl + (entry * 0.0001):
+                                connector.modify_position(ticket, potential_sl, current_tp)
+                        else:
+                            potential_sl = curr_price + trail_dist
+                            if current_sl == 0 or potential_sl < current_sl - (entry * 0.0001):
+                                connector.modify_position(ticket, potential_sl, current_tp)
                 
                 time.sleep(2) # Faster polling for better responsiveness
             except Exception as e:
