@@ -65,6 +65,11 @@ class TradingApp(ttk.Window):
         self.be_trigger_var = tk.DoubleVar(value=pm_cfg.get('breakeven_trigger_pct', 50.0))
         self.trail_enabled_var = tk.BooleanVar(value=pm_cfg.get('trailing_stop_enabled', True))
         self.trail_pct_var = tk.DoubleVar(value=pm_cfg.get('trailing_stop_pct', 0.5))
+
+        # Intelligence & Logging Vars
+        self.show_skips_var = tk.BooleanVar(value=True)
+        self.validate_models_var = tk.BooleanVar(value=self.risk.require_validated)
+        self.force_news_var = tk.BooleanVar(value=self.strat_vars.get("Force_News", tk.BooleanVar(value=False)).get())
         self.last_avail_syms = []
         self.last_account_info = None
         self.last_active_symbol = None
@@ -314,6 +319,7 @@ class TradingApp(ttk.Window):
             
         self.signal_tree.tag_configure('BUY', foreground='#1aff1a', font=("Helvetica", 9, "bold"))
         self.signal_tree.tag_configure('SELL', foreground='#ff4d4d', font=("Helvetica", 9, "bold"))
+        self.signal_tree.tag_configure('SKIPPED', foreground='#feca57', font=("Helvetica", 8, "italic"))
         self.signal_tree.tag_configure('STARTUP', foreground='#00ccff', font=("Helvetica", 9, "italic"))
         
         self.signal_tree.pack(fill=X, side=LEFT, expand=YES)
@@ -497,6 +503,13 @@ class TradingApp(ttk.Window):
             ttk.Label(cell, text=f"Best: {meta['rec']}", font=("Helvetica", 8), bootstyle="secondary").pack(anchor=W, padx=25)
 
         # --- RIGHT: Integration & Risk ---
+        # Global Risk Card
+        risk_grp = ttk.Labelframe(right_col, text=" Global Risk & Model Guard ", padding=15)
+        risk_grp.pack(fill=X, pady=(0, 20))
+        
+        ttk.Checkbutton(risk_grp, text="Require Validated Models (Backtested Only)", variable=self.validate_models_var, bootstyle="round-toggle").pack(anchor=W, pady=5)
+        ttk.Checkbutton(risk_grp, text="Force Trades during News (Risk High)", variable=self.force_news_var, bootstyle="round-toggle").pack(anchor=W, pady=5)
+        
         # Position Management Card
         pm_grp = ttk.Labelframe(right_col, text=" Advanced Trade Protection ", padding=15)
         pm_grp.pack(fill=X, pady=(0, 20))
@@ -516,6 +529,13 @@ class TradingApp(ttk.Window):
         ttk.Spinbox(tr_frame, from_=0.1, to=10.0, increment=0.1, textvariable=self.trail_pct_var, width=5).pack(side=LEFT)
 
         ttk.Button(pm_grp, text="SYNC RISK PARAMETERS", bootstyle="info-outline", command=self.update_risk_settings).pack(fill=X, pady=(10, 0))
+
+        # Intelligence Logging Card
+        intel_grp = ttk.Labelframe(right_col, text=" Signal Intelligence Settings ", padding=15)
+        intel_grp.pack(fill=X, pady=(0, 20))
+        
+        ttk.Checkbutton(intel_grp, text="Log Blocked/Skipped Signals to Timeline", variable=self.show_skips_var, bootstyle="round-toggle").pack(anchor=W, pady=5)
+        ttk.Button(intel_grp, text="🗑️ CLEAR SIGNAL HISTORY", bootstyle="danger-link", command=self.clear_signal_history).pack(anchor=W, pady=(10, 0))
 
         # Telegram Card
         tg_grp = ttk.Labelframe(right_col, text=" Secure Telegram Bridge ", padding=15)
@@ -577,8 +597,17 @@ class TradingApp(ttk.Window):
         pm['trailing_stop_enabled'] = self.trail_enabled_var.get()
         pm['trailing_stop_pct'] = self.trail_pct_var.get()
         
-        self.show_toast("Position Management Settings Applied", "info")
-        logging.info("🛡️ Position Management parameters updated in real-time")
+        # Sync Risk Toggles
+        self.risk.require_validated = self.validate_models_var.get()
+        if "Force_News" in self.strat_vars:
+            self.strat_vars["Force_News"].set(self.force_news_var.get())
+        
+        self.show_toast("Global Risk Parameters Synced", "info")
+        logging.info("🛡️ Guard Parameters (Validation/News) updated in real-time")
+
+    def clear_signal_history(self):
+        self.signal_tree.delete(*self.signal_tree.get_children())
+        self.show_toast("Signal History Cleared", "secondary")
 
     def apply_be_manual(self):
         sym = self.symbol_var.get()

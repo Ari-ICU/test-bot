@@ -394,6 +394,9 @@ def bot_logic(app):
                                 log_queue.put(f"{Fore.RED}⚠️ {tf} Trade skipped: Invalid parameters (SL={sl}, TP={tp}, Lots={lots}){Style.RESET_ALL}")
                         else:
                             log_queue.put(f"{Fore.YELLOW}🛡️ {tf} SKIPPED: {msg}{Style.RESET_ALL}")
+                            # REPORT TO UI TIMELINE AS SKIPPED
+                            if hasattr(app, 'show_skips_var') and app.show_skips_var.get():
+                                ui_queue.put(lambda t=tf, st=name, si="SKIPPED", re=msg: app.add_signal_to_log(t, st, si, re))
                 except Exception as e:
                     error_msg = f"{tf} [{name}] Error: {e}"
                     log_queue.put(f"{Fore.RED}🔥 {error_msg}{Style.RESET_ALL}")
