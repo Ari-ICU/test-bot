@@ -63,8 +63,6 @@ def bot_logic(app):
     last_processed_bar = {tf: 0 for tf in AUTO_TABS}
     last_trade_bar = {tf: 0 for tf in AUTO_TABS}
     last_stale_log = {tf: 0 for tf in AUTO_TABS}
-    last_ui_stale_update = {tf: 0 for tf in AUTO_TABS}
-    last_logged_signal = {tf: None for tf in AUTO_TABS}
     stale_tf_map = {tf: False for tf in AUTO_TABS}
     scan_active = False
     time_offset = 0
@@ -81,8 +79,6 @@ def bot_logic(app):
                 continue
     threading.Thread(target=ui_bridge, daemon=True).start()
     log_queue = Queue(maxsize=1000)
-    heartbeat_counter = 0
-    summary_counter = 0
     def sync_ui_settings():
         risk.max_daily_trades = app.max_trades_var.get()
         risk.max_open_positions = app.max_pos_var.get()

@@ -1,6 +1,6 @@
 import time
 import logging
-from core.asset_detector import detect_asset_type, detect_sector, get_risk_profile
+from core.asset_detector import detect_asset_type, get_risk_profile
 logger = logging.getLogger("RiskManager")
 class RiskManager:
     def __init__(self, config):
@@ -10,8 +10,6 @@ class RiskManager:
         self.risk_per_trade = self.risk_cfg.get('risk_per_trade', 1.0)
         self.max_daily_loss = self.risk_cfg.get('daily_loss_limit', 5.0)
         self.max_open_positions = self.risk_cfg.get('max_open_positions', 5)
-        self.max_pos_per_symbol = self.risk_cfg.get('max_positions_per_symbol', 1)
-        self.max_pos_per_sector = self.risk_cfg.get('max_positions_per_sector', 2)
         self.reputable_brokers = self.risk_cfg.get('reputable_brokers', [])
         self.require_validated = self.risk_cfg.get('require_validated_model', True)
         self.validated_models = ["AI_Predict", "Trend", "Scalp", "ICT_SB", "DRQN", "SMC_Master", "CRT_TBS", "PowerTF", "ICT_Master", "Breakout", "TBS_Retest", "TBS_Turtle", "Reversal", "PD_Parameter"]

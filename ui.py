@@ -264,10 +264,6 @@ class TradingApp(ttk.Window):
         ttk.Button(close_grid, text="CLOSE LOSS", bootstyle="danger-outline", command=lambda: self.manual_close("LOSS")).pack(side=LEFT, padx=2, expand=YES, fill=X)
         ttk.Button(close_grid, text="CLOSE ALL", bootstyle="warning-outline", command=lambda: self.manual_close("ALL")).pack(side=LEFT, padx=2, expand=YES, fill=X)
 
-        be_row = ttk.Frame(exec_group)
-        be_row.pack(fill=X, pady=(10, 0))
-        ttk.Button(be_row, text="🛡️ APPLY BREAKEVEN TO ACTIVE", bootstyle="info-outline", command=self.apply_be_manual).pack(fill=X)
-
         # Quick Config
         quick_cfg = ttk.Labelframe(bottom_row, text=" Quick Configuration ", padding=15)
         quick_cfg.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
@@ -535,8 +531,7 @@ class TradingApp(ttk.Window):
         intel_grp.pack(fill=X, pady=(0, 20))
         
         ttk.Checkbutton(intel_grp, text="Log Blocked/Skipped Signals to Timeline", variable=self.show_skips_var, bootstyle="round-toggle").pack(anchor=W, pady=5)
-        ttk.Button(intel_grp, text="🗑️ CLEAR SIGNAL HISTORY", bootstyle="danger-link", command=self.clear_signal_history).pack(anchor=W, pady=(10, 0))
-
+        
         # Telegram Card
         tg_grp = ttk.Labelframe(right_col, text=" Secure Telegram Bridge ", padding=15)
         tg_grp.pack(fill=X)
@@ -555,27 +550,6 @@ class TradingApp(ttk.Window):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
         msg = f"🚀 Auto-Trading {state} - Real-Time Analysis Active" if state == "ENABLED"              else f"⏸️ Auto-Trading {state} - Switching to Manual Mode"
         logging.getLogger("Main").info(msg)
-    def update_symbol(self, event=None):
-        sym = self.symbol_var.get()
-        if sym:
-            if hasattr(self.connector, 'change_symbol'):
-                self.connector.change_symbol(sym)
-            if hasattr(self.connector, 'refresh_symbols'):
-                self.connector.refresh_symbols()
-            logging.info(f"🔄 UI Symbol Changed to {sym} – Queued for MT5, Refreshing...")
-    def update_timeframe(self, event=None):
-        tf_map = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D1": 1440, "W1": 10080, "MN": 43200}
-        minutes = tf_map.get(self.tf_var.get(), 5)
-        if hasattr(self.connector, 'change_timeframe'):
-            self.connector.change_timeframe(self.symbol_var.get(), minutes)
-    def force_refresh(self):
-        if hasattr(self.connector, 'force_sync'):
-            self.connector.force_sync()
-        if hasattr(self.connector, 'refresh_symbols'):
-            self.connector.refresh_symbols()
-        if hasattr(self.connector, 'available_symbols'):
-            self.sym_combo['values'] = self.connector.available_symbols
-        logging.info("🔄 Manual Refresh Triggered – Check Console for EA Response (Symbols/TF)")
     def test_telegram(self):
         if self.telegram_bot:
             self.telegram_bot.send_message("🔔 <b>Test Message</b> from MT5 Bot", self.tg_chat_var.get())
@@ -606,60 +580,6 @@ class TradingApp(ttk.Window):
         self.show_toast("Global Risk Parameters Synced", "info")
         logging.info("🛡️ Guard Parameters (Validation/News) updated in real-time")
 
-    def clear_signal_history(self):
-        self.signal_tree.delete(*self.signal_tree.get_children())
-        self.show_toast("Signal History Cleared", "secondary")
-
-    def apply_be_manual(self):
-        sym = self.symbol_var.get()
-        def do_be():
-            try:
-                positions = self.connector.positions
-                count = 0
-                for pos in positions:
-                    if pos['symbol'] == sym:
-                        ticket = pos['ticket']
-                        entry = pos['price']
-                        pos_type = pos['type']
-                        current_sl = pos['sl']
-                        
-                        # Apply BE - slightly better than entry to cover spread/fees if possible
-                        # For forex/gold, a small offset is good
-                        offset = entry * 0.0001
-                        new_sl = entry + offset if pos_type == "BUY" else entry - offset
-                        
-                        # Only modify if it improves the SL
-                        should_mod = False
-                        if pos_type == "BUY" and (current_sl < entry or current_sl == 0):
-                            should_mod = True
-                        elif pos_type == "SELL" and (current_sl > entry or current_sl == 0):
-                            should_mod = True
-                            
-                        if should_mod:
-                            self.connector.modify_position(ticket, new_sl, pos['tp'])
-                            count += 1
-                
-                msg = f"🛡️ BE applied to {count} positions for {sym}"
-                self.after(0, lambda: self.show_toast(msg, "success"))
-                logging.info(msg)
-            except Exception as e:
-                logging.error(f"Manual BE failed: {e}")
-                
-        threading.Thread(target=do_be, daemon=True).start()
-
-    def toggle_bot(self):
-        self.bot_running = not self.bot_running
-        if self.bot_running:
-            self.status_var.set("BOT: RUNNING")
-            self.lbl_status.configure(bootstyle="success")
-            if not self.bot_thread or not self.bot_thread.is_alive():
-                self.bot_thread = threading.Thread(target=self.bot_loop_callback, args=(self,), daemon=True)
-                self.bot_thread.start()
-            logging.info("🚀 Bot Started - Real-Time Scanning Active")
-        else:
-            self.status_var.set("BOT: STOPPED")
-            self.lbl_status.configure(bootstyle="warning")
-            logging.info("⏹️ Bot Stopped")
     def manual_trade(self, action):
         try:
             vol = float(self.lot_var.get())
@@ -720,10 +640,6 @@ class TradingApp(ttk.Window):
     def clear_logs(self):
         self.log_area.delete(1.0, tk.END)
         self.last_logs.clear()
-    def log_formatter(self, record):
-        time_str = time.strftime('%H:%M:%S', time.localtime(record.created))
-        # Optional: return a structured tuple to apply different tags to different parts
-        return f"[{time_str}] "
     
     def _start_log_polling(self):
         batch = []
