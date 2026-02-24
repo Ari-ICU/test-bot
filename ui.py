@@ -5,8 +5,9 @@ import threading
 import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from ttkbootstrap.scrolled import ScrolledText
+from ttkbootstrap.widgets.scrolled import ScrolledText
 from collections import deque
+from datetime import datetime
 from filters.news import _manager as news_manager
 AUTO_TABS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN"]
 class QueueHandler(logging.Handler):
@@ -18,8 +19,9 @@ class QueueHandler(logging.Handler):
 class TradingApp(ttk.Window):
     def __init__(self, bot_loop_callback, connector, risk_manager, telegram_bot=None):
         super().__init__(themename="cyborg")
-        self.title("MT5 Algo Terminal - Strategy Only Mode")
-        self.geometry("1050x640")
+        self.title("MT5 Advanced AI Terminal")
+        self.geometry("1100x750")
+        self.minsize(1000, 700)
         self.bot_loop_callback = bot_loop_callback
         self.connector = connector
         self.risk = risk_manager
@@ -56,6 +58,13 @@ class TradingApp(ttk.Window):
             "SMC_Master": tk.BooleanVar(value=True),
             "PowerTF": tk.BooleanVar(value=True)
         }
+        
+        # Position Management Vars
+        pm_cfg = self.config.get('position_management', {})
+        self.be_enabled_var = tk.BooleanVar(value=pm_cfg.get('breakeven_enabled', True))
+        self.be_trigger_var = tk.DoubleVar(value=pm_cfg.get('breakeven_trigger_pct', 50.0))
+        self.trail_enabled_var = tk.BooleanVar(value=pm_cfg.get('trailing_stop_enabled', True))
+        self.trail_pct_var = tk.DoubleVar(value=pm_cfg.get('trailing_stop_pct', 0.5))
         self.last_avail_syms = []
         self.last_account_info = None
         self.last_active_symbol = None
@@ -89,27 +98,49 @@ class TradingApp(ttk.Window):
             queue_handler.setFormatter(formatter)
             root_logger.addHandler(queue_handler)
     def _build_ui(self):
-        header = ttk.Frame(self)
-        header.pack(fill=X, padx=15, pady=8)
-        title_lbl = ttk.Label(header, text="MT5 AUTO-TRADER", font=("Roboto", 18, "bold"), bootstyle="inverse-dark")
-        title_lbl.pack(side=LEFT)
-        status_frame = ttk.Frame(header)
+        # Premium Header
+        header = ttk.Frame(self, bootstyle="dark")
+        header.pack(fill=X, padx=0, pady=0)
+        
+        header_inner = ttk.Frame(header, bootstyle="dark", padding=(20, 10))
+        header_inner.pack(fill=X)
+
+        title_frame = ttk.Frame(header_inner, bootstyle="dark")
+        title_frame.pack(side=LEFT)
+        
+        ttk.Label(title_frame, text="MT5", font=("Roboto", 18, "bold"), bootstyle="info").pack(side=LEFT)
+        ttk.Label(title_frame, text=" QUANT TERMINAL", font=("Roboto", 18, "bold"), bootstyle="light").pack(side=LEFT)
+        
+        status_frame = ttk.Frame(header_inner, bootstyle="dark")
         status_frame.pack(side=RIGHT)
-        self.lbl_server = ttk.Label(status_frame, text="SERVER: OFF", bootstyle="secondary-inverse", font=("Helvetica", 10, "bold"))
-        self.lbl_server.pack(side=LEFT, padx=5)
-        self.status_var = tk.StringVar(value="BOT: RUNNING")
-        self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="success-inverse", font=("Helvetica", 10, "bold"))
-        self.lbl_status.pack(side=LEFT, padx=5)
+        
+        self.lbl_server = ttk.Label(status_frame, text="● SERVER: OFF", bootstyle="danger", font=("Helvetica", 10, "bold"))
+        self.lbl_server.pack(side=LEFT, padx=10)
+        
+        self.status_var = tk.StringVar(value="BOT: STOPPED")
+        self.lbl_status = ttk.Label(status_frame, textvariable=self.status_var, bootstyle="warning", font=("Helvetica", 10, "bold"))
+        self.lbl_status.pack(side=LEFT, padx=10)
+        
+        # Scan Health Indicator
+        self.lbl_health = ttk.Label(status_frame, text="LATENCY: 0.0s", bootstyle="info", font=("Helvetica", 9))
+        self.lbl_health.pack(side=LEFT, padx=15)
+
+        # Content Area with Notebook
+        style = ttk.Style()
+        style.configure("TNotebook.Tab", font=("Helvetica", 10, "bold"), padding=[15, 5])
+        
         self.tabs = ttk.Notebook(self)
-        self.tabs.pack(fill=BOTH, expand=YES, padx=5, pady=5)
-        self.tab_dashboard = ttk.Frame(self.tabs)
-        self.tab_console = ttk.Frame(self.tabs)
-        self.tab_news = ttk.Frame(self.tabs)
-        self.tab_settings = ttk.Frame(self.tabs)
-        self.tabs.add(self.tab_dashboard, text=" Dashboard ")
-        self.tabs.add(self.tab_console, text=" Live Console ")
-        self.tabs.add(self.tab_news, text=" Market News ")
-        self.tabs.add(self.tab_settings, text=" Settings ")
+        self.tabs.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+        
+        self.tab_dashboard = ttk.Frame(self.tabs, padding=10)
+        self.tab_console = ttk.Frame(self.tabs, padding=10)
+        self.tab_news = ttk.Frame(self.tabs, padding=10)
+        self.tab_settings = ttk.Frame(self.tabs, padding=10)
+        
+        self.tabs.add(self.tab_dashboard, text=" 📊 DASHBOARD ")
+        self.tabs.add(self.tab_console, text=" 💻 CONSOLE ")
+        self.tabs.add(self.tab_news, text=" 🌐 MARKET ")
+        self.tabs.add(self.tab_settings, text=" ⚙️ SETTINGS ")
         self._last_news_update = 0
         self._build_dashboard_tab()
         self._build_console_tab()
@@ -117,131 +148,159 @@ class TradingApp(ttk.Window):
         self._build_settings_tab()
         self.sym_combo.set(self.connector.active_symbol)    
     def _build_dashboard_tab(self):
-        content = ttk.Frame(self.tab_dashboard)
-        content.pack(fill=BOTH, expand=YES, padx=10, pady=5)
-        def create_stat_card(parent, title, var_name, color, initial_val="$0.00"):
-            frame = ttk.Frame(parent, bootstyle=f"{color}")
-            frame.pack(side=LEFT, fill=X, expand=YES, padx=3)
-            inner = ttk.Frame(frame, bootstyle=f"{color}")
-            inner.pack(fill=BOTH, padx=10, pady=8)
-            ttk.Label(inner, text=title, font=("Helvetica", 9), bootstyle=f"{color}-inverse").pack(anchor=W)
-            lbl = ttk.Label(inner, text=initial_val, font=("Roboto", 18, "bold"), bootstyle=f"{color}-inverse")
-            lbl.pack(anchor=E)
-            setattr(self, var_name, lbl)
-            return lbl
-        strategy_monitor = ttk.Labelframe(content, text=" Active Strategy Engine ")
-        strategy_monitor.pack(fill=X, pady=(0, 8))
-        strategy_monitor_inner = ttk.Frame(strategy_monitor)
-        strategy_monitor_inner.pack(fill=BOTH, expand=YES, padx=5, pady=5)
+        container = ttk.Frame(self.tab_dashboard)
+        container.pack(fill=BOTH, expand=YES)
+
+        # --- Top Section: Account & Performance ---
+        top_row = ttk.Frame(container)
+        top_row.pack(fill=X, pady=(0, 15))
+
+        # Account Info Card
+        acc_frame = ttk.Labelframe(top_row, text=" Wallet & Account ", padding=10)
+        acc_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 5))
+        
+        self._create_stat_box(acc_frame, "MODE", "lbl_acc_mode", "info", "CONNECTING...", 0, 0)
+        self._create_stat_box(acc_frame, "BALANCE", "lbl_balance", "primary", "$0.00", 0, 1)
+        self._create_stat_box(acc_frame, "EQUITY", "lbl_equity", "primary", "$0.00", 1, 0)
+        self._create_stat_box(acc_frame, "FLOATING", "lbl_profit", "success", "$0.00", 1, 1)
+
+        # Performance Card
+        perf_frame = ttk.Labelframe(top_row, text=" Daily Performance ", padding=10)
+        perf_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=5)
+        
+        self._create_stat_box(perf_frame, "TRADES", "lbl_daily_trades", "secondary", "0", 0, 0)
+        self._create_stat_box(perf_frame, "DAILY P/L", "lbl_prof_today", "success", "$0.00", 0, 1)
+        self._create_stat_box(perf_frame, "WEEKLY", "lbl_prof_week", "success", "$0.00", 1, 0)
+        self._create_stat_box(perf_frame, "WIN RATE", "lbl_win_rate", "info", "0%", 1, 1)
+
+        # Market Prices Card
+        price_frame = ttk.Labelframe(top_row, text=" Live Market ", padding=10)
+        price_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(5, 0))
+        
+        self._create_stat_box(price_frame, "BID", "lbl_bid", "warning", "0.00000", 0, 0)
+        self._create_stat_box(price_frame, "ASK", "lbl_ask", "warning", "0.00000", 0, 1)
+        self._create_stat_box(price_frame, "BUY POS", "lbl_buy_count", "secondary", "0", 1, 0)
+        self._create_stat_box(price_frame, "SELL POS", "lbl_sell_count", "secondary", "0", 1, 1)
+        self._create_stat_box(price_frame, "TOTAL POS", "lbl_total_count", "info", "0", 2, 0)
+
+        # --- Middle Section: Strategy Monitor ---
+        strat_frame = ttk.Labelframe(container, text=" AI Strategy Intelligence Grid ", padding=10)
+        strat_frame.pack(fill=X, pady=10)
+        
         self.strat_ui_items = {}
         strat_list = [
-            ("AI_Predict", "AI Smart Predictor"),
-            ("Trend", "Trend Following"), 
-            ("Scalp", "M5 Scalper"), 
-            ("Breakout", "Breakout Engine"), 
-            ("ICT_Master", "ICT Master"), 
-            ("TBS_Turtle", "TBS Turtle"), 
-            ("TBS_Retest", "TBS Retest"), 
-            ("CRT_TBS", "CRT MT5 Master"),
-            ("PD_Parameter", "PD Array Logic"),
-            ("News_Sentiment", "News Sentiment"),
-            ("Reversal", "Reversal Engine"),
-            ("SMC_Master", "SMC Master"),
+            ("AI_Predict", "AI Smart Predictor"), ("Trend", "Trend Following"),
+            ("Scalp", "M5 Scalper"), ("Breakout", "Breakout Engine"),
+            ("ICT_Master", "ICT Master"), ("TBS_Turtle", "TBS Turtle"),
+            ("TBS_Retest", "TBS Retest"), ("CRT_TBS", "CRT MT5 Master"),
+            ("PD_Parameter", "PD Array Logic"), ("News_Sentiment", "News Sentiment"),
+            ("Reversal", "Reversal Engine"), ("SMC_Master", "SMC Master"),
             ("PowerTF", "Power of TF")
         ]
-        for key, name in strat_list:
-            f = ttk.Frame(strategy_monitor_inner)
-            f.pack(side=LEFT, expand=YES)
-            ttk.Label(f, text=name, font=("Helvetica", 9)).pack()
-            status_lbl = ttk.Label(f, text="WAITING", font=("Helvetica", 10, "bold"), bootstyle=SECONDARY)
-            status_lbl.pack()
+        
+        grid_inner = ttk.Frame(strat_frame)
+        grid_inner.pack(fill=X)
+        
+        for i, (key, name) in enumerate(strat_list):
+            r, c = divmod(i, 5) # 5 columns
+            f = ttk.Frame(grid_inner, padding=5)
+            f.grid(row=r, column=c, sticky=NSEW)
+            grid_inner.columnconfigure(c, weight=1)
+            
+            ttk.Label(f, text=name, font=("Helvetica", 8, "bold"), bootstyle="secondary").pack(anchor=W)
+            status_lbl = ttk.Label(f, text="SYNCING", font=("Helvetica", 9, "bold"), bootstyle=SECONDARY)
+            status_lbl.pack(anchor=W)
             reason_lbl = ttk.Label(f, text="...", font=("Helvetica", 7), bootstyle=LIGHT)
-            reason_lbl.pack()
+            reason_lbl.pack(anchor=W)
             self.strat_ui_items[key] = {"status": status_lbl, "reason": reason_lbl}
-        stats_frame = ttk.Frame(content)
-        stats_frame.pack(fill=X, pady=(0, 5))
-        create_stat_card(stats_frame, "ACCOUNT MODE", "lbl_acc_mode", "secondary", "CONNECTING...")
-        create_stat_card(stats_frame, "BALANCE", "lbl_balance", "primary")
-        create_stat_card(stats_frame, "EQUITY", "lbl_equity", "info")
-        create_stat_card(stats_frame, "FLOATING P/L", "lbl_profit", "success", "$0.00")
-        mid_frame = ttk.Frame(content)
-        mid_frame.pack(fill=X, pady=(0, 5))
-        self.lbl_daily_trades = create_stat_card(mid_frame, "DAILY ACTIVITY", "lbl_daily_trades", "dark", "0 Trades")
-        create_stat_card(mid_frame, "DAILY NET P/L", "lbl_prof_today", "success")
-        create_stat_card(mid_frame, "WEEKLY PROFIT", "lbl_prof_week", "success")
-        create_stat_card(mid_frame, "BID PRICE", "lbl_bid", "warning", "0.00000")
-        create_stat_card(mid_frame, "ASK PRICE", "lbl_ask", "warning", "0.00000")
-        pos_frame = ttk.Frame(content)
-        pos_frame.pack(fill=X, pady=(0, 8))
-        create_stat_card(pos_frame, "BUY POSITIONS", "lbl_buy_count", "secondary", "0")
-        create_stat_card(pos_frame, "SELL POSITIONS", "lbl_sell_count", "secondary", "0")
-        create_stat_card(pos_frame, "TOTAL POSITIONS", "lbl_total_count", "light", "0")
-        ctrl_wrapper = ttk.Frame(content)
-        ctrl_wrapper.pack(fill=BOTH, expand=YES)
-        exec_frame = ttk.Labelframe(ctrl_wrapper, text=" Execution Controls ")
-        exec_frame.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 10))
-        grid_frame = ttk.Frame(exec_frame)
-        grid_frame.pack(fill=X, padx=20, pady=15)
-        self.buy_btn = ttk.Button(grid_frame, text="BUY MARKET", bootstyle="success-outline",
-                                  command=lambda: self.manual_trade("BUY"))
-        self.buy_btn.pack(side=LEFT, fill=X, expand=YES, padx=5)
-        self.sell_btn = ttk.Button(grid_frame, text="SELL MARKET", bootstyle="danger-outline",
-                                   command=lambda: self.manual_trade("SELL"))
-        self.sell_btn.pack(side=LEFT, fill=X, expand=YES, padx=5)
-        close_frame = ttk.Frame(exec_frame)
-        close_frame.pack(fill=X, padx=20, pady=(5, 15))
-        ttk.Button(close_frame, text="CLOSE PROFIT", bootstyle="success",
-                   command=lambda: self.manual_close("WIN")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        ttk.Button(close_frame, text="CLOSE LOSS", bootstyle="danger",
-                   command=lambda: self.manual_close("LOSS")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        ttk.Button(close_frame, text="CLOSE ALL", bootstyle="warning",
-                   command=lambda: self.manual_close("ALL")).pack(side=LEFT, fill=X, expand=YES, padx=5)
-        conf_frame = ttk.Labelframe(ctrl_wrapper, text=" Configuration ", padding=10)
-        conf_frame.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
-        conf_frame.columnconfigure(0, weight=1)
-        conf_frame.columnconfigure(1, weight=1)
-        auto_row = ttk.Frame(conf_frame)
-        auto_row.grid(row=0, column=0, columnspan=2, sticky=EW, pady=(0, 10))
-        ttk.Label(auto_row, text="Auto Trading Status:", font=("Helvetica", 10, "bold")).pack(side=LEFT)
-        ttk.Checkbutton(auto_row, bootstyle="success-round-toggle", variable=self.auto_trade_var,
-                        text="ACTIVE", command=self.on_auto_trade_toggle).pack(side=RIGHT)
-        s_f = ttk.Frame(conf_frame); s_f.grid(row=1, column=0, sticky=EW, padx=5, pady=2)
-        ttk.Label(s_f, text="🌐 Symbol / Asset:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        self.sym_combo = ttk.Combobox(s_f, textvariable=self.symbol_var, width=12, bootstyle="secondary")
-        self.sym_combo.pack(fill=X); self.sym_combo.bind("<<ComboboxSelected>>", self.update_symbol)
-        
-        t_f = ttk.Frame(conf_frame); t_f.grid(row=1, column=1, sticky=EW, padx=5, pady=2)
-        ttk.Label(t_f, text="⏱️ Timeframe:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        self.tf_combo = ttk.Combobox(t_f, textvariable=self.tf_var, values=AUTO_TABS, width=12, bootstyle="info")
-        self.tf_combo.pack(fill=X); self.tf_combo.bind("<<ComboboxSelected>>", self.update_timeframe)
-        
-        st_f = ttk.Frame(conf_frame); st_f.grid(row=2, column=0, sticky=EW, padx=5, pady=2)
-        ttk.Label(st_f, text="🧠 AI Model Style:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        self.style_options = ["🎯 SNIPER", "⚡ SCALP", "📈 INTRADAY", "🌊 SWING"]
-        self.style_combo = ttk.Combobox(st_f, textvariable=self.style_var, values=self.style_options, width=12, bootstyle="primary")
-        self.style_combo.pack(fill=X)
-        ttk.Label(st_f, text="Sniper (M1) | Scalp (M5)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
-        ttk.Label(st_f, text="Intra (M15) | Swing (H1+)", font=("Helvetica", 7), bootstyle="secondary").pack(anchor=W)
-        v_f = ttk.Frame(conf_frame); v_f.grid(row=3, column=0, sticky=EW, padx=5, pady=2)
-        ttk.Label(v_f, text="💰 Lot Size:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        ttk.Spinbox(v_f, from_=0.01, to=50, textvariable=self.lot_var, width=10, bootstyle="success").pack(fill=X)
-        
-        co_f = ttk.Frame(conf_frame); co_f.grid(row=3, column=1, sticky=EW, padx=5, pady=2)
-        ttk.Label(co_f, text="⏳ Cool-off (s):", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        self.cool_spin = ttk.Spinbox(co_f, from_=0, to=300, textvariable=self.cool_off_var, width=10, bootstyle="warning")
-        self.cool_spin.pack(fill=X)
-        
-        mp_f = ttk.Frame(conf_frame); mp_f.grid(row=4, column=0, sticky=EW, padx=5, pady=2)
-        ttk.Label(mp_f, text="📊 Max Daily:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        ttk.Spinbox(mp_f, from_=1, to=100, textvariable=self.max_trades_var, width=10, bootstyle="info").pack(fill=X)
 
-        crt_f = ttk.Frame(conf_frame); crt_f.grid(row=4, column=1, sticky=EW, padx=5, pady=2)
-        ttk.Label(crt_f, text="🎯 CRT Reclaim:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        ttk.Spinbox(crt_f, from_=0.05, to=0.95, increment=0.05, textvariable=self.crt_reclaim_var, width=10, bootstyle="primary").pack(fill=X)
+        # --- Bottom Section: Controls & Config ---
+        bottom_row = ttk.Frame(container)
+        bottom_row.pack(fill=BOTH, expand=YES, pady=(10, 0))
 
-        mop_f = ttk.Frame(conf_frame); mop_f.grid(row=5, column=0, sticky=EW, padx=5, pady=2)
-        ttk.Label(mop_f, text="🛡️ Max Open Pos:", font=("Helvetica", 9, "bold"), bootstyle="secondary").pack(anchor=W)
-        ttk.Spinbox(mop_f, from_=1, to=1000, textvariable=self.max_pos_var, width=10, bootstyle="danger").pack(fill=X)
+        # Execution
+        exec_group = ttk.Labelframe(bottom_row, text=" Terminal Execution ", padding=15)
+        exec_group.pack(side=LEFT, fill=BOTH, expand=YES, padx=(0, 10))
+        
+        btn_grid = ttk.Frame(exec_group)
+        btn_grid.pack(fill=X, pady=5)
+        
+        self.buy_btn = ttk.Button(btn_grid, text="BUY MARKET", bootstyle="success", command=lambda: self.manual_trade("BUY"), width=15)
+        self.buy_btn.pack(side=LEFT, padx=5, pady=5, expand=YES, fill=X)
+        
+        self.sell_btn = ttk.Button(btn_grid, text="SELL MARKET", bootstyle="danger", command=lambda: self.manual_trade("SELL"), width=15)
+        self.sell_btn.pack(side=LEFT, padx=5, pady=5, expand=YES, fill=X)
+        
+        sep = ttk.Separator(exec_group, orient=HORIZONTAL)
+        sep.pack(fill=X, pady=10)
+        
+        close_grid = ttk.Frame(exec_group)
+        close_grid.pack(fill=X)
+        
+        ttk.Button(close_grid, text="CLOSE PROFIT", bootstyle="success-outline", command=lambda: self.manual_close("WIN")).pack(side=LEFT, padx=2, expand=YES, fill=X)
+        ttk.Button(close_grid, text="CLOSE LOSS", bootstyle="danger-outline", command=lambda: self.manual_close("LOSS")).pack(side=LEFT, padx=2, expand=YES, fill=X)
+        ttk.Button(close_grid, text="CLOSE ALL", bootstyle="warning-outline", command=lambda: self.manual_close("ALL")).pack(side=LEFT, padx=2, expand=YES, fill=X)
+
+        be_row = ttk.Frame(exec_group)
+        be_row.pack(fill=X, pady=(10, 0))
+        ttk.Button(be_row, text="🛡️ APPLY BREAKEVEN TO ACTIVE", bootstyle="info-outline", command=self.apply_be_manual).pack(fill=X)
+
+        # Quick Config
+        quick_cfg = ttk.Labelframe(bottom_row, text=" Quick Configuration ", padding=15)
+        quick_cfg.pack(side=RIGHT, fill=BOTH, expand=YES, padx=(10, 0))
+        
+        cfg_grid = ttk.Frame(quick_cfg)
+        cfg_grid.pack(fill=BOTH, expand=YES)
+        
+        # Row 0: Auto Trade
+        ttk.Label(cfg_grid, text="Auto Trading:", font=("Helvetica", 10, "bold")).grid(row=0, column=0, sticky=W, pady=5)
+        ttk.Checkbutton(cfg_grid, bootstyle="success-round-toggle", variable=self.auto_trade_var, text="ACTIVE", command=self.on_auto_trade_toggle).grid(row=0, column=1, sticky=E, pady=5)
+        
+        # Row 1: Symbol & TF
+        ttk.Label(cfg_grid, text="Symbol:", font=("Helvetica", 9)).grid(row=1, column=0, sticky=W, pady=2)
+        self.sym_combo = ttk.Combobox(cfg_grid, textvariable=self.symbol_var, width=15)
+        self.sym_combo.grid(row=1, column=1, sticky=EW, pady=2)
+        
+        ttk.Label(cfg_grid, text="Timeframe:", font=("Helvetica", 9)).grid(row=2, column=0, sticky=W, pady=2)
+        self.tf_combo = ttk.Combobox(cfg_grid, textvariable=self.tf_var, values=AUTO_TABS, width=15)
+        self.tf_combo.grid(row=2, column=1, sticky=EW, pady=2)
+        
+        # Row 2: Lot & Max
+        ttk.Label(cfg_grid, text="Lot Size:", font=("Helvetica", 9)).grid(row=3, column=0, sticky=W, pady=2)
+        ttk.Spinbox(cfg_grid, from_=0.01, to=50, textvariable=self.lot_var, width=14).grid(row=3, column=1, sticky=EW, pady=2)
+        
+        cfg_grid.columnconfigure(1, weight=1)
+
+        # --- Footer Section: Signal History ---
+        history_frame = ttk.Labelframe(container, text=" Live Signal Intelligence Timeline ", padding=10)
+        history_frame.pack(fill=BOTH, expand=YES, pady=(15, 0))
+        
+        columns = ("Time", "TF", "Strategy", "Signal", "Reason")
+        self.signal_tree = ttk.Treeview(history_frame, columns=columns, show="headings", height=8, bootstyle="primary")
+        
+        widths = {"Time": 80, "TF": 60, "Strategy": 150, "Signal": 100, "Reason": 400}
+        for col in columns:
+            self.signal_tree.heading(col, text=col)
+            self.signal_tree.column(col, width=widths[col], anchor=W if col=="Reason" else CENTER)
+            
+        self.signal_tree.tag_configure('BUY', foreground='#1aff1a', font=("Helvetica", 9, "bold"))
+        self.signal_tree.tag_configure('SELL', foreground='#ff4d4d', font=("Helvetica", 9, "bold"))
+        self.signal_tree.pack(fill=BOTH, expand=YES)
+        
+        # Add scrollbar to signal tree
+        sig_scroll = ttk.Scrollbar(history_frame, orient=VERTICAL, command=self.signal_tree.yview)
+        self.signal_tree.configure(yscrollcommand=sig_scroll.set)
+        sig_scroll.pack(side=RIGHT, fill=Y)
+
+    def _create_stat_box(self, parent, label, attr_name, color, initial, row, col):
+        frame = ttk.Frame(parent, padding=5)
+        frame.grid(row=row, column=col, sticky=EW)
+        parent.columnconfigure(col, weight=1)
+        
+        ttk.Label(frame, text=label, font=("Helvetica", 7, "bold"), bootstyle="secondary").pack(anchor=W)
+        val_lbl = ttk.Label(frame, text=initial, font=("Roboto", 12, "bold"), bootstyle=color)
+        val_lbl.pack(anchor=W)
+        setattr(self, attr_name, val_lbl)
     def _build_console_tab(self):
         console_frame = ttk.Frame(self.tab_console)
         console_frame.pack(fill=BOTH, expand=YES, padx=10, pady=10)
@@ -249,11 +308,13 @@ class TradingApp(ttk.Window):
         btn_frame.pack(fill=X, pady=(0, 10))
         ttk.Button(btn_frame, text="🗑️ Clear Console Logs", bootstyle="danger-outline", command=self.clear_logs).pack(side=RIGHT)
         ttk.Label(btn_frame, text="Live System Feed", font=("Helvetica", 12, "bold")).pack(side=LEFT)
-        self.log_area = ScrolledText(console_frame, bootstyle="secondary", height=20, width=120, autohide=True)
+        self.log_area = ScrolledText(console_frame, bootstyle="secondary", height=20, width=120, autohide=True, font=("Consolas", 10))
         self.log_area.pack(fill=BOTH, expand=YES)
         self.log_area.tag_config('INFO', foreground='lightgreen')
-        self.log_area.tag_config('WARNING', foreground='#f0ad4e')
-        self.log_area.tag_config('ERROR', foreground='#d9534f')
+        self.log_area.tag_config('WARNING', foreground='#feca57') # Vibrant yellow
+        self.log_area.tag_config('ERROR', foreground='#ff6b6b')   # Soft red
+        self.log_area.tag_config('DEBUG', foreground='#a0a0a0')   # Muted gray
+        self.log_area.tag_config('TIMESTAMP', foreground='#5bc0de') # Cyan for time
     def _build_news_tab(self):
         container = ttk.Frame(self.tab_news)
         container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
@@ -273,15 +334,20 @@ class TradingApp(ttk.Window):
         cal_frame = ttk.Labelframe(content_panes, text=" Economic Calendar (Forex Factory) ", padding=10)
         content_panes.add(cal_frame, weight=3)
         columns = ("Time", "Currency", "Impact", "Event", "Actual", "Forecast", "Previous")
-        self.news_tree = ttk.Treeview(cal_frame, columns=columns, show="headings", height=15)
+        self.news_tree = ttk.Treeview(cal_frame, columns=columns, show="headings", height=15, bootstyle="info")
         widths = {"Time": 60, "Currency": 70, "Impact": 80, "Event": 250, "Actual": 80, "Forecast": 80, "Previous": 80}
         for col in columns:
             self.news_tree.heading(col, text=col)
-            self.news_tree.column(col, width=widths[col], anchor=W)
-        self.news_tree.tag_configure('High', foreground='#d9534f')
-        self.news_tree.tag_configure('Medium', foreground='#f0ad4e')
-        self.news_tree.tag_configure('Low', foreground='#5bc0de')
+            self.news_tree.column(col, width=widths[col], anchor=CENTER if col in ["Impact", "Currency"] else W)
+        
+        self.news_tree.tag_configure('High', foreground='#ff4d4d', font=("Helvetica", 9, "bold"))
+        self.news_tree.tag_configure('Medium', foreground='#ffa31a')
+        self.news_tree.tag_configure('Low', foreground='#1aff1a')
         self.news_tree.pack(fill=BOTH, expand=YES)
+        
+        # Style for alternating rows
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=30)
         head_frame = ttk.Labelframe(content_panes, text=" Global Headlines & Sentiment ", padding=10)
         content_panes.add(head_frame, weight=2)
         self.news_feed = ScrolledText(head_frame, height=15, autohide=True, font=("Helvetica", 9))
@@ -333,53 +399,92 @@ class TradingApp(ttk.Window):
         except Exception as e:
             logging.debug(f"News UI update error: {e}")
     def _build_settings_tab(self):
-        container = ttk.Frame(self.tab_settings)
-        container.pack(fill=BOTH, expand=YES, padx=15, pady=15)
-        strat_grp = ttk.Labelframe(container, text=" Active Strategies & Recommended TF ")
-        strat_grp.pack(fill=X, pady=10)
-        strat_inner = ttk.Frame(strat_grp)
-        strat_inner.pack(fill=X, padx=20, pady=10)
+        # Using a vertical scrolled frame for settings would be better
+        canvas = tk.Canvas(self.tab_settings, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.tab_settings, orient=VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+        scrollbar.pack(side=RIGHT, fill=Y)
+
+        # --- Strategy Section ---
+        strat_grp = ttk.Labelframe(scrollable_frame, text=" Strategy Configuration ", padding=15)
+        strat_grp.pack(fill=X, pady=10, padx=5)
+        
+        strat_desc = ttk.Label(strat_grp, text="Toggle specific logic engines and view recommended timeframes.", font=("Helvetica", 9, "italic"), bootstyle="secondary")
+        strat_desc.pack(anchor=W, pady=(0, 15))
+
         strat_meta = {
-            "AI_Predict": {"name": "AI Predictor (SMC)", "rec": "Rec: M5"},
-            "Trend": {"name": "Trend Following", "rec": "Rec: H1/H4"},
-            "Scalp": {"name": "Multi-TF Scalper", "rec": "Rec: All"},
-            "Breakout": {"name": "Breakout Engine", "rec": "Rec: H4/D1"},
-            "TBS_Retest": {"name": "TBS Retest", "rec": "Rec: M15/M30"},
-            "ICT_Master": {"name": "ICT Master (M1-M8)", "rec": "Rec: M15/H1"},
-            "TBS_Turtle": {"name": "TBS Turtle", "rec": "Rec: H1"},
-            "CRT_TBS": {"name": "CRT Master", "rec": "Rec: H1/H4"},
-            "PD_Parameter": {"name": "PD Array Logic", "rec": "Rec: Daily/H4"},
-            "News_Sentiment": {"name": "News Sentiment Filter", "rec": "Rec: Block risky news"},
-            "Force_News": {"name": "Force Trade (News)", "rec": "Ignore news panic block"},
-            "Reversal": {"name": "Reversal Engine", "rec": "Rec: M15"},
-            "SMC_Master": {"name": "SMC Master (Patterns)", "rec": "Rec: M15/H1"},
-            "PowerTF": {"name": "Power of Timeframe", "rec": "Rec: M15 (H4/H1 Bias)"}
+            "AI_Predict": {"name": "AI Predictor (SMC)", "rec": "M5/M15"},
+            "Trend": {"name": "Trend Following", "rec": "H1/H4/D1"},
+            "Scalp": {"name": "Multi-TF Scalper", "rec": "Any"},
+            "Breakout": {"name": "Breakout Engine", "rec": "H4/D1"},
+            "TBS_Retest": {"name": "TBS Retest", "rec": "M15/M30"},
+            "ICT_Master": {"name": "ICT Master", "rec": "M15/H1"},
+            "TBS_Turtle": {"name": "TBS Turtle", "rec": "H1"},
+            "CRT_TBS": {"name": "CRT Master", "rec": "H1/H4"},
+            "PD_Parameter": {"name": "PD Array Logic", "rec": "Daily"},
+            "News_Sentiment": {"name": "News Filter", "rec": "Global"},
+            "Force_News": {"name": "Force News", "rec": "Risky"},
+            "Reversal": {"name": "Reversal Engine", "rec": "M15"},
+            "SMC_Master": {"name": "SMC Master", "rec": "M15/H1"},
+            "PowerTF": {"name": "Power of TF", "rec": "M15 Focus"}
         }
-        col = 0
-        row = 0
-        for strat_key, var in self.strat_vars.items():
+
+        strat_grid = ttk.Frame(strat_grp)
+        strat_grid.pack(fill=X)
+        
+        for i, (strat_key, var) in enumerate(self.strat_vars.items()):
             meta = strat_meta.get(strat_key, {"name": strat_key, "rec": ""})
-            cell_frame = ttk.Frame(strat_inner)
-            cell_frame.grid(row=row, column=col, padx=10, pady=8, sticky=W)
-            cb = ttk.Checkbutton(cell_frame, text=meta["name"], variable=var, bootstyle="round-toggle")
-            cb.pack(anchor=W)
-            ttk.Label(cell_frame, text=meta["rec"], font=("Helvetica", 8), bootstyle="secondary").pack(anchor=W, padx=(25, 0))
-            col += 1
-            if col > 2:
-                col = 0
-                row += 1
-        tg_grp = ttk.Labelframe(container, text=" Telegram Bot Integration ")
-        tg_grp.pack(fill=X, pady=10)
-        tg_inner = ttk.Frame(tg_grp)
-        tg_inner.pack(fill=X, padx=20, pady=20)
-        ttk.Label(tg_inner, text="Bot Token:", font=("Helvetica", 10)).pack(anchor=W)
-        ttk.Entry(tg_inner, textvariable=self.tg_token_var, show="*").pack(fill=X, pady=5)
-        ttk.Label(tg_inner, text="Chat ID:", font=("Helvetica", 10)).pack(anchor=W, pady=(10, 0))
-        chat_frame = ttk.Frame(tg_inner)
-        chat_frame.pack(fill=X, pady=5)
-        ttk.Entry(chat_frame, textvariable=self.tg_chat_var).pack(side=LEFT, fill=X, expand=YES)
-        ttk.Button(chat_frame, text="Test Message", bootstyle="info-outline", command=self.test_telegram).pack(side=LEFT, padx=(10, 0))
-        ttk.Button(tg_inner, text="Update Telegram Credentials", bootstyle="primary", command=self.update_telegram).pack(fill=X, pady=15)
+            r, c = divmod(i, 3)
+            cell = ttk.Frame(strat_grid, padding=10)
+            cell.grid(row=r, column=c, sticky=NW)
+            
+            ttk.Checkbutton(cell, text=meta["name"], variable=var, bootstyle="round-toggle").pack(anchor=W)
+            ttk.Label(cell, text=f"Best: {meta['rec']}", font=("Helvetica", 8), bootstyle="secondary").pack(anchor=W, padx=25)
+
+        # --- Telegram Section ---
+        tg_grp = ttk.Labelframe(scrollable_frame, text=" Telegram Integration ", padding=15)
+        tg_grp.pack(fill=X, pady=10, padx=5)
+        
+        ttk.Label(tg_grp, text="Token:", font=("Helvetica", 9)).pack(anchor=W)
+        ttk.Entry(tg_grp, textvariable=self.tg_token_var, show="*", width=50).pack(fill=X, pady=5)
+        
+        ttk.Label(tg_grp, text="Chat ID:", font=("Helvetica", 9)).pack(anchor=W, pady=(10, 0))
+        chat_f = ttk.Frame(tg_grp)
+        chat_f.pack(fill=X, pady=5)
+        ttk.Entry(chat_f, textvariable=self.tg_chat_var).pack(side=LEFT, fill=X, expand=YES)
+        ttk.Button(chat_f, text="Test Conn", bootstyle="info-outline", command=self.test_telegram).pack(side=LEFT, padx=10)
+        
+        ttk.Button(tg_grp, text="Save Telegram Config", bootstyle="primary", command=self.update_telegram).pack(pady=15)
+
+        # --- Position Management Section ---
+        pm_grp = ttk.Labelframe(scrollable_frame, text=" Advanced Position Management ", padding=15)
+        pm_grp.pack(fill=X, pady=10, padx=5)
+        
+        # Break-even
+        be_frame = ttk.Frame(pm_grp)
+        be_frame.pack(fill=X, pady=5)
+        ttk.Checkbutton(be_frame, text="Break-Even (BE)", variable=self.be_enabled_var, bootstyle="round-toggle").pack(side=LEFT)
+        ttk.Label(be_frame, text="Trigger at % of TP:", font=("Helvetica", 9)).pack(side=LEFT, padx=(20, 5))
+        ttk.Spinbox(be_frame, from_=10, to=90, textvariable=self.be_trigger_var, width=5).pack(side=LEFT)
+        
+        # Trailing
+        tr_frame = ttk.Frame(pm_grp)
+        tr_frame.pack(fill=X, pady=5)
+        ttk.Checkbutton(tr_frame, text="Trailing Stop", variable=self.trail_enabled_var, bootstyle="round-toggle").pack(side=LEFT)
+        ttk.Label(tr_frame, text="Trail Distance %:", font=("Helvetica", 9)).pack(side=LEFT, padx=(32, 5))
+        ttk.Spinbox(tr_frame, from_=0.1, to=10.0, increment=0.1, textvariable=self.trail_pct_var, width=5).pack(side=LEFT)
+
+        ttk.Button(pm_grp, text="Update Risk/Trade Settings", bootstyle="info-outline", command=self.update_risk_settings).pack(pady=10)
     def on_auto_trade_toggle(self):
         state = "ENABLED" if self.auto_trade_var.get() else "DISABLED"
         msg = f"🚀 Auto-Trading {state} - Real-Time Analysis Active" if state == "ENABLED"              else f"⏸️ Auto-Trading {state} - Switching to Manual Mode"
@@ -414,18 +519,70 @@ class TradingApp(ttk.Window):
             self.telegram_bot.token = self.tg_token_var.get()
             self.telegram_bot.chat_id = self.tg_chat_var.get()
             logging.info("Telegram credentials updated")
+    
+    def update_risk_settings(self):
+        # Sync UI vars back to config for workers to pick up
+        if not hasattr(self, 'config'): return
+        if 'position_management' not in self.config: self.config['position_management'] = {}
+        
+        pm = self.config['position_management']
+        pm['breakeven_enabled'] = self.be_enabled_var.get()
+        pm['breakeven_trigger_pct'] = self.be_trigger_var.get()
+        pm['trailing_stop_enabled'] = self.trail_enabled_var.get()
+        pm['trailing_stop_pct'] = self.trail_pct_var.get()
+        
+        self.show_toast("Position Management Settings Applied", "info")
+        logging.info("🛡️ Position Management parameters updated in real-time")
+
+    def apply_be_manual(self):
+        sym = self.symbol_var.get()
+        def do_be():
+            try:
+                positions = self.connector.positions
+                count = 0
+                for pos in positions:
+                    if pos['symbol'] == sym:
+                        ticket = pos['ticket']
+                        entry = pos['price']
+                        pos_type = pos['type']
+                        current_sl = pos['sl']
+                        
+                        # Apply BE - slightly better than entry to cover spread/fees if possible
+                        # For forex/gold, a small offset is good
+                        offset = entry * 0.0001
+                        new_sl = entry + offset if pos_type == "BUY" else entry - offset
+                        
+                        # Only modify if it improves the SL
+                        should_mod = False
+                        if pos_type == "BUY" and (current_sl < entry or current_sl == 0):
+                            should_mod = True
+                        elif pos_type == "SELL" and (current_sl > entry or current_sl == 0):
+                            should_mod = True
+                            
+                        if should_mod:
+                            self.connector.modify_position(ticket, new_sl, pos['tp'])
+                            count += 1
+                
+                msg = f"🛡️ BE applied to {count} positions for {sym}"
+                self.after(0, lambda: self.show_toast(msg, "success"))
+                logging.info(msg)
+            except Exception as e:
+                logging.error(f"Manual BE failed: {e}")
+                
+        threading.Thread(target=do_be, daemon=True).start()
+
     def toggle_bot(self):
         self.bot_running = not self.bot_running
         if self.bot_running:
-            self.after(0, lambda: self.status_var.set("BOT: RUNNING"))
-            self.after(0, lambda: self.lbl_status.configure(bootstyle="success-inverse"))
+            self.status_var.set("BOT: RUNNING")
+            self.lbl_status.configure(bootstyle="success")
             if not self.bot_thread or not self.bot_thread.is_alive():
                 self.bot_thread = threading.Thread(target=self.bot_loop_callback, args=(self,), daemon=True)
                 self.bot_thread.start()
             logging.info("🚀 Bot Started - Real-Time Scanning Active")
         else:
-            self.after(0, lambda: self.status_var.set("BOT: STOPPED"))
-            self.after(0, lambda: self.lbl_status.configure(bootstyle="danger-inverse"))
+            self.status_var.set("BOT: STOPPED")
+            self.lbl_status.configure(bootstyle="warning")
             logging.info("⏹️ Bot Stopped")
     def manual_trade(self, action):
         try:
@@ -487,39 +644,47 @@ class TradingApp(ttk.Window):
     def clear_logs(self):
         self.log_area.delete(1.0, tk.END)
         self.last_logs.clear()
+    def log_formatter(self, record):
+        time_str = time.strftime('%H:%M:%S', time.localtime(record.created))
+        # Optional: return a structured tuple to apply different tags to different parts
+        return f"[{time_str}] "
+    
     def _start_log_polling(self):
         batch = []
-        max_batch = 10
+        max_batch = 15
         while len(batch) < max_batch and not self.log_queue.empty():
             try:
                 record = self.log_queue.get_nowait()
                 raw_msg = record.getMessage()
                 now = time.time()
+                
+                # Deduplication logic
                 should_log = True
                 suppress_threshold = self.log_suppress_threshold
                 for ts, prev_raw in list(self.last_logs):
                     if now - ts < suppress_threshold and prev_raw == raw_msg:
                         should_log = False
                         break
-                    elif now - ts > suppress_threshold + 5:
-                        self.last_logs.remove((ts, prev_raw))
+                
                 if should_log:
                     self.last_logs.append((now, raw_msg))
-                    full_msg = self.log_formatter(record) + "\n"
-                    batch.append((full_msg, record.levelname))
+                    time_str = time.strftime('%H:%M:%S', time.localtime(record.created))
+                    batch.append((f"[{time_str}] ", "TIMESTAMP"))
+                    batch.append((f"{raw_msg}\n", record.levelname))
             except queue.Empty:
                 break
+        
         if batch:
             for msg, tag in batch:
                 self.log_area.insert(tk.END, msg, tag)
             self.log_area.see(tk.END)
+            
+            # Keep history manageable
             current_lines = int(self.log_area.index('end-1c').split('.')[0])
-            if current_lines > 500:
-                self.log_area.delete('1.0', f'{current_lines-500}.0')
-        self.after(200, self._start_log_polling)
-    def log_formatter(self, record):
-        time_str = time.strftime('%H:%M:%S', time.localtime(record.created))
-        return f"[{time_str}] {record.getMessage()}"
+            if current_lines > 1000:
+                self.log_area.delete('1.0', '200.0')
+        
+        self.after(100, self._start_log_polling)
     def _start_light_refresh(self):
         self._light_refresh()
         self.after(2000, self._start_light_refresh)
@@ -532,23 +697,39 @@ class TradingApp(ttk.Window):
             self.lbl_acc_mode.configure(text="DEMO" if info.get('is_demo', True) else "REAL")
             self.lbl_balance.configure(text=f"${info.get('balance', 0):,.2f}")
             self.lbl_equity.configure(text=f"${info.get('equity', 0):,.2f}")
+            
             prof = info.get('profit', 0.0)
             p_color = "success" if prof >= 0 else "danger"
-            self.lbl_profit.configure(text=f"${prof:,.2f}", bootstyle=f"{p_color}-inverse")
+            self.lbl_profit.configure(text=f"${prof:,.2f}", bootstyle=p_color)
+            
             prof_today = info.get('prof_today', 0.0)
-            net_str = f"${prof_today:,.2f} (Open: ${prof:,.2f})"
             t_color = "success" if (prof_today + prof) >= 0 else "danger"
-            self.lbl_prof_today.configure(text=net_str, bootstyle=f"{t_color}-inverse", font=("Helvetica", 10, "bold"))
+            self.lbl_prof_today.configure(text=f"${prof_today:,.2f}", bootstyle=t_color)
+            
             prof_week = info.get('prof_week', 0.0)
             w_color = "success" if prof_week >= 0 else "danger"
-            self.lbl_prof_week.configure(text=f"${prof_week:,.2f}", bootstyle=f"{w_color}-inverse")
+            self.lbl_prof_week.configure(text=f"${prof_week:,.2f}", bootstyle=w_color)
+            
+            # Update Win Rate
+            win_rate = info.get('win_rate', 0.0)
+            self.lbl_win_rate.configure(text=f"{win_rate:.1f}%")
+
             self.lbl_bid.configure(text=f"{info.get('bid', 0.0):.5f}")
             self.lbl_ask.configure(text=f"{info.get('ask', 0.0):.5f}")
+            
+            # Sync Server Status with color
+            server_online = hasattr(self.connector, 'server') and self.connector.server
+            self.lbl_server.configure(
+                text="● SERVER: ONLINE" if server_online else "● SERVER: OFFLINE",
+                bootstyle="success" if server_online else "danger"
+            )
             self.lbl_total_count.configure(text=str(info.get('total_count', 0)))
             self.lbl_buy_count.configure(text=str(info.get('buy_count', 0)))
             self.lbl_sell_count.configure(text=str(info.get('sell_count', 0)))
+            
             daily_count = getattr(self.risk, 'daily_trades_count', 0)
-            self.lbl_daily_trades.configure(text=f"{daily_count} Trades")
+            self.lbl_daily_trades.configure(text=str(daily_count))
+            
             self.last_account_info = current_info
         if hasattr(self.connector, 'pending_changes'):
             pending = self.connector.pending_changes
@@ -606,6 +787,19 @@ class TradingApp(ttk.Window):
                 item['reason'].configure(text=short_reason)
             except Exception:
                 pass
+    def add_signal_to_log(self, tf, strategy, action, reason):
+        """Thread-safe signal logging for the UI Timeline"""
+        now = datetime.now().strftime("%H:%M:%S")
+        self.signal_tree.insert("", 0, values=(now, tf, strategy, action, reason), tags=(action,))
+        
+        # Keep history light
+        if len(self.signal_tree.get_children()) > 100:
+            self.signal_tree.delete(self.signal_tree.get_children()[-1])
+
+    def update_scan_health(self, latency):
+        color = "success" if latency < 5 else "warning" if latency < 12 else "danger"
+        self.lbl_health.configure(text=f"LATENCY: {latency:.1f}s", bootstyle=color)
+
     def mainloop(self):
         super().mainloop()
 if __name__ == "__main__":

@@ -277,6 +277,11 @@ def bot_logic(app):
                     if last_ui_status.get(status_key) != (signal, reason_str):
                         full_reason = f"[{tf}] {reason_str}"
                         ui_queue.put(lambda n=name, s=signal, r=full_reason: app.update_strategy_status(n, s, r))
+                        
+                        # NEW: Log to Signal Timeline
+                        if signal != "NEUTRAL":
+                            ui_queue.put(lambda t=tf, st=name, si=signal, re=reason_str: app.add_signal_to_log(t, st, si, re))
+                            
                         if not hasattr(app, '_last_strat_status'): app._last_strat_status = {}
                         app._last_strat_status[status_key] = (signal, reason_str)
                     if signal != "NEUTRAL":
@@ -415,8 +420,12 @@ def bot_logic(app):
                         active_workers.append(t)
                     for t in active_workers:
                         t.join(timeout=15.0)
+                    
+                    cycle_time = time.time() - now
+                    app.after(0, lambda: app.update_scan_health(cycle_time))
+                    
                     scan_active = False
-                    log_queue.put(f"{Fore.MAGENTA}🏁 Multi-TF Scan Cycle Finished.{Style.RESET_ALL}")
+                    log_queue.put(f"{Fore.MAGENTA}🏁 Multi-TF Scan Cycle Finished in {cycle_time:.1f}s.{Style.RESET_ALL}")
                 threading.Thread(target=run_all_scans, daemon=True).start()
             if now - last_news_ui_update >= 60:
                 try:
